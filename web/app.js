@@ -1,0 +1,1006 @@
+// JELearner UI.
+// Top bar: language (EN / 日本語), import, sync, settings.
+// Left: views. Centre: the current view (lessons render on a paper sheet,
+// like PaperComposer's page). Right: the study secretary (avatar placeholder
+// until the digital-human stage), lesson generation and import.
+
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+const store = {
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+const state = {
+  lang: store.get("jl.lang", "en"),
+  view: store.get("jl.view", "today"),
+  status: null,
+  picked: null,       // article chosen on the news page
+  lessonId: null,     // lesson open on the lessons page
+  showMd: false,
+  showResolved: false,
+  query: "",
+  review: { items: [], i: 0, shown: false, done: 0 },
+};
+
+async function api(path, body, method) {
+  const opts = body !== undefined
+    ? { method: method ?? "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+    : (method ? { method } : undefined);
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!r.ok) throw new Error(data?.error ?? (typeof data === "string" && data) ?? `${r.status}`);
+  return data;
+}
+
+async function apiText(path, text) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "text/plain; charset=utf-8" }, body: text });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(data?.error ?? `${r.status}`);
+  return data;
+}
+
+const fmtDate = (s) => (s ? new Date(s).toLocaleDateString("zh-TW", { month: "2-digit", day: "2-digit" }) : "");
+const fmtDue = (s) => {
+  if (!s) return "";
+  const d = (new Date(s) - Date.now()) / 86400000;
+  return d <= 0 ? "到期" : d < 1 ? "今天" : `${Math.ceil(d)} 天後`;
+};
+const isJa = () => state.lang === "ja";
+const langLabel = (l) => ({ en: "英文", ja: "日文" }[l] ?? l);
+
+// ── feedback ───────────────────────────────────────────
+let flashTimer;
+function flash(msg, err = false) {
+  $(".tip.flash")?.remove();
+  const t = el("div", `tip flash${err ? " err" : ""}`, msg);
+  document.body.append(t);
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => t.remove(), err ? 6000 : 3000);
+}
+
+let sayTimer;
+function say(msg) {
+  $("#say").textContent = msg;
+  const a = $("#avatar");
+  a.classList.add("talk");
+  clearTimeout(sayTimer);
+  sayTimer = setTimeout(() => a.classList.remove("talk"), Math.min(4000, 400 + msg.length * 45));
+}
+
+async function busy(btn, fn) {
+  const old = btn.disabled;
+  btn.disabled = true;
+  btn.classList.add("busy");
+  try { return await fn(); } finally { btn.disabled = old; btn.classList.remove("busy"); }
+}
+
+// ── theme ──────────────────────────────────────────────
+function applyTheme() {
+  const t = store.get("jl.theme", "orange");
+  const sys = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  const m = store.get("jl.mode", sys);
+  document.documentElement.dataset.theme = t;
+  document.documentElement.dataset.mode = m;
+  $$(".theme[data-theme]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.theme === t)));
+  $$("#lookMode button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === m)));
+}
+$$(".theme[data-theme]").forEach((b) => (b.onclick = () => { store.set("jl.theme", b.dataset.theme); applyTheme(); }));
+$$("#lookMode button").forEach((b) => (b.onclick = () => { store.set("jl.mode", b.dataset.v); applyTheme(); }));
+
+// ── help tips & collapsible blocks ─────────────────────
+(() => {
+  let tip;
+  const hide = () => { tip?.remove(); tip = null; };
+  document.addEventListener("mouseover", (e) => {
+    const h = e.target.closest?.(".help[data-tip]");
+    if (!h) return;
+    hide();
+    tip = el("div", "tip", h.dataset.tip);
+    (h.closest("dialog") ?? document.body).append(tip);
+    const r = h.getBoundingClientRect();
+    tip.style.top = `${Math.min(r.bottom + 6, innerHeight - tip.offsetHeight - 8)}px`;
+    tip.style.left = `${Math.max(8, Math.min(r.left - 8, innerWidth - tip.offsetWidth - 8))}px`;
+  });
+  document.addEventListener("mouseout", (e) => { if (e.target.closest?.(".help[data-tip]")) hide(); });
+})();
+$$(".block .toggle").forEach((b) => (b.onclick = () => {
+  const blk = b.closest(".block");
+  const open = blk.dataset.open !== "true";
+  blk.dataset.open = String(open);
+  b.textContent = open ? "−" : "+";
+}));
+$$(".block").forEach((blk) => ($(".toggle", blk).textContent = blk.dataset.open === "true" ? "−" : "+"));
+
+function segment(root, value, onpick) {
+  $$("button", root).forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.v === value));
+    b.onclick = () => { $$("button", root).forEach((x) => x.setAttribute("aria-pressed", String(x === b))); onpick(b.dataset.v); };
+  });
+}
+
+// ── status ─────────────────────────────────────────────
+async function refreshStatus() {
+  try {
+    state.status = await api("/api/status");
+  } catch (e) {
+    flash(e.message, true);
+    return;
+  }
+  const s = state.status;
+  const st = s.stats?.[state.lang] ?? {};
+  const set = (id, v, hot) => { const n = $(id); n.textContent = v ? String(v) : ""; n.classList.toggle("hot", !!hot); };
+  set("#cDue", st.due, st.due > 0);
+  set("#cLessons", st.lessons);
+  set("#cWords", st.words);
+  set("#cGrammar", st.grammar);
+  set("#cMistakes", st.open_mistakes, st.open_mistakes > 0);
+  $("#demoChip").hidden = !s.demo;
+  $("#wsFoot").innerHTML = "";
+  if (s.workspace) {
+    const f = $("#wsFoot");
+    f.append(el("b", null, s.demo ? "示範工作區" : "私人工作區"), el("br"), document.createTextNode(s.workspace));
+  }
+  // Level options for the generator.
+  const lv = $("#genLevel");
+  const opts = s.level_options?.[state.lang] ?? [];
+  const cur = s.levels?.[state.lang];
+  lv.innerHTML = "";
+  for (const o of opts) { const op = el("option", null, o); op.value = o; if (o === cur) op.selected = true; lv.append(op); }
+
+  const sb = $("#statusbar");
+  sb.innerHTML = "";
+  const dot = el("span", `dot ${s.engine_ready ? "ok" : "warn"}`);
+  const eng = el("span"); eng.append(dot, document.createTextNode(s.engine_ready ? s.engine : `${s.engine}（未設定 key）`));
+  sb.append(eng, el("span", null, `Google：${s.google === "mock" ? "模擬" : s.google}`), el("span", "grow"));
+  if (s.import?.warnings?.length) {
+    const w = el("span", null, `匯入警告 ${s.import.warnings.length}`);
+    w.title = s.import.warnings.join("\n");
+    w.style.color = "var(--warn)";
+    sb.append(w);
+  }
+  if (s.error) flash(s.error, true);
+}
+
+function greet() {
+  const s = state.status;
+  if (!s) return;
+  const st = s.stats?.[state.lang] ?? {};
+  const name = s.owner ? `${s.owner}，` : "";
+  if (s.demo) return say(`${name}歡迎！目前用的是示範資料。到「設定 → 工作區」連接你的私人 repo（例如 JELearner-private），生字和錯題才會存到你自己的地方。`);
+  if (!s.engine_ready) return say(`${name}還沒設定 Claude API key，產生教材前請到「設定 → Claude」。複習和錯題本可以先用。`);
+  const parts = [];
+  if (st.due) parts.push(`${st.due} 張${langLabel(state.lang)}卡片要複習`);
+  if (st.open_mistakes) parts.push(`${st.open_mistakes} 題錯題還沒訂正`);
+  say(parts.length ? `${name}今天有 ${parts.join("、")}。` : `${name}${langLabel(state.lang)}目前沒有待辦。去「新聞」挑一篇做成教材吧。`);
+}
+
+// ── language & views ───────────────────────────────────
+segment($("#lang"), state.lang, (v) => {
+  state.lang = v; store.set("jl.lang", v);
+  state.picked = null; state.lessonId = null; state.review = { items: [], i: 0, shown: false, done: 0 };
+  updatePicked();
+  refreshStatus().then(() => { greet(); render(); });
+});
+
+$$("#views button").forEach((b) => (b.onclick = () => { state.view = b.dataset.view; store.set("jl.view", state.view); state.query = ""; render(); }));
+
+function viewbar(title, count, ...extra) {
+  const vb = $("#viewbar");
+  vb.innerHTML = "";
+  const h = el("h1", null, title);
+  if (count != null) h.append(el("span", "c", String(count)));
+  vb.append(h, el("span", "grow"), ...extra);
+}
+
+function searchBox(placeholder, onchange) {
+  const i = el("input");
+  i.type = "search"; i.placeholder = placeholder; i.value = state.query;
+  let t;
+  i.oninput = () => { clearTimeout(t); t = setTimeout(() => { state.query = i.value; onchange(); }, 250); };
+  return i;
+}
+
+function ghostButton(iconName, label, onclick) {
+  const b = el("button", "ghost");
+  b.append(icon(iconName), document.createTextNode(label));
+  b.onclick = onclick;
+  return b;
+}
+
+async function render() {
+  $$("#views button").forEach((b) => (b.getAttribute("data-view") === state.view ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
+  const page = $("#page");
+  page.innerHTML = "";
+  try {
+    await ({ today: renderToday, news: renderNews, lessons: renderLessons, words: renderWords, grammar: renderGrammar,
+      mistakes: renderMistakes, materials: renderMaterials, secretary: renderSecretary }[state.view] ?? renderToday)(page);
+  } catch (e) {
+    page.append(el("div", "empty", e.message));
+  }
+  $("#pageArea").scrollTop = 0;
+}
+
+// ── today: numbers and a review session ────────────────
+async function renderToday(page) {
+  viewbar("今日", null);
+  const st = state.status?.stats?.[state.lang] ?? {};
+  const tiles = el("div", "tiles");
+  const tile = (k, v, s, acc) => { const t = el("div", `tile${acc ? " acc" : ""}`); t.append(el("div", "k", k), el("div", "v", String(v ?? 0)), el("div", "s", s)); return t; };
+  const rate = st.reviews ? `${Math.round((st.reviews_correct / st.reviews) * 100)}% 答對` : "7 天內";
+  tiles.append(
+    tile("待複習", st.due, "單字＋文法", st.due > 0),
+    tile("新單字", st.new_words, "7 天內"),
+    tile("複習次數", st.reviews, rate),
+    tile("未訂正錯題", st.open_mistakes, `共 ${st.lessons ?? 0} 份教材`, st.open_mistakes > 0),
+  );
+  page.append(tiles);
+
+  const card = el("div", "card");
+  const h = el("h3"); h.append(document.createTextNode("複習"), el("span", "c", ""), el("span", "grow"));
+  card.append(h);
+  page.append(card);
+  if (!state.review.items.length || state.review.i >= state.review.items.length) {
+    state.review = { items: await api(`/api/review?lang=${state.lang}&limit=50`), i: 0, shown: false, done: state.review.done };
+  }
+  drawReview(card);
+
+  const lessons = await api(`/api/lessons?lang=${state.lang}&limit=5`);
+  const lc = el("div", "card");
+  lc.append(el("h3", null, "最近的教材"));
+  if (!lessons.length) lc.append(el("div", "empty", "還沒有教材。到「新聞」挑一篇，或在右邊貼上文字。"));
+  const ul = el("ul", "list");
+  for (const l of lessons) ul.append(lessonItem(l));
+  lc.append(ul);
+  page.append(lc);
+}
+
+function drawReview(card) {
+  const r = state.review;
+  $$(".flash-card, .empty", card).forEach((n) => n.remove());
+  $(".c", card).textContent = r.items.length ? `${Math.min(r.i + 1, r.items.length)} / ${r.items.length}` : "";
+  const it = r.items[r.i];
+  if (!it) {
+    card.append(el("div", "empty", r.done ? `完成！這輪複習了 ${r.done} 張。` : "沒有到期的卡片。"));
+    return;
+  }
+  const fc = el("div", "flash-card");
+  fc.append(el("div", "kind", it.item_kind === "word" ? "單字" : "文法"));
+  fc.append(el("div", `front${isJa() ? " ja" : ""}`, it.front));
+  fc.append(el("div", "reading", r.shown ? it.reading : ""));
+  fc.append(el("div", "back", r.shown ? it.back : ""));
+  if (r.shown && it.example) fc.append(el("div", `example${isJa() ? " ja" : ""}`, it.example));
+  const g = el("div", "grades");
+  if (!r.shown) {
+    const b = el("button", "primary", "顯示答案（空白鍵）");
+    b.onclick = () => { r.shown = true; drawReview(card); };
+    g.append(b);
+  } else {
+    for (const [grade, label] of [[1, "忘了"], [3, "模糊"], [4, "記得"], [5, "很熟"]]) {
+      const b = el("button", grade >= 4 ? "primary" : "ghost", `${label}`);
+      b.title = `按 ${grade === 1 ? 1 : grade === 3 ? 2 : grade === 4 ? 3 : 4}`;
+      b.onclick = () => gradeCard(card, grade);
+      g.append(b);
+    }
+  }
+  fc.append(g);
+  card.append(fc);
+}
+
+async function gradeCard(card, grade) {
+  const r = state.review;
+  const it = r.items[r.i];
+  try {
+    await api("/api/review", { kind: it.item_kind, id: it.item_id, grade });
+    r.i += 1; r.shown = false; r.done += 1;
+    drawReview(card);
+    if (r.i >= r.items.length) refreshStatus();
+  } catch (e) { flash(e.message, true); }
+}
+
+document.addEventListener("keydown", (e) => {
+  if (state.view !== "today" || e.target.closest("input, textarea, select, dialog")) return;
+  const card = $(".flash-card")?.closest(".card");
+  if (!card) return;
+  if (e.key === " ") { e.preventDefault(); if (!state.review.shown) { state.review.shown = true; drawReview(card); } }
+  const map = { 1: 1, 2: 3, 3: 4, 4: 5 };
+  if (state.review.shown && map[e.key]) gradeCard(card, map[e.key]);
+});
+
+// ── news ───────────────────────────────────────────────
+async function renderNews(page, refresh = false) {
+  const btn = ghostButton("refresh", "抓最新新聞", async () => {
+    await busy(btn, async () => { page.innerHTML = ""; await renderNews(page, true); });
+  });
+  viewbar(`新聞・${langLabel(state.lang)}`, null, btn);
+  const data = await api(`/api/news?lang=${state.lang}${refresh ? "&refresh=true" : ""}`);
+  if (refresh) {
+    if (data.errors?.length) flash(data.errors.join("；"), true);
+    else flash(`取得 ${data.fetched} 則`);
+  }
+  if (!data.articles.length) {
+    page.append(el("div", "empty", "還沒有新聞。按「抓最新新聞」（來源在私人工作區的 sources.toml）。"));
+    return;
+  }
+  const ul = el("ul", "list");
+  for (const a of data.articles) {
+    const li = el("li", `item click${state.picked?.id === a.id ? " on" : ""}`);
+    li.append(el("div", `t${a.lang === "ja" ? " ja" : ""}`, a.title || a.url));
+    if (a.summary) li.append(el("div", `sub${a.lang === "ja" ? " ja" : ""}`, a.summary.slice(0, 220)));
+    const meta = el("div", "meta");
+    meta.append(el("span", null, a.source), el("span", null, fmtDate(a.published_at ?? a.fetched_at)));
+    li.append(meta);
+    const side = el("div", "side");
+    const open = el("a", "ico");
+    open.href = a.url.startsWith("http") ? a.url : "#";
+    open.target = "_blank"; open.rel = "noopener noreferrer";
+    open.setAttribute("aria-label", "開啟原文");
+    open.append(icon("external"));
+    open.onclick = (e) => e.stopPropagation();
+    if (a.url.startsWith("http")) side.append(open);
+    li.append(side);
+    li.onclick = () => {
+      state.picked = a;
+      $$(".item.on", ul).forEach((x) => x.classList.remove("on"));
+      li.classList.add("on");
+      setGenMode("news");
+      updatePicked();
+      say(`選好了「${a.title.slice(0, 40)}」。按右邊的「產生教材」，我會整理單字、文法和問答。`);
+    };
+    ul.append(li);
+  }
+  page.append(ul);
+}
+
+// ── lessons ────────────────────────────────────────────
+function lessonItem(l) {
+  const li = el("li", "item click");
+  li.append(el("div", `t${l.lang === "ja" ? " ja" : ""}`, l.title));
+  const meta = el("div", "meta");
+  meta.append(el("span", null, l.level), el("span", null, fmtDate(l.created_at)), el("span", null, l.path));
+  li.append(meta);
+  li.onclick = () => { state.view = "lessons"; state.lessonId = l.id; render(); };
+  return li;
+}
+
+async function renderLessons(page) {
+  if (state.lessonId) return renderLesson(page, state.lessonId);
+  const list = await api(`/api/lessons?lang=${state.lang}`);
+  viewbar(`教材・${langLabel(state.lang)}`, list.length);
+  if (!list.length) { page.append(el("div", "empty", "還沒有教材。")); return; }
+  const ul = el("ul", "list");
+  for (const l of list) ul.append(lessonItem(l));
+  page.append(ul);
+}
+
+async function renderLesson(page, id) {
+  const { lesson, row } = await api(`/api/lessons/${id}`);
+  const back = ghostButton("back", "教材列表", () => { state.lessonId = null; render(); });
+  const md = ghostButton("code", state.showMd ? "排版" : "Markdown", () => { state.showMd = !state.showMd; render(); });
+  viewbar(row.title, null, back, md);
+  const paper = el("div", "paper");
+  paper.lang = row.lang;
+  page.append(paper);
+  if (state.showMd) {
+    paper.append(el("pre", "md", row.markdown.replace(/\n*<!-- jelearner:lesson [\s\S]*$/, "\n")));
+    return;
+  }
+  paper.append(el("h1", null, lesson.title));
+  const meta = el("div", "meta");
+  meta.append(el("span", null, `${langLabel(row.lang)}・${row.level}`), el("span", null, fmtDate(row.created_at)), el("span", null, row.engine));
+  if (row.source_url) { const a = el("a", null, "原文"); a.href = row.source_url; a.target = "_blank"; a.rel = "noopener noreferrer"; meta.append(a); }
+  meta.append(el("span", null, row.path));
+  paper.append(meta);
+
+  paper.append(el("div", "summary", lesson.summary));
+
+  const h2 = (t, n) => { const h = el("h2", null, t); if (n != null) h.append(el("span", "c", String(n))); return h; };
+  paper.append(h2("單字", lesson.vocabulary.length));
+  const tb = el("table", "vocab");
+  tb.innerHTML = "<thead><tr><th>單字</th><th>讀音</th><th>意思與例句</th></tr></thead>";
+  const body = el("tbody");
+  for (const v of lesson.vocabulary) {
+    const tr = el("tr");
+    tr.append(el("td", "term", v.term), el("td", "reading", v.reading));
+    const td = el("td");
+    td.append(el("div", null, `${v.part_of_speech ? `〔${v.part_of_speech}〕` : ""}${v.meaning}`));
+    const ex = el("div", "ex", v.example);
+    ex.append(el("div", "tr", v.example_translation));
+    td.append(ex);
+    tr.append(td);
+    body.append(tr);
+  }
+  tb.append(body);
+  paper.append(tb);
+
+  paper.append(h2("文法", lesson.grammar.length));
+  lesson.grammar.forEach((g, i) => {
+    const d = el("div", "gram");
+    const h = el("h3", null, `${i + 1}. ${g.pattern}`);
+    h.append(el("span", "m", g.meaning));
+    d.append(h, el("p", null, g.explanation));
+    const ex = el("p", "ex", g.example);
+    ex.append(el("div", "tr", g.example_translation));
+    d.append(ex);
+    paper.append(d);
+  });
+
+  paper.append(h2("問答", lesson.questions.length));
+  lesson.questions.forEach((q, i) => paper.append(questionCard(id, q, i)));
+}
+
+function questionCard(lessonId, q, index) {
+  const box = el("div", "q");
+  box.append(el("div", "qt", `${index + 1}. ${q.question}`));
+  const fb = el("div", "fb");
+  const showFeedback = (correct) => {
+    fb.innerHTML = "";
+    const v = el("b", null, correct === true ? "答對 " : correct === false ? "答錯（已記入錯題本） " : "參考答案 ");
+    fb.append(v, document.createTextNode(`${q.answer}　${q.explanation}`));
+  };
+  const send = async (answer, correct) => {
+    const res = await api(`/api/lessons/${lessonId}/answers`, { answers: [{ index, answer, correct }] });
+    return res.results[0];
+  };
+  if (q.kind === "choice") {
+    const opts = el("div", "opts");
+    q.options.forEach((o, k) => {
+      const b = el("button", "opt", `${"ABCDEFG"[k]}. ${o}`);
+      b.onclick = async () => {
+        try {
+          const r = await send(o, null);
+          $$(".opt", opts).forEach((x) => (x.disabled = true));
+          b.classList.add(r.correct ? "right" : "wrong");
+          if (!r.correct) $$(".opt", opts).find((x) => x.textContent.endsWith(`. ${q.answer}`))?.classList.add("right");
+          showFeedback(r.correct);
+          if (!r.correct) refreshStatus();
+        } catch (e) { flash(e.message, true); }
+      };
+      opts.append(b);
+    });
+    box.append(opts);
+  } else {
+    const ta = el("textarea");
+    ta.rows = 2;
+    const row = el("div", "row");
+    const check = el("button", "ghost", "對答案");
+    check.onclick = async () => {
+      try {
+        const r = await send(ta.value, null);
+        showFeedback(r.correct);
+        if (r.correct === null) {
+          // The learner judges a free answer against the model answer.
+          const ok = el("button", "ghost", "我答對了");
+          const no = el("button", "ghost", "我答錯了");
+          ok.onclick = () => { showFeedback(true); ok.remove(); no.remove(); };
+          no.onclick = async () => { await send(ta.value, false); showFeedback(false); ok.remove(); no.remove(); refreshStatus(); };
+          row.append(ok, no);
+        }
+        check.disabled = true;
+      } catch (e) { flash(e.message, true); }
+    };
+    row.append(check);
+    box.append(ta, row);
+  }
+  box.append(fb);
+  return box;
+}
+
+// ── words & grammar ────────────────────────────────────
+async function renderWords(page) {
+  const list = await api(`/api/words?lang=${state.lang}&q=${encodeURIComponent(state.query)}`);
+  viewbar(`生字・${langLabel(state.lang)}`, list.length, searchBox("搜尋單字、意思、標籤", () => render()));
+  const t = el("table", "grid");
+  t.innerHTML = "<thead><tr><th>單字</th><th>讀音</th><th>意思</th><th>例句</th><th>複習</th><th>來源</th><th></th></tr></thead>";
+  const tb = el("tbody");
+  tb.append(addRow(["term", "reading", "meaning", "example"], ["新單字", isJa() ? "よみ" : "/ipa/", "意思", "例句"], async (v) => {
+    await api("/api/words", { lang: state.lang, ...v });
+    flash(`已加入，並寫入 vocab/my-words-${state.lang}.csv`);
+    await refreshStatus(); render();
+  }, 7));
+  for (const w of list) {
+    const tr = el("tr");
+    const ja = w.lang === "ja" ? " ja" : "";
+    tr.append(el("td", `term${ja}`, w.term), el("td", "mono", w.reading), el("td", null, w.meaning), el("td", ja.trim(), w.example),
+      el("td", "mono", w.reps ? `${fmtDue(w.due_at)}・${w.reps} 次` : fmtDue(w.due_at)), el("td", "src", w.source));
+    const td = el("td");
+    td.append(delButton(async () => {
+      const r = await api(`/api/words/${w.id}`, undefined, "DELETE");
+      flash(r.removed_from ? `已刪除（也從 ${r.removed_from} 移除）` : `已從資料庫刪除；若要永久刪除，請編輯 ${r.source}`);
+      await refreshStatus(); render();
+    }));
+    tr.append(td);
+    tb.append(tr);
+  }
+  t.append(tb);
+  page.append(t);
+}
+
+async function renderGrammar(page) {
+  const list = await api(`/api/grammar?lang=${state.lang}&q=${encodeURIComponent(state.query)}`);
+  viewbar(`文法・${langLabel(state.lang)}`, list.length, searchBox("搜尋文法、說明", () => render()));
+  const t = el("table", "grid");
+  t.innerHTML = "<thead><tr><th>文法</th><th>意思</th><th>說明</th><th>例句</th><th>程度</th><th>複習</th><th></th></tr></thead>";
+  const tb = el("tbody");
+  tb.append(addRow(["pattern", "meaning", "explanation", "example", "level"], ["新文法", "意思", "說明", "例句", isJa() ? "N3" : "B2"], async (v) => {
+    await api("/api/grammar", { lang: state.lang, ...v });
+    flash(`已加入，並寫入 grammar/my-grammar-${state.lang}.csv`);
+    await refreshStatus(); render();
+  }, 7));
+  for (const g of list) {
+    const tr = el("tr");
+    const ja = g.lang === "ja" ? " ja" : "";
+    tr.append(el("td", `term${ja}`, g.pattern), el("td", null, g.meaning), el("td", null, g.explanation), el("td", ja.trim(), g.example),
+      el("td", "mono", g.level), el("td", "mono", fmtDue(g.due_at)));
+    const td = el("td");
+    td.append(delButton(async () => {
+      const r = await api(`/api/grammar/${g.id}`, undefined, "DELETE");
+      flash(r.removed_from ? `已刪除（也從 ${r.removed_from} 移除）` : `已從資料庫刪除；若要永久刪除，請編輯 ${r.source}`);
+      await refreshStatus(); render();
+    }));
+    tr.append(td);
+    tb.append(tr);
+  }
+  t.append(tb);
+  page.append(t);
+}
+
+function addRow(fields, placeholders, onsave, cols) {
+  const tr = el("tr", "add");
+  const inputs = {};
+  fields.forEach((f, i) => {
+    const td = el("td");
+    const inp = el("input");
+    inp.placeholder = placeholders[i];
+    inputs[f] = inp;
+    td.append(inp);
+    tr.append(td);
+  });
+  for (let i = fields.length; i < cols - 1; i++) tr.append(el("td"));
+  const td = el("td");
+  const b = el("button", "ico");
+  b.setAttribute("aria-label", "加入");
+  b.append(icon("plus"));
+  const save = async () => {
+    const v = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.value.trim()]));
+    if (!v[fields[0]]) return inputs[fields[0]].focus();
+    try { await onsave(v); } catch (e) { flash(e.message, true); }
+  };
+  b.onclick = save;
+  Object.values(inputs).forEach((i) => (i.onkeydown = (e) => { if (e.key === "Enter") save(); }));
+  td.append(b);
+  tr.append(td);
+  return tr;
+}
+
+function delButton(fn) {
+  const b = el("button", "ico del");
+  b.setAttribute("aria-label", "刪除");
+  b.append(icon("trash"));
+  b.onclick = async () => { try { await fn(); } catch (e) { flash(e.message, true); } };
+  return b;
+}
+
+// ── mistakes ───────────────────────────────────────────
+async function renderMistakes(page) {
+  const list = await api(`/api/mistakes?lang=${state.lang}${state.showResolved ? "&all=true" : ""}`);
+  const toggle = ghostButton("eye", state.showResolved ? "隱藏已訂正" : "顯示已訂正", () => { state.showResolved = !state.showResolved; render(); });
+  viewbar(`錯題本・${langLabel(state.lang)}`, list.length, toggle);
+  if (!list.length) { page.append(el("div", "empty", "沒有錯題。")); return; }
+  const ul = el("ul", "list");
+  for (const m of list) {
+    const li = el("li", "item");
+    li.append(el("div", `t${isJa() ? " ja" : ""}`, m.question));
+    const sub = el("div", "sub");
+    sub.innerHTML = "";
+    sub.append(el("span", "bad", `你的答案：${m.user_answer || "（空白）"}`), el("br"), el("span", "ok", `正確答案：${m.correct_answer}`));
+    if (m.explanation) sub.append(el("br"), document.createTextNode(m.explanation));
+    li.append(sub);
+    const meta = el("div", "meta");
+    meta.append(el("span", null, fmtDate(m.created_at)));
+    if (m.resolved_at) meta.append(el("span", "tag ok", "已訂正"));
+    li.append(meta);
+    const side = el("div", "side");
+    if (m.lesson_id) {
+      const go = el("button", "ico"); go.setAttribute("aria-label", "回到教材"); go.append(icon("book"));
+      go.onclick = () => { state.view = "lessons"; state.lessonId = m.lesson_id; render(); };
+      side.append(go);
+    }
+    if (!m.resolved_at) {
+      const ok = el("button", "ico"); ok.setAttribute("aria-label", "已訂正"); ok.append(icon("check"));
+      ok.onclick = async () => { await api(`/api/mistakes/${m.id}/resolve`, {}); await refreshStatus(); render(); };
+      side.append(ok);
+    }
+    li.append(side);
+    ul.append(li);
+  }
+  page.append(ul);
+}
+
+// ── materials ──────────────────────────────────────────
+async function renderMaterials(page) {
+  const list = await api("/api/materials");
+  const up = ghostButton("upload", "上傳 JSON", () => $("#impMaterials").click());
+  viewbar("每週素材", list.length, up);
+  const fmt = el("details", "fmt card");
+  fmt.append(el("summary", null, "JSON 格式"));
+  fmt.append(el("pre", null, JSON.stringify({
+    week: "2026-W45", title: "本週素材", language: "ja",
+    items: [
+      { kind: "word", term: "規制", reading: "きせい", meaning: "管制" },
+      { kind: "grammar", pattern: "〜をめぐって", meaning: "圍繞著…", example: "…" },
+      { kind: "article", title: "短文", url: "", text: "本文…" },
+      { kind: "note", text: "自己的備註" },
+    ],
+  }, null, 2)));
+  page.append(fmt);
+  if (!list.length) { page.append(el("div", "empty", "還沒有素材。")); return; }
+  const ul = el("ul", "list");
+  for (const m of list) {
+    const li = el("li", "item");
+    li.append(el("div", "t", `${m.week}　${m.title || ""}`));
+    const meta = el("div", "meta");
+    meta.append(el("span", null, langLabel(m.lang)), el("span", null, `${m.items} 項`), el("span", null, m.path));
+    li.append(meta);
+    ul.append(li);
+  }
+  page.append(ul);
+  page.append(el("div", "note", "素材裡的文章會出現在「新聞」頁（來源標為 materials），可以直接做成教材。"));
+}
+
+// ── secretary: mail & calendar ─────────────────────────
+async function renderSecretary(page) {
+  viewbar("信件與行事曆", null);
+  const g = await api("/api/google");
+  const mock = g.mail === "mock";
+  const info = el("div", "card");
+  info.append(el("h3", null, mock ? "目前是模擬模式" : "已連線 Google"));
+  info.append(el("div", "note", mock
+    ? "Gmail 與 Google 日曆還沒串接（OAuth 在下一階段），信件和行程會放在下面的「模擬寄件匣」，格式與真正寄出的一樣。"
+    : "信件從你的 Gmail 寄出，行程寫入你的 Google 日曆。"));
+  info.append(el("div", "note", `週報信箱：${g.report_email ?? "未設定（設定 → 個人）"}`));
+  page.append(info);
+
+  const rep = el("div", "card");
+  rep.append(el("h3", null, "學習週報"));
+  rep.append(el("div", "note", "過去 7 天：新單字、複習答對率、錯題與下週建議。"));
+  const repBtn = el("button", "primary small", "寄出週報");
+  repBtn.onclick = () => busy(repBtn, async () => {
+    try { const r = await api("/api/google/weekly-report", {}); flash(`已寄出（${r.mode === "mock" ? "模擬" : "Gmail"}）`); render(); }
+    catch (e) { flash(e.message, true); }
+  });
+  rep.append(repBtn);
+  page.append(rep);
+
+  const sch = el("div", "card");
+  sch.append(el("h3", null, "把複習排進行事曆"));
+  const fg = el("div", "form-grid");
+  const days = el("input"); days.type = "number"; days.value = 7; days.min = 1; days.max = 31;
+  const at = el("input"); at.type = "time"; at.value = "12:00";
+  fg.append(el("span", null, "未來幾天"), days, el("span", null, "時間（UTC）"), at);
+  const schBtn = el("button", "primary small", "排入行事曆");
+  schBtn.onclick = () => busy(schBtn, async () => {
+    try {
+      const r = await api("/api/google/schedule-reviews", { days: Number(days.value), at_utc: at.value });
+      flash(r.created.length ? `已排 ${r.created.length} 個複習時段` : "這段時間沒有到期的卡片");
+      render();
+    } catch (e) { flash(e.message, true); }
+  });
+  sch.append(fg, schBtn);
+  page.append(sch);
+
+  const bk = el("div", "card");
+  bk.append(el("h3", null, "排一堂課（並寄確認信）"));
+  const fg2 = el("div", "form-grid");
+  const topic = el("input"); topic.placeholder = "例如：NHK 新聞討論";
+  const start = el("input"); start.type = "datetime-local";
+  const d = new Date(Date.now() + 86400000); d.setMinutes(0, 0, 0);
+  start.value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  const mins = el("input"); mins.type = "number"; mins.value = 30; mins.min = 10; mins.max = 240;
+  fg2.append(el("span", null, "主題"), topic, el("span", null, "開始"), start, el("span", null, "分鐘"), mins);
+  const bkBtn = el("button", "primary small", "排課");
+  bkBtn.onclick = () => busy(bkBtn, async () => {
+    try {
+      const r = await api("/api/google/book-lesson", { topic: topic.value, start: new Date(start.value).toISOString(), minutes: Number(mins.value), lang: state.lang });
+      flash(r.email_skipped ?? "已排課並寄出確認信");
+      render();
+    } catch (e) { flash(e.message, true); }
+  });
+  bk.append(fg2, bkBtn);
+  page.append(bk);
+
+  if (mock) {
+    const out = await api("/api/google/outbox");
+    const ob = el("div", "card");
+    const h = el("h3", null, "模擬寄件匣");
+    h.append(el("span", "c", `${out.mail.length} 封・${out.events.length} 個行程`));
+    ob.append(h);
+    for (const m of [...out.mail].reverse()) {
+      const it = el("div", "item");
+      it.append(el("div", "t", m.email.subject));
+      const meta = el("div", "meta"); meta.append(el("span", null, `寄給 ${m.email.to}`), el("span", null, new Date(m.at).toLocaleString("zh-TW")));
+      it.append(meta, el("div", "mail", m.email.body));
+      ob.append(it);
+    }
+    for (const e of out.events) {
+      const it = el("div", "item");
+      it.append(el("div", "t", e.event.summary));
+      const meta = el("div", "meta"); meta.append(el("span", null, new Date(e.event.start).toLocaleString("zh-TW")), el("span", null, `→ ${new Date(e.event.end).toLocaleTimeString("zh-TW")}`));
+      it.append(meta);
+      ob.append(it);
+    }
+    if (!out.mail.length && !out.events.length) ob.append(el("div", "empty", "還沒有寄出任何東西。"));
+    page.append(ob);
+  }
+}
+
+// ── right panel: generate a lesson ─────────────────────
+let genMode = "news";
+function setGenMode(m) {
+  genMode = m;
+  segment($("#genMode"), m, setGenMode);
+  $$(".gen-src").forEach((n) => (n.hidden = n.dataset.mode !== m));
+}
+setGenMode("news");
+
+function updatePicked() {
+  const p = $("#genPicked");
+  p.classList.toggle("on", !!state.picked);
+  p.textContent = state.picked ? state.picked.title : "到「新聞」頁選一篇";
+}
+
+$("#genRun").onclick = async () => {
+  const btn = $("#genRun");
+  const body = { lang: state.lang, level: $("#genLevel").value };
+  if (genMode === "news") {
+    if (!state.picked) { flash("先到「新聞」頁選一篇", true); return; }
+    body.article_id = state.picked.id;
+  } else if (genMode === "url") {
+    body.url = $("#genUrl").value.trim();
+    if (!body.url) { $("#genUrl").focus(); return; }
+  } else {
+    body.text = $("#genText").value;
+    body.title = $("#genTitle").value;
+    if (!body.text.trim()) { $("#genText").focus(); return; }
+  }
+  const out = $("#genOut");
+  out.className = "note";
+  out.textContent = "整理中…（約 30 秒到 2 分鐘）";
+  say("我在讀這篇文章，挑出值得學的單字和文法…");
+  btn.disabled = true;
+  try {
+    const r = await api("/api/lessons", body);
+    out.className = "note ok";
+    out.textContent = `完成：${r.path}（新增單字 ${r.added.words}、文法 ${r.added.grammar}）`;
+    say(`教材好了：「${r.lesson.title}」。單字已加入複習，問答答錯的會自動進錯題本。`);
+    state.view = "lessons"; state.lessonId = r.id; state.showMd = false;
+    await refreshStatus();
+    render();
+  } catch (e) {
+    out.className = "note err";
+    out.textContent = e.message;
+    say("這篇沒有做成功，原因寫在「產生教材」按鈕下方。");
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+// ── import ─────────────────────────────────────────────
+async function importFile(input, kind) {
+  const f = input.files?.[0];
+  if (!f) return;
+  const out = $("#impOut");
+  out.className = "note";
+  out.textContent = `匯入 ${f.name}…`;
+  try {
+    const text = await f.text();
+    const q = new URLSearchParams({ kind, name: f.name });
+    if (kind !== "materials") q.set("lang", state.lang);
+    const r = await apiText(`/api/import?${q}`, text);
+    const rep = r.report;
+    out.className = "note ok";
+    out.textContent = `已存成 ${r.file}：單字 ${rep.words}、文法 ${rep.grammar}${rep.articles ? `、文章 ${rep.articles}` : ""}${rep.warnings.length ? `（${rep.warnings.length} 個警告）` : ""}`;
+    if (rep.warnings.length) out.title = rep.warnings.join("\n");
+    await refreshStatus();
+    render();
+  } catch (e) {
+    out.className = "note err";
+    out.textContent = e.message;
+  } finally {
+    input.value = "";
+  }
+}
+$("#impVocab").onchange = (e) => importFile(e.target, "vocab");
+$("#impGrammar").onchange = (e) => importFile(e.target, "grammar");
+$("#impMaterials").onchange = (e) => importFile(e.target, "materials");
+$("#actImport").onclick = () => {
+  const blk = $("#impVocab").closest(".block");
+  blk.dataset.open = "true";
+  $(".toggle", blk).textContent = "−";
+  blk.scrollIntoView({ behavior: "smooth" });
+};
+
+// ── sync ───────────────────────────────────────────────
+$("#actSync").onclick = () => busy($("#actSync"), async () => {
+  try {
+    await api("/api/records/export", {});
+    const r = await api("/api/git/sync", {});
+    flash(r.committed ? `已同步：${r.committed}${r.pushed ? "（已推送）" : ""}` : r.pushed ? "已推送" : "沒有需要同步的修改");
+  } catch (e) { flash(e.message, true); }
+});
+
+// ── settings ───────────────────────────────────────────
+const dlg = $("#dlgSettings");
+$("#actSettings").onclick = () => openSettings(0);
+$("#demoChip").onclick = () => openSettings(0);
+$(".close", dlg).onclick = () => dlg.close();
+
+function openSettings(step) {
+  showStep(step);
+  dlg.showModal();
+}
+
+function showStep(step) {
+  $$("#setTabs button").forEach((b) => b.setAttribute("aria-selected", String(Number(b.dataset.step) === step)));
+  $$(".wizard .step", dlg).forEach((s) => (s.hidden = Number(s.dataset.step) !== step));
+  [loadWorkspaceStep, loadMeStep, loadClaudeStep, loadModelsStep, () => {}][step]();
+}
+$$("#setTabs button").forEach((b) => (b.onclick = () => showStep(Number(b.dataset.step))));
+
+let wsMode = "open";
+function setWsMode(m) {
+  wsMode = m;
+  segment($("#setWsMode"), m, setWsMode);
+  $$(".step[data-step='0'] .form[data-mode]").forEach((f) => (f.hidden = f.dataset.mode !== m));
+}
+setWsMode("open");
+
+async function loadWorkspaceStep() {
+  const s = state.status;
+  const now = $("#setWsNow");
+  now.innerHTML = "";
+  if (s?.workspace) {
+    now.append(document.createTextNode(s.demo ? "目前：示範工作區 " : "目前的私人工作區："), el("code", null, s.workspace), el("br"),
+      document.createTextNode("資料庫（不在 repo 裡）："), el("code", null, s.db ?? ""));
+  } else {
+    now.textContent = s?.error ?? "尚未選擇工作區";
+  }
+  const g = $("#setGit");
+  g.innerHTML = "";
+  try {
+    const st = await api("/api/git/status");
+    const line = (cls, mark, text) => { const li = el("li"); li.append(el("span", cls, mark), el("span", null, text)); g.append(li); };
+    if (!st.repo) line("mid", "•", "不是 Git repository（只存在這台電腦）");
+    else {
+      line("ok", "✓", `Git：${st.branch ?? ""}${st.remote ? `　${st.remote}` : "　（沒有遠端）"}`);
+      line(st.changed.length ? "mid" : "ok", st.changed.length ? "•" : "✓", st.changed.length ? `${st.changed.length} 個檔案尚未同步` : "沒有未同步的修改");
+      if (st.ahead || st.behind) line("mid", "•", `領先 ${st.ahead}、落後 ${st.behind} 個 commit`);
+    }
+  } catch (e) { g.append(el("li", null, e.message)); }
+}
+
+const wsOut = (msg, err) => { const o = $("#setWsOut"); o.className = `note${err ? " err" : " ok"}`; o.textContent = msg; };
+async function afterWorkspace(r) {
+  wsOut(`已開啟 ${r.workspace}：讀入單字 ${r.import.words}、文法 ${r.import.grammar}、教材 ${r.import.lessons}${r.git ? `；${r.git}` : ""}${r.git_error ? `；Git：${r.git_error}` : ""}`, !!r.git_error);
+  await refreshStatus();
+  loadWorkspaceStep();
+  greet();
+  render();
+}
+$("#setOpen").onclick = () => busy($("#setOpen"), async () => {
+  try { await afterWorkspace(await api("/api/setup/workspace", { path: $("#setOpenPath").value, init: $("#setOpenInit").checked })); } catch (e) { wsOut(e.message, true); }
+});
+$("#setNew").onclick = () => busy($("#setNew"), async () => {
+  try { await afterWorkspace(await api("/api/setup/new", { path: $("#setNewPath").value, remote: $("#setNewRemote").value })); } catch (e) { wsOut(e.message, true); }
+});
+$("#setClone").onclick = () => busy($("#setClone"), async () => {
+  try { await afterWorkspace(await api("/api/setup/clone", { url: $("#setCloneUrl").value, parent: $("#setCloneParent").value || "~/" })); } catch (e) { wsOut(e.message, true); }
+});
+$("#setGhNew").onclick = () => api("/api/open/github-new-repo", {}).catch((e) => flash(e.message, true));
+$("#setSync").onclick = () => busy($("#setSync"), async () => {
+  try { const r = await api("/api/git/sync", {}); wsOut(r.committed ? `已 commit：${r.committed}${r.pushed ? "，已推送" : ""}` : "沒有需要同步的修改"); loadWorkspaceStep(); }
+  catch (e) { wsOut(e.message, true); }
+});
+$("#setExport").onclick = () => busy($("#setExport"), async () => {
+  try { const r = await api("/api/records/export", {}); wsOut(`已寫入 ${r.dir}/：複習紀錄 ${r.progress} 筆、錯題 ${r.mistakes} 筆`); loadWorkspaceStep(); }
+  catch (e) { wsOut(e.message, true); }
+});
+$("#setReindex").onclick = () => busy($("#setReindex"), async () => {
+  try { const r = await api("/api/workspace/reindex", {}); wsOut(`單字 ${r.words}、文法 ${r.grammar}、素材 ${r.materials}、教材 ${r.lessons}${r.warnings.length ? `；警告：${r.warnings.join("；")}` : ""}`, r.warnings.length > 0); await refreshStatus(); render(); }
+  catch (e) { wsOut(e.message, true); }
+});
+
+function fillLevels(sel, lang) {
+  sel.innerHTML = "";
+  for (const o of state.status?.level_options?.[lang] ?? []) {
+    const op = el("option", null, o); op.value = o;
+    if (o === state.status?.levels?.[lang]) op.selected = true;
+    sel.append(op);
+  }
+}
+function loadMeStep() {
+  $("#setOwner").value = state.status?.owner ?? "";
+  $("#setEmail").value = state.status?.report_email ?? "";
+  fillLevels($("#setLvEn"), "en");
+  fillLevels($("#setLvJa"), "ja");
+}
+$("#setSaveMe").onclick = () => busy($("#setSaveMe"), async () => {
+  try {
+    await api("/api/workspace", { owner: $("#setOwner").value, report_email: $("#setEmail").value, levels: { en: $("#setLvEn").value, ja: $("#setLvJa").value } }, "PUT");
+    flash("已儲存到 workspace.toml");
+    await refreshStatus();
+  } catch (e) { flash(e.message, true); }
+});
+
+async function loadClaudeStep() {
+  const c = await api("/api/claude");
+  const editing = !c.configured;
+  $("#setKeyShow").hidden = editing;
+  $("#setKeyEnter").hidden = !editing;
+  $("#setKeySave").hidden = !editing;
+  $("#setKeyMasked").textContent = c.configured ? `${c.masked}　（${{ env: "環境變數", keychain: "系統金鑰圈", file: "設定資料夾", settings: "設定" }[c.source] ?? c.source}）` : "";
+  const sel = $("#setModel");
+  sel.innerHTML = "";
+  for (const m of c.models) { const o = el("option", null, `${m.id}　${m.summary}`); o.value = m.id; if (m.id === c.model) o.selected = true; sel.append(o); }
+  if (!c.models.some((m) => m.id === c.model)) { const o = el("option", null, c.model); o.value = c.model; o.selected = true; sel.prepend(o); }
+  $("#setEffort").value = c.effort ?? "";
+}
+$("#setKeyEdit").onclick = () => { $("#setKeyShow").hidden = true; $("#setKeyEnter").hidden = false; $("#setKeySave").hidden = false; $("#setKey").focus(); };
+$("#setKeyRemove").onclick = async () => { await api("/api/settings/claude", { key: "" }); await refreshStatus(); loadClaudeStep(); };
+$("#setGetKey").onclick = () => api("/api/open/anthropic-keys", {}).catch((e) => flash(e.message, true));
+$("#setKeySave").onclick = async () => {
+  const k = $("#setKey").value.trim();
+  if (!k) return;
+  try {
+    const r = await api("/api/settings/claude", { key: k });
+    $("#setKey").value = "";
+    flash(r.stored_in === "keychain" ? "已存入系統金鑰圈" : "已存入設定資料夾（credentials.toml）");
+    await refreshStatus(); loadClaudeStep(); greet();
+  } catch (e) { flash(e.message, true); }
+};
+$("#setModel").onchange = async () => { await api("/api/settings/claude", { model: $("#setModel").value }); refreshStatus(); };
+$("#setEffort").onchange = async () => { await api("/api/settings/claude", { effort: $("#setEffort").value }); };
+$("#setTest").onclick = () => busy($("#setTest"), async () => {
+  const out = $("#setTestOut");
+  out.className = "note"; out.textContent = "測試中…";
+  try { const r = await api("/api/engine/test", {}); out.className = "note ok"; out.textContent = `${r.engine} 回覆「${r.reply}」（${r.ms} ms）`; }
+  catch (e) { out.className = "note err"; out.textContent = e.message; }
+});
+
+async function loadModelsStep() {
+  const m = await api("/api/models");
+  $("#setSys").innerHTML = "";
+  const p = m.plan_mac32;
+  $("#setSys").append(
+    document.createTextNode(`這台電腦：${m.os}/${m.arch}，記憶體 ${m.memory_gb} GB。`), el("br"),
+    document.createTextNode(`Mac 32 GB 預估：大腦＋耳朵＋嘴巴共 ${p.total_gb} GB（預算 ${p.budget_gb} GB，GPU 可用約 ${p.gpu_usable_gb} GB）→ ${p.fits ? "放得下" : "放不下"}`),
+  );
+  const ul = $("#setModels");
+  ul.innerHTML = "";
+  const role = { brain: "大腦", ears: "耳朵", mouth: "嘴巴" };
+  const defaults = Object.values(m.catalog.defaults);
+  for (const x of m.catalog.models) {
+    const li = el("li", "model");
+    const mh = el("div", "mh");
+    mh.append(el("b", null, `${x.name} ${x.variant}`), el("span", "sum", x.summary));
+    const tags = el("span", "tags");
+    tags.append(el("span", "tag", role[x.role] ?? x.role));
+    if (defaults.includes(x.id)) tags.append(el("span", "tag acc", "預設"));
+    mh.append(tags);
+    li.append(mh, el("div", "meta", `${x.repo}　約 ${x.approx_gb} GB　${x.runtime}　${x.license}`));
+    ul.append(li);
+  }
+}
+
+// ── start ──────────────────────────────────────────────
+applyTheme();
+paintIcons();
+updatePicked();
+refreshStatus().then(() => {
+  greet();
+  render();
+  if (state.status?.demo && !store.get("jl.welcomed", false)) { store.set("jl.welcomed", true); openSettings(0); }
+});

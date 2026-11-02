@@ -1,0 +1,66 @@
+---
+title: {{ lesson.title | tojson }}
+language: {{ lang }}
+level: {{ level }}
+date: {{ date }}
+{% if url %}
+source: {{ url | tojson }}
+{% endif %}
+engine: {{ engine }}
+---
+
+# {{ lesson.title }}
+
+> {{ language_label }}・{{ level }}・{{ date }}{{ ("・" ~ source) if source else "" }}
+
+{% if url %}
+原文：<{{ url }}>
+{% endif %}
+
+## 摘要
+
+{{ lesson.summary }}
+
+## 單字
+
+| 單字 | 讀音 | 詞性 | 意思 |
+| --- | --- | --- | --- |
+{% for v in lesson.vocabulary %}
+| {{ v.term }} | {{ v.reading }} | {{ v.part_of_speech }} | {{ v.meaning }} |
+{% endfor %}
+
+{% for v in lesson.vocabulary %}
+- **{{ v.term }}**：{{ v.example }}
+  <br>{{ v.example_translation }}
+{% endfor %}
+
+## 文法
+
+{% for g in lesson.grammar %}
+### {{ loop.index }}. {{ g.pattern }}
+
+**意思**：{{ g.meaning }}
+
+{{ g.explanation }}
+
+- {{ g.example }}
+  <br>{{ g.example_translation }}
+
+{% endfor %}
+## 問答
+
+{% for q in lesson.questions %}
+{{ loop.index }}. {{ q.question }}
+{% for o in q.options %}
+   - {{ "ABCDEFG"[loop.index0] }}. {{ o }}
+{% endfor %}
+{% endfor %}
+
+<details>
+<summary>解答</summary>
+
+{% for q in lesson.questions %}
+{{ loop.index }}. {{ q.answer }}：{{ q.explanation }}
+{% endfor %}
+
+</details>

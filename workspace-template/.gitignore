@@ -1,0 +1,7 @@
+# Never commit secrets or local caches into your private workspace either.
+.env
+*.key
+*.pem
+credentials.toml
+.DS_Store
+/.jelearner/

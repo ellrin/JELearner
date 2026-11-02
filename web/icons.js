@@ -1,0 +1,89 @@
+// Line icons (Lucide-style, 24px grid), the same set and stroke as
+// PaperComposer. Buttons declare `data-icon="name"`; the label lives in
+// aria-label and shows as a tooltip on hover.
+
+const ICONS = {
+  pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  book: '<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2Z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7Z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
+  plus: '<path d="M5 12h14M12 5v14"/>',
+  trash: '<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  external: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
+  upload: '<path d="M12 15V4M8 8l4-4 4 4M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  back: '<path d="m15 18-6-6 6-6"/>',
+  send: '<path d="M22 2 11 13M22 2l-7 20-4-9-9-4Z"/>',
+  cloud: '<path d="M17.5 19H8a5 5 0 1 1 .9-9.92A6 6 0 0 1 20.5 11a4 4 0 0 1-3 8Z"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>',
+  news: '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8M15 18h-5M10 6h8v4h-8z"/>',
+  cards: '<rect x="2" y="6" width="14" height="16" rx="2"/><path d="M6 2h12a2 2 0 0 1 2 2v14"/>',
+  tree: '<path d="M4 4h6v6H4zM14 14h6v6h-6zM7 10v4a3 3 0 0 0 3 3h4"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+};
+
+function icon(name) {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", "0 0 24 24");
+  s.setAttribute("aria-hidden", "true");
+  s.classList.add("i");
+  s.innerHTML = ICONS[name] ?? "";
+  return s;
+}
+
+/** Fill every `[data-icon]` element (call again after changing data-icon). */
+function paintIcons(root = document) {
+  root.querySelectorAll("[data-icon]").forEach((n) => {
+    n.querySelector(":scope > svg.i")?.remove();
+    n.prepend(icon(n.dataset.icon));
+  });
+}
+
+// Hover labels for icon buttons. Fixed-position and clamped to the window, so
+// they are never clipped by scrolling panels; inside a modal they go into the
+// dialog, which sits above everything else.
+(() => {
+  let hint, timer;
+  const hide = () => { clearTimeout(timer); hint?.remove(); hint = null; };
+  document.addEventListener("mouseover", (e) => {
+    const b = e.target.closest?.(".ico[aria-label]");
+    // Buttons with a hover menu show their label as the menu title instead.
+    if (!b || b.dataset.menu || b.contains(e.relatedTarget)) return;
+    hide();
+    timer = setTimeout(() => {
+      hint = document.createElement("div");
+      hint.className = "hint";
+      hint.textContent = b.getAttribute("aria-label");
+      (b.closest("dialog") ?? document.body).append(hint);
+      const r = b.getBoundingClientRect();
+      const w = hint.offsetWidth, h = hint.offsetHeight;
+      const below = r.bottom + 6 + h < innerHeight;
+      hint.style.top = `${below ? r.bottom + 6 : r.top - 6 - h}px`;
+      hint.style.left = `${Math.max(6, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 6))}px`;
+    }, 350);
+  });
+  document.addEventListener("mouseout", (e) => {
+    const b = e.target.closest?.(".ico[aria-label]");
+    if (b && !b.contains(e.relatedTarget)) hide();
+  });
+  document.addEventListener("mousedown", hide);
+})();
+
+/** An icon-only button with a hover label. */
+function iconButton(name, label, onclick) {
+  const b = document.createElement("button");
+  b.className = "ico";
+  b.setAttribute("aria-label", label);
+  b.append(icon(name));
+  if (onclick) b.onclick = onclick;
+  return b;
+}

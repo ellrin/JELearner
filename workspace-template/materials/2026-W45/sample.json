@@ -1,0 +1,11 @@
+{
+  "week": "2026-W45",
+  "title": "範例：本週素材",
+  "language": "ja",
+  "items": [
+    { "kind": "word", "term": "規制", "reading": "きせい", "meaning": "管制；規範", "example": "AIの規制が議論されている。" },
+    { "kind": "grammar", "pattern": "〜をめぐって", "meaning": "圍繞著…", "explanation": "前接名詞，表示爭論、議論的焦點。", "example": "新しい法律をめぐって議論が続いている。" },
+    { "kind": "article", "title": "自分で書いた短い文章", "text": "最近、生成AIを使って日本語の勉強をしている。毎日ニュースを一つ読んで、知らない単語をまとめるようにしている。" },
+    { "kind": "note", "text": "週末に NHK のニュースを二本読む。" }
+  ]
+}

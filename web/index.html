@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="orange" data-mode="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JELearner</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">JE<b>/</b>LEARNER</div>
+    <div class="seg lang" id="lang" role="group" aria-label="學習語言">
+      <button data-v="en">EN</button>
+      <button data-v="ja">日本語</button>
+    </div>
+    <span class="chip warn" id="demoChip" hidden>示範資料・連接私人工作區</span>
+    <div class="top-right">
+      <button class="ico" id="actImport" data-icon="upload" aria-label="匯入單字、文法或每週素材"></button>
+      <button class="ico" id="actSync" data-icon="cloud" aria-label="同步私人工作區"></button>
+      <button class="ico" id="actSettings" data-icon="gear" aria-label="設定"></button>
+    </div>
+  </header>
+
+  <aside class="left" aria-label="導覽">
+    <ol class="views" id="views">
+      <li><button data-view="today"><span data-icon="sun"></span><span class="t">今日</span><span class="count" id="cDue"></span></button></li>
+      <li><button data-view="news"><span data-icon="news"></span><span class="t">新聞</span></button></li>
+      <li><button data-view="lessons"><span data-icon="book"></span><span class="t">教材</span><span class="count" id="cLessons"></span></button></li>
+      <li class="sep"></li>
+      <li><button data-view="words"><span data-icon="cards"></span><span class="t">生字</span><span class="count" id="cWords"></span></button></li>
+      <li><button data-view="grammar"><span data-icon="tree"></span><span class="t">文法</span><span class="count" id="cGrammar"></span></button></li>
+      <li><button data-view="mistakes"><span data-icon="alert"></span><span class="t">錯題本</span><span class="count" id="cMistakes"></span></button></li>
+      <li><button data-view="materials"><span data-icon="folder"></span><span class="t">每週素材</span></button></li>
+      <li class="sep"></li>
+      <li><button data-view="secretary"><span data-icon="mail"></span><span class="t">信件與行事曆</span></button></li>
+    </ol>
+    <div class="left-foot" id="wsFoot"></div>
+  </aside>
+
+  <main class="page-area" id="pageArea">
+    <div class="viewbar" id="viewbar"></div>
+    <article class="page" id="page"></article>
+    <div class="statusbar" id="statusbar"></div>
+  </main>
+
+  <aside class="right" aria-label="學習秘書">
+    <section class="secretary">
+      <div class="avatar" id="avatar" aria-hidden="true">
+        <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" class="a-bg"/><circle cx="32" cy="27" r="11" class="a-face"/><path d="M14 54c3-9 10-13 18-13s15 4 18 13" class="a-face"/><circle cx="28" cy="26" r="1.6" class="a-eye"/><circle cx="36" cy="26" r="1.6" class="a-eye"/><path d="M28.5 31c2 1.6 5 1.6 7 0" class="a-mouth"/></svg>
+      </div>
+      <div class="say">
+        <div class="who">學習秘書 <span class="tag" title="數位人像與語音在第二階段加入">文字模式</span></div>
+        <p id="say">準備中…</p>
+      </div>
+    </section>
+
+    <section class="block" data-open="true">
+      <div class="block-head">
+        <span class="n">01</span><h3>產生教材</h3>
+        <button class="help" data-tip="選一篇新聞、貼上網址或貼上文字，模型會整理成單字、文法解析與問答。網址會先檢查該網站的 robots.txt。教材存成 Markdown 放在私人工作區的 lessons/，單字與文法同時加入複習。">?</button>
+        <button class="toggle" aria-label="展開或收合">−</button>
+      </div>
+      <div class="block-body">
+        <div class="seg" id="genMode">
+          <button data-v="news">新聞</button>
+          <button data-v="url">網址</button>
+          <button data-v="text">貼上文字</button>
+        </div>
+        <div class="gen-src" data-mode="news"><div class="picked" id="genPicked">到「新聞」頁選一篇</div></div>
+        <div class="gen-src" data-mode="url" hidden><input id="genUrl" type="url" placeholder="https://…"></div>
+        <div class="gen-src" data-mode="text" hidden>
+          <input id="genTitle" placeholder="標題（可留空）">
+          <textarea id="genText" rows="6" placeholder="貼上想學的文章或段落"></textarea>
+        </div>
+        <label class="inline-field"><span>程度</span><select id="genLevel"></select></label>
+        <button class="primary" id="genRun"><span>產生教材</span></button>
+        <div class="note" id="genOut"></div>
+      </div>
+    </section>
+
+    <section class="block" data-open="false">
+      <div class="block-head">
+        <span class="n">02</span><h3>匯入</h3>
+        <button class="help" data-tip="檔案會先存進私人工作區（vocab/、grammar/、materials/週次/），再讀進資料庫，不會覆蓋同名檔案。欄位格式見 docs/data-formats.md。">?</button>
+        <button class="toggle" aria-label="展開或收合">−</button>
+      </div>
+      <div class="block-body">
+        <div class="import-row"><span>單字 CSV</span><input type="file" id="impVocab" accept=".csv,.tsv,text/csv"></div>
+        <div class="import-row"><span>文法 CSV</span><input type="file" id="impGrammar" accept=".csv,.tsv,text/csv"></div>
+        <div class="import-row"><span>每週 JSON</span><input type="file" id="impMaterials" accept=".json,application/json"></div>
+        <div class="note" id="impOut"></div>
+      </div>
+    </section>
+  </aside>
+
+  <!-- Settings -->
+  <dialog class="dialog" id="dlgSettings" aria-label="設定">
+    <div class="dlg">
+      <div class="dlg-head">
+        <h2>設定</h2>
+        <div class="tabs" id="setTabs" role="tablist">
+          <button data-step="0"><span class="c">01</span>工作區與同步</button>
+          <button data-step="1"><span class="c">02</span>個人</button>
+          <button data-step="2"><span class="c">03</span>Claude</button>
+          <button data-step="3"><span class="c">04</span>本機模型</button>
+          <button data-step="4">外觀</button>
+        </div>
+        <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
+      </div>
+      <div class="wizard">
+        <section class="step" data-step="0">
+          <div class="now" id="setWsNow"></div>
+          <div class="seg-row">
+            <div class="seg wide" id="setWsMode">
+              <button data-v="open">開啟資料夾</button>
+              <button data-v="new">建立新的</button>
+              <button data-v="clone">從 repo 下載</button>
+            </div>
+            <button class="help" data-tip="生字、文法、每週素材、教材都放在你的私人工作區，建議是你自己的 GitHub private repo（例如 JELearner-private）。每位使用者都指向自己的工作區，資料庫也各自分開。">?</button>
+          </div>
+          <div class="form" data-mode="open">
+            <label><span>資料夾</span><input id="setOpenPath" placeholder="~/JELearner-private"></label>
+            <label class="check"><input type="checkbox" id="setOpenInit" checked><span>補上缺少的資料夾與範本檔（不覆蓋現有檔案）</span></label>
+            <button class="primary small" id="setOpen">開啟</button>
+          </div>
+          <div class="form" data-mode="new" hidden>
+            <label><span>位置</span><input id="setNewPath" placeholder="~/JELearner-private"></label>
+            <label><span>private repo</span><input id="setNewRemote" placeholder="留空＝只存在這台電腦"><span class="inline"><button class="ico" id="setGhNew" data-icon="external" aria-label="到 GitHub 建立空白 private repo"></button></span></label>
+            <button class="primary small" id="setNew">建立</button>
+          </div>
+          <div class="form" data-mode="clone" hidden>
+            <label><span>private repo</span><input id="setCloneUrl" placeholder="https://github.com/you/JELearner-private.git"></label>
+            <label><span>放在</span><input id="setCloneParent" placeholder="~/"></label>
+            <button class="primary small" id="setClone">下載</button>
+          </div>
+          <div class="git-box">
+            <ul class="checks" id="setGit"></ul>
+            <div class="actions-row">
+              <button class="ghost" id="setSync">同步（commit 並 push）</button>
+              <button class="ghost" id="setExport">匯出複習紀錄與錯題</button>
+              <button class="ghost" id="setReindex">重新讀取工作區檔案</button>
+            </div>
+            <div class="note" id="setWsOut"></div>
+          </div>
+        </section>
+
+        <section class="step" data-step="1" hidden>
+          <div class="form">
+            <label><span>名字</span><input id="setOwner" placeholder="週報開頭的稱呼"></label>
+            <label><span>週報信箱</span><input id="setEmail" type="email" placeholder="you@example.com"></label>
+            <label><span>英文程度</span><select id="setLvEn"></select></label>
+            <label><span>日文程度</span><select id="setLvJa"></select></label>
+            <button class="primary small" id="setSaveMe">儲存</button>
+            <div class="note">存在私人工作區的 workspace.toml。</div>
+          </div>
+        </section>
+
+        <section class="step" data-step="2" hidden>
+          <div class="form">
+            <div class="kv" id="setKeyShow"><span>API key</span><code class="masked" id="setKeyMasked"></code><span class="inline">
+              <button class="ico" id="setKeyEdit" data-icon="pen" aria-label="更換 key"></button>
+              <button class="ico" id="setKeyRemove" data-icon="trash" aria-label="移除 key"></button></span></div>
+            <label id="setKeyEnter"><span>API key</span><input type="password" id="setKey" placeholder="sk-ant-…" autocomplete="off"><span class="inline">
+              <button class="ico" id="setGetKey" data-icon="external" aria-label="到 Anthropic Console 建立 key"></button></span></label>
+            <button class="primary small" id="setKeySave">儲存 key</button>
+            <label><span>模型</span><select id="setModel"></select></label>
+            <label><span>effort</span><select id="setEffort">
+              <option value="">模型預設</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option>
+            </select></label>
+            <div class="note">key 只存在系統金鑰圈（或設定資料夾的 credentials.toml），不會進任何 repo。模型清單來自 models/catalog.json。</div>
+          </div>
+          <div class="actions-row"><button class="ghost" id="setTest">測試連線</button><span class="note" id="setTestOut"></span></div>
+        </section>
+
+        <section class="step" data-step="3" hidden>
+          <div class="now" id="setSys"></div>
+          <ul class="models" id="setModels"></ul>
+          <div class="note">Mac 到貨後啟用：下載精靈、llama-server、Whisper、Kokoro。這裡的記憶體估算尚未實機測試。</div>
+        </section>
+
+        <section class="step" data-step="4" hidden>
+          <div class="look-row"><span class="lbl">主題</span>
+            <div class="themes">
+              <button class="theme" data-theme="orange" aria-label="深灰橘"><span class="swatch"><i style="background:#27272a"></i><i style="background:#ff6b35"></i><i style="background:#f0f0f1"></i></span></button>
+              <button class="theme" data-theme="night" aria-label="藍紫黃"><span class="swatch"><i style="background:#0c0b24"></i><i style="background:#5b3df5"></i><i style="background:#f3e600"></i></span></button>
+              <button class="theme" data-theme="terminal" aria-label="綠黑"><span class="swatch"><i style="background:#080d0a"></i><i style="background:#11965a"></i><i style="background:#2ef08a"></i></span></button>
+            </div>
+          </div>
+          <div class="look-row"><span class="lbl">模式</span>
+            <div class="seg" id="lookMode"><button data-v="light">淺色</button><button data-v="dark">深色</button></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </dialog>
+</div>
+<script src="icons.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

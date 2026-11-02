@@ -1,0 +1,38 @@
+# Build output
+/target
+/dist
+
+# Personal data never belongs in this public repository.
+# Your vocabulary, grammar, lessons and records live in your own private
+# repository (e.g. JELearner-private); the app finds it through
+# JELEARNER_WORKSPACE or <config dir>/JELearner/config.toml.
+/user_data/
+/workspace/
+/my-workspace/
+/JELearner-private/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.local.toml
+/config.toml
+/credentials.toml
+!workspace-template/**
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Local model files
+*.gguf
+*.safetensors
+*.bin
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Tauri generated files (later)
+/apps/desktop/gen/

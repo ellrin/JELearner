@@ -1,0 +1,32 @@
+# News sources for the crawler. RSS or Atom feeds only; every article page is
+# checked against the site's robots.txt before it is fetched, and requests to
+# the same site are spaced out. Lessons are for your own study: do not
+# republish article text.
+#
+# body_selector (optional): CSS selector of the article body on that site.
+
+[[source]]
+id = "bbc-technology"
+name = "BBC News – Technology"
+lang = "en"
+feed = "https://feeds.bbci.co.uk/news/technology/rss.xml"
+
+[[source]]
+id = "nhk-news"
+name = "NHK NEWS WEB 主要ニュース"
+lang = "ja"
+feed = "https://www3.nhk.or.jp/rss/news/cat0.xml"
+
+[[source]]
+id = "itmedia-news"
+name = "ITmedia NEWS"
+lang = "ja"
+feed = "https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml"
+enabled = false
+
+[[source]]
+id = "npr-technology"
+name = "NPR – Technology"
+lang = "en"
+feed = "https://feeds.npr.org/1019/rss.xml"
+enabled = false

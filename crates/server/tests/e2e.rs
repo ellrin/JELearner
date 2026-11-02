@@ -1,0 +1,381 @@
+//! Offline end-to-end test: the real server over HTTP, with mock servers for
+//! the news site (including robots.txt), the Claude API, Gmail and Google
+//! Calendar. No network access and no API key needed.
+
+use axum::extract::Query;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use jl_server::{GoogleMode, Options, Paths, Settings};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+async fn serve(app: Router) -> String {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+/// A news site: robots.txt forbids /private/, one feed, two articles.
+fn news_site(base: Arc<Mutex<String>>) -> Router {
+    let feed = move || {
+        let b = base.lock().unwrap().clone();
+        async move {
+            let xml = format!(
+                r#"<?xml version="1.0"?><rss version="2.0"><channel><title>Mock Tech</title>
+                <item><title>Chipmakers race to build AI accelerators</title><link>{b}/articles/chips.html</link>
+                  <description>New factories are planned.</description><pubDate>Mon, 02 Nov 2026 08:00:00 GMT</pubDate></item>
+                <item><title>Members only</title><link>{b}/private/secret.html</link><description>x</description></item>
+                </channel></rss>"#
+            );
+            ([("content-type", "application/rss+xml")], xml)
+        }
+    };
+    Router::new()
+        .route("/robots.txt", get(|| async { "User-agent: *\nDisallow: /private/\n" }))
+        .route("/feed.xml", get(feed))
+        .route(
+            "/articles/chips.html",
+            get(|| async {
+                axum::response::Html(
+                    r#"<html><head><meta property="og:title" content="Chipmakers race to build AI accelerators"></head><body>
+                    <nav><p>Home</p></nav><article>
+                    <p>Several chipmakers announced plans on Monday to build new factories for AI accelerators.</p>
+                    <p>Analysts say demand for specialised chips will keep rising over the next decade.</p>
+                    </article></body></html>"#,
+                )
+            }),
+        )
+        .route("/private/secret.html", get(|| async { "should never be fetched" }))
+}
+
+fn lesson_json() -> Value {
+    json!({
+        "title": "Chipmakers race to build AI accelerators",
+        "summary": "多家晶片製造商宣布興建新的 AI 加速器工廠。",
+        "vocabulary": [
+            {"term":"accelerator","reading":"/əkˈseləreɪtər/","part_of_speech":"n.","meaning":"加速器","example":"The lab bought a new accelerator.","example_translation":"實驗室買了新的加速器。"},
+            {"term":"demand","reading":"/dɪˈmænd/","part_of_speech":"n.","meaning":"需求","example":"Demand for batteries is growing.","example_translation":"電池需求正在成長。"}
+        ],
+        "grammar": [
+            {"pattern":"keep + V-ing","meaning":"持續…","explanation":"表示動作或狀態持續。","example":"Prices keep rising.","example_translation":"價格持續上漲。"}
+        ],
+        "questions": [
+            {"kind":"choice","question":"What did the chipmakers announce?","options":["New factories","Layoffs","A merger"],"answer":"New factories","explanation":"第一段提到新工廠。"},
+            {"kind":"short","question":"Use 'keep + V-ing' in a sentence.","options":[],"answer":"Demand keeps rising.","explanation":"keep 後接動名詞。"}
+        ]
+    })
+}
+
+/// The Claude Messages API, checking what a real request must look like.
+fn mock_claude(calls: Arc<Mutex<Vec<Value>>>) -> Router {
+    Router::new().route(
+        "/v1/messages",
+        post(move |h: HeaderMap, Json(b): Json<Value>| {
+            let calls = calls.clone();
+            async move {
+                if h.get("x-api-key").map(|v| v.to_str().unwrap()) != Some("sk-ant-test-key-0000") {
+                    return (StatusCode::UNAUTHORIZED, Json(json!({"type":"error","error":{"type":"authentication_error","message":"bad key"}})))
+                        .into_response();
+                }
+                assert_eq!(h["anthropic-version"], "2026-10-21");
+                assert_eq!(h["anthropic-beta"], "server-side-fallback-2026-07-01");
+                assert!(b.get("temperature").is_none());
+                calls.lock().unwrap().push(b.clone());
+                let text = if b["output_config"]["format"]["type"] == "json_schema" { lesson_json().to_string() } else { "OK".into() };
+                Json(json!({
+                    "id": "msg_test", "type": "message", "role": "assistant", "model": b["model"],
+                    "content": [{"type": "text", "text": text}],
+                    "stop_reason": "end_turn", "usage": {"input_tokens": 10, "output_tokens": 10}
+                }))
+                .into_response()
+            }
+        }),
+    )
+}
+
+/// Gmail send + Calendar insert/list, recording what arrives.
+fn mock_google(mail: Arc<Mutex<Vec<Value>>>, events: Arc<Mutex<Vec<Value>>>) -> Router {
+    let ev2 = events.clone();
+    Router::new()
+        .route(
+            "/gmail/v1/users/me/messages/send",
+            post(move |h: HeaderMap, Json(b): Json<Value>| {
+                let mail = mail.clone();
+                async move {
+                    assert_eq!(h["authorization"], "Bearer google-test-token");
+                    let mut m = mail.lock().unwrap();
+                    m.push(b);
+                    Json(json!({"id": format!("gm{}", m.len())}))
+                }
+            }),
+        )
+        .route(
+            "/calendar/v3/calendars/primary/events",
+            post(move |Json(b): Json<Value>| {
+                let events = events.clone();
+                async move {
+                    let mut e = events.lock().unwrap();
+                    e.push(b);
+                    Json(json!({"id": format!("ev{}", e.len())}))
+                }
+            })
+            .merge(get(move |Query(_q): Query<HashMap<String, String>>| {
+                let e = ev2.clone();
+                async move { Json(json!({"items": e.lock().unwrap().clone()})) }
+            })),
+        )
+}
+
+struct Client {
+    base: String,
+    http: reqwest::Client,
+}
+
+impl Client {
+    async fn get(&self, path: &str) -> (StatusCode, Value) {
+        let r = self.http.get(format!("{}{path}", self.base)).send().await.unwrap();
+        (StatusCode::from_u16(r.status().as_u16()).unwrap(), r.json().await.unwrap_or(Value::Null))
+    }
+    async fn post(&self, path: &str, body: Value) -> (StatusCode, Value) {
+        let r = self.http.post(format!("{}{path}", self.base)).json(&body).send().await.unwrap();
+        (StatusCode::from_u16(r.status().as_u16()).unwrap(), r.json().await.unwrap_or(Value::Null))
+    }
+    async fn post_text(&self, path: &str, body: &str) -> (StatusCode, Value) {
+        let r = self.http.post(format!("{}{path}", self.base)).body(body.to_string()).send().await.unwrap();
+        (StatusCode::from_u16(r.status().as_u16()).unwrap(), r.json().await.unwrap_or(Value::Null))
+    }
+}
+
+async fn start(settings: Settings) -> Client {
+    let app = jl_server::router(settings, Options { provider: None }).await;
+    Client { base: serve(app).await, http: reqwest::Client::new() }
+}
+
+fn settings(app_dir: &Path, claude: &str, google: &str) -> Settings {
+    let mut s = Settings::for_tests(Paths::from_repo(), app_dir.to_path_buf());
+    s.claude.base_url = claude.to_string();
+    s.claude_api_key = Some("sk-ant-test-key-0000".into());
+    s.google.mode = GoogleMode::Api;
+    s.google.gmail_base = google.to_string();
+    s.google.calendar_base = google.to_string();
+    s.google.token = Some("google-test-token".into());
+    s
+}
+
+#[tokio::test]
+async fn full_text_pipeline_offline() {
+    // Mock services.
+    let site_base = Arc::new(Mutex::new(String::new()));
+    let site = serve(news_site(site_base.clone())).await;
+    *site_base.lock().unwrap() = site.clone();
+    let claude_calls = Arc::new(Mutex::new(vec![]));
+    let claude = serve(mock_claude(claude_calls.clone())).await;
+    let (mail, events) = (Arc::new(Mutex::new(vec![])), Arc::new(Mutex::new(vec![])));
+    let google = serve(mock_google(mail.clone(), events.clone())).await;
+
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws_path = ws_dir.path().join("JELearner-private");
+    let c = start(settings(app_dir.path(), &claude, &google)).await;
+
+    // First run: demo workspace, then connect the private workspace.
+    let (st, s) = c.get("/api/status").await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(s["demo"], true);
+    assert_eq!(s["engine_ready"], true);
+    let (st, r) = c.post("/api/setup/workspace", json!({"path": ws_path, "init": true})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert!(r["import"]["words"].as_u64().unwrap() >= 4, "template vocab imported: {r}");
+    let cfg = std::fs::read_to_string(app_dir.path().join("config.toml")).unwrap();
+    assert!(cfg.contains("JELearner-private"), "workspace remembered outside the repo");
+    let (_, s) = c.get("/api/status").await;
+    assert_eq!(s["demo"], false);
+    let db = s["db"].as_str().unwrap();
+    assert!(db.starts_with(app_dir.path().to_str().unwrap()), "database lives in the app folder, not the workspace");
+    assert!(!db.starts_with(ws_path.to_str().unwrap()));
+
+    // Point the crawler at the mock site.
+    std::fs::write(
+        ws_path.join("sources.toml"),
+        format!("[[source]]\nid = \"mock\"\nname = \"Mock Tech\"\nlang = \"en\"\nfeed = \"{site}/feed.xml\"\n"),
+    )
+    .unwrap();
+    let (st, news) = c.get("/api/news?lang=en&refresh=true").await;
+    assert_eq!(st, StatusCode::OK, "{news}");
+    assert_eq!(news["errors"], json!([]), "{news}");
+    let arts = news["articles"].as_array().unwrap();
+    let chips = arts.iter().find(|a| a["url"].as_str().unwrap().ends_with("/articles/chips.html")).unwrap();
+    let private = arts.iter().find(|a| a["url"].as_str().unwrap().contains("/private/")).unwrap();
+
+    // robots.txt is respected.
+    let (st, err) = c.post("/api/lessons", json!({"article_id": private["id"]})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    assert!(err["error"].as_str().unwrap().contains("robots.txt"), "{err}");
+
+    // News -> lesson.
+    let (st, lesson) = c.post("/api/lessons", json!({"article_id": chips["id"], "level": "B2"})).await;
+    assert_eq!(st, StatusCode::OK, "{lesson}");
+    assert_eq!(lesson["added"]["words"], 2);
+    let path = ws_path.join(lesson["path"].as_str().unwrap());
+    let md = std::fs::read_to_string(&path).unwrap();
+    assert!(md.contains("# Chipmakers race to build AI accelerators"));
+    assert!(md.contains("| accelerator |"));
+    assert!(md.contains("keep + V-ing"));
+    assert!(md.contains("jelearner:lesson"), "data embedded for rebuilding");
+    {
+        let calls = claude_calls.lock().unwrap();
+        let req = &calls[0];
+        assert_eq!(req["model"], "claude-opus-5-5", "model from the catalog, not hard-coded");
+        assert!(req["messages"][0]["content"].as_str().unwrap().contains("Several chipmakers announced plans"));
+        assert!(req["system"].as_str().unwrap().contains("B2"));
+        assert!(req["messages"][0]["content"].as_str().unwrap().contains("resilient"), "known words passed");
+    }
+    let id = lesson["id"].as_i64().unwrap();
+    let (_, words) = c.get("/api/words?lang=en&q=accel").await;
+    assert_eq!(words.as_array().unwrap().len(), 1);
+
+    // Quiz: one wrong choice, one self-marked short answer.
+    let (st, res) = c
+        .post(
+            &format!("/api/lessons/{id}/answers"),
+            json!({"answers": [{"index": 0, "answer": "Layoffs"}, {"index": 1, "answer": "Demand keeps rising"}]}),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK, "{res}");
+    assert_eq!(res["results"][0]["correct"], false);
+    assert_eq!(res["results"][1]["correct"], true, "short answer matches loosely");
+    let (_, ms) = c.get("/api/mistakes?lang=en").await;
+    assert_eq!(ms.as_array().unwrap().len(), 1);
+    assert_eq!(ms[0]["correct_answer"], "New factories");
+
+    // Paste text instead of a URL (Japanese).
+    let (st, l2) = c.post("/api/lessons", json!({"lang": "ja", "title": "メモ", "text": "政府は半導体工場を支援する。"})).await;
+    assert_eq!(st, StatusCode::OK, "{l2}");
+    assert!(l2["path"].as_str().unwrap().starts_with("lessons/ja/"));
+
+    // Own vocabulary: CSV upload and a word typed in by hand.
+    let (st, imp) = c
+        .post_text("/api/import?kind=vocab&name=toeic.csv&lang=en", "word,meaning\nquarterly,每季的\nrevenue,營收\n")
+        .await;
+    assert_eq!(st, StatusCode::OK, "{imp}");
+    assert_eq!(imp["report"]["words"], 2);
+    assert!(ws_path.join(imp["file"].as_str().unwrap()).exists(), "uploaded file kept in the workspace");
+    let (st, bad) = c.post_text("/api/import?kind=vocab&name=x.csv", "a,b\n1,2\n").await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{bad}");
+    let (st, _) = c.post("/api/words", json!({"lang": "en", "term": "mitigate", "meaning": "減輕"})).await;
+    assert_eq!(st, StatusCode::OK);
+    let mine = std::fs::read_to_string(ws_path.join("vocab/my-words-en.csv")).unwrap();
+    assert!(mine.contains("mitigate,,減輕"));
+
+    // Weekly material JSON.
+    let material = json!({"week": "2026-W46", "title": "第46週", "language": "ja", "items": [
+        {"kind": "word", "term": "需要", "reading": "じゅよう", "meaning": "需求"},
+        {"kind": "grammar", "pattern": "〜につれて", "meaning": "隨著"}]});
+    let (st, imp) = c.post_text("/api/import?kind=materials&name=week46.json", &material.to_string()).await;
+    assert_eq!(st, StatusCode::OK, "{imp}");
+    assert!(imp["file"].as_str().unwrap().starts_with("materials/2026-W46/"));
+    let (_, mats) = c.get("/api/materials").await;
+    assert_eq!(mats.as_array().unwrap().len(), 2, "template sample + uploaded");
+
+    // Review: grade every due English card once.
+    let (_, due) = c.get("/api/review?lang=en&limit=100").await;
+    let due = due.as_array().unwrap().clone();
+    assert!(due.len() >= 6);
+    for d in &due {
+        let grade = if d["front"] == "demand" { 1 } else { 4 };
+        let (st, _) = c.post("/api/review", json!({"kind": d["item_kind"], "id": d["item_id"], "grade": grade})).await;
+        assert_eq!(st, StatusCode::OK);
+    }
+    let (_, due) = c.get("/api/review?lang=en").await;
+    assert!(due.as_array().unwrap().is_empty());
+
+    // Records export for the private repo.
+    let (st, rec) = c.post("/api/records/export", json!({})).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(rec["progress"].as_u64().unwrap() >= 6);
+    assert!(std::fs::read_to_string(ws_path.join("records/mistakes.csv")).unwrap().contains("New factories"));
+
+    // Google (mock server with the real REST shapes).
+    let (st, e) = c.post("/api/google/weekly-report", json!({})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "no address yet: {e}");
+    let (st, _) = c.post_text("/api/status", "").await;
+    assert_eq!(st, StatusCode::METHOD_NOT_ALLOWED);
+    let r = c.http.put(format!("{}/api/workspace", c.base)).json(&json!({"owner": "Ellrin", "report_email": "me@example.com"})).send().await.unwrap();
+    assert!(r.status().is_success());
+    let (st, rep) = c.post("/api/google/weekly-report", json!({})).await;
+    assert_eq!(st, StatusCode::OK, "{rep}");
+    assert!(rep["email"]["body"].as_str().unwrap().contains("Ellrin"));
+    assert_eq!(mail.lock().unwrap().len(), 1);
+    let (st, sched) = c.post("/api/google/schedule-reviews", json!({"days": 7, "at_utc": "12:00"})).await;
+    assert_eq!(st, StatusCode::OK, "{sched}");
+    assert!(!sched["created"].as_array().unwrap().is_empty());
+    let (st, book) = c.post("/api/google/book-lesson", json!({"start": "2026-11-10T12:00:00Z", "minutes": 30, "topic": "新聞討論", "lang": "ja"})).await;
+    assert_eq!(st, StatusCode::OK, "{book}");
+    assert!(book["email_id"].is_string(), "confirmation mail sent");
+    assert_eq!(mail.lock().unwrap().len(), 2);
+    assert!(events.lock().unwrap().iter().any(|e| e["summary"] == "日文課：新聞討論"));
+
+    // Fetching a disallowed URL directly is refused too.
+    let (st, _) = c.post("/api/articles", json!({"url": format!("{site}/private/secret.html"), "lang": "en"})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    // Restart: same app folder, the database persisted.
+    let c2 = start(settings(app_dir.path(), &claude, &google)).await;
+    let (_, s2) = c2.get("/api/status").await;
+    assert_eq!(s2["workspace"], json!(ws_path.display().to_string()));
+    assert_eq!(s2["stats"]["en"]["lessons"], 1);
+    assert_eq!(s2["stats"]["en"]["open_mistakes"], 1);
+
+    // A second machine: fresh app folder, same (synced) workspace. Lessons
+    // come back from the Markdown files, progress and mistakes from records/.
+    let other = tempfile::tempdir().unwrap();
+    let mut s3 = settings(other.path(), &claude, &google);
+    s3.workspace = Some(ws_path.clone());
+    let c3 = start(s3).await;
+    let (_, s3) = c3.get("/api/status").await;
+    assert_eq!(s3["stats"]["en"]["lessons"], 1, "{s3}");
+    assert_eq!(s3["stats"]["ja"]["lessons"], 1);
+    assert_eq!(s3["stats"]["en"]["open_mistakes"], 1);
+    let (_, due3) = c3.get("/api/review?lang=en").await;
+    assert!(due3.as_array().unwrap().is_empty(), "review schedule restored: {due3}");
+}
+
+#[tokio::test]
+async fn engine_errors_are_reported() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let calls = Arc::new(Mutex::new(vec![]));
+    let claude = serve(mock_claude(calls)).await;
+    let mut s = settings(app_dir.path(), &claude, "http://127.0.0.1:9");
+    s.google.mode = GoogleMode::Mock;
+    s.claude_api_key = Some("sk-ant-wrong".into());
+    let c = start(s).await;
+    let (st, e) = c.post("/api/engine/test", json!({})).await;
+    assert_eq!(st, StatusCode::BAD_GATEWAY);
+    assert!(e["error"].as_str().unwrap().contains("401"), "{e}");
+
+    // Mock Google mode keeps a simulated outbox.
+    let r = c.http.put(format!("{}/api/workspace", c.base)).json(&json!({"report_email": "me@example.com"})).send().await.unwrap();
+    assert!(r.status().is_success());
+    let (st, _) = c.post("/api/google/weekly-report", json!({})).await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, out) = c.get("/api/google/outbox").await;
+    assert_eq!(out["mail"].as_array().unwrap().len(), 1);
+    let (st, e) = c.post("/api/settings/claude", json!({"effort": "turbo"})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{e}");
+}
+
+#[tokio::test]
+async fn serves_the_web_ui() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let c = start(Settings::for_tests(Paths::from_repo(), app_dir.path().to_path_buf())).await;
+    let html = c.http.get(format!("{}/", c.base)).send().await.unwrap().text().await.unwrap();
+    assert!(html.contains("<title>JELearner</title>"));
+    let (st, m) = c.get("/api/models").await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(m["plan_mac32"]["fits"], true);
+}
