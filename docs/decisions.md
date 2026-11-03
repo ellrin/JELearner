@@ -10,9 +10,9 @@
 
 ## 2. Provider trait：現在 Claude，之後 llama-server
 
-- **決定**：`jl_core::provider::LlmProvider`（`complete(CompletionRequest) -> String`），請求可附 JSON Schema。實作：`ClaudeProvider`、`LlamaServerProvider`、`MockProvider`。
+- **決定**：`jl_core::provider::LlmProvider`（`complete(CompletionRequest) -> String`），請求可附 JSON Schema。實作：`ClaudeProvider`（API key）、`ClaudeCodeProvider`（Claude 訂閱，見第 11 節）、`LlamaServerProvider`、`MockProvider`。
 - **原因**：Mac 到貨前沒有本機 GPU；上層（教材生成、之後的對話與糾錯）不需要知道引擎。
-- **現狀**：`LlamaServerProvider` 只以模擬伺服器測試，**尚未實機測試**。
+- **現狀**：`LlamaServerProvider` 只以模擬伺服器測試、`ClaudeCodeProvider` 只以假的 `claude` 執行檔測試，**都尚未實機測試**。
 
 ## 3. 雲端模型：名稱放設定檔
 
@@ -67,3 +67,13 @@
 ## 10. Rust 技術棧
 
 tokio、axum 0.8、reqwest（rustls）、sqlx 0.8（SQLite，執行期查詢，不需要 `DATABASE_URL`）、serde、feed-rs、scraper、minijinja。Agent 框架（rig-core）目前不需要：第一版只有單次呼叫；之後做對話與工具呼叫時再評估。
+
+## 11. Claude 的兩種連線方式：訂閱與 API key（比照 PaperComposer）
+
+- **決定**：
+  - **訂閱**：`ClaudeCodeProvider` 執行使用者自己安裝、自己登入的官方 Claude Code（`claude -p --output-format json --safe-mode --no-session-persistence --tools ""`，加上 `--model`、`--effort`、`--system-prompt`、`--json-schema`），提示詞走 stdin，每次在空的暫存資料夾執行；移除 `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL` 與雲端供應商變數，確保計入訂閱。登入用 `claude auth login --claudeai`，在 Anthropic 的頁面完成；狀態用 `claude auth status --json` 判斷（`authMethod` 為 `claude.ai`／`oauth_token` 才算訂閱）。
+  - **API key**：`ClaudeProvider`（第 3 節）。
+  - **選擇**：`[engine] kind`，預設 `auto`：訂閱已登入就用訂閱，否則用 API key。兩條路都能單獨測試連線。
+- **原因**：作者自己用訂閱額度，不必另外付 API 費用；API key 留給沒有訂閱、或想避免規定疑慮的使用者。
+- **界線**：App 不接觸、不保存、不轉送任何 Claude 帳號憑證或 token，也不提供自己的 claude.ai 登入頁；不代付、不轉售用量；不修改 Claude Code。README 說明 Anthropic 的相關規定（訂閱以個人一般使用為前提、第三方不得代替使用者透過訂閱送出請求），由使用者自行判斷。規定若改變，拿掉訂閱模式、只留 API key 即可，上層不受影響。
+- **測試**：`claude_code::fake` 產生假的 `claude` 執行檔（模擬 `--version`、`auth status`、`auth login`、`-p`），檢查參數、stdin、空資料夾、環境變數移除與登入流程。測試設定一律把 CLI 指向不存在的路徑，絕不呼叫真的 Claude Code。**尚未用真實帳號從 App 測試。**

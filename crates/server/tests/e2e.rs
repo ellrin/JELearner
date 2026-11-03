@@ -379,3 +379,82 @@ async fn serves_the_web_ui() {
     assert_eq!(st, StatusCode::OK);
     assert_eq!(m["plan_mac32"]["fits"], true);
 }
+
+/// The Claude subscription path, with a fake `claude` CLI: lessons without an
+/// API key, `auto` preferring the subscription, switching, and sign-in.
+#[cfg(unix)]
+#[tokio::test]
+async fn subscription_engine_through_claude_code() {
+    let site_base = Arc::new(Mutex::new(String::new()));
+    let site = serve(news_site(site_base.clone())).await;
+    *site_base.lock().unwrap() = site.clone();
+    let claude_calls = Arc::new(Mutex::new(vec![]));
+    let claude_api = serve(mock_claude(claude_calls.clone())).await;
+
+    let cli_dir = tempfile::tempdir().unwrap();
+    let cli = jl_core::claude_code::fake::write(cli_dir.path());
+    std::fs::write(cli_dir.path().join("reply.json"), lesson_json().to_string()).unwrap();
+    std::fs::write(cli_dir.path().join("logged-out"), "").unwrap();
+
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let mut s = Settings::for_tests(Paths::from_repo(), app_dir.path().to_path_buf());
+    s.claude_bin = Some(cli.clone());
+    s.claude.base_url = claude_api.clone();
+    s.workspace = Some(ws_dir.path().to_path_buf());
+    let c = start(s).await;
+    let (st, _) = c.post("/api/setup/workspace", json!({"path": ws_dir.path(), "init": true})).await;
+    assert_eq!(st, StatusCode::OK);
+
+    // Installed but signed out, no key: nothing to generate with.
+    let (_, cl) = c.get("/api/claude?fresh=true").await;
+    assert_eq!(cl["subscription"]["installed"], true);
+    assert_eq!(cl["subscription"]["ready"], false);
+    assert_eq!(cl["engine"], "auto");
+    assert!(cl["active_error"].as_str().unwrap().contains("登入"), "{cl}");
+
+    // Sign in through Claude Code (the fake completes it at once).
+    let (st, _) = c.post("/api/claude-code/login", json!({})).await;
+    assert_eq!(st, StatusCode::OK);
+    let mut ready = false;
+    for _ in 0..50 {
+        let (_, cl) = c.get("/api/claude?fresh=true").await;
+        if cl["subscription"]["ready"] == true {
+            ready = true;
+            assert_eq!(cl["active"], "subscription");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(ready, "login detected");
+    let (_, status) = c.get("/api/status").await;
+    assert_eq!(status["engine_label"], "Claude 訂閱");
+
+    // A lesson from pasted text, through the subscription.
+    let (st, l) = c.post("/api/lessons", json!({"lang": "en", "title": "Chips", "text": "Several chipmakers announced new factories."})).await;
+    assert_eq!(st, StatusCode::OK, "{l}");
+    assert_eq!(l["engine"], "claude-subscription:claude-opus-5-5");
+    let args = std::fs::read_to_string(cli_dir.path().join("last-args")).unwrap();
+    assert!(args.contains("--json-schema") && args.contains("--safe-mode"), "{args}");
+    assert!(std::fs::read_to_string(cli_dir.path().join("last-stdin")).unwrap().contains("Several chipmakers"));
+    assert!(claude_calls.lock().unwrap().is_empty(), "the API was not used");
+
+    // Add an API key: auto still prefers the subscription; switch to API explicitly.
+    let (st, _) = c.post("/api/settings/claude", json!({"key": "sk-ant-test-key-0000"})).await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, cl) = c.get("/api/claude").await;
+    assert_eq!(cl["active"], "subscription");
+    let (st, _) = c.post("/api/settings/engine", json!({"kind": "api"})).await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, t) = c.post("/api/engine/test", json!({})).await;
+    assert_eq!(st, StatusCode::OK, "{t}");
+    assert_eq!(t["via"], "Claude API");
+    assert_eq!(claude_calls.lock().unwrap().len(), 1);
+    // Each path can be tested on its own regardless of the choice.
+    let (st, t) = c.post("/api/engine/test", json!({"engine": "subscription"})).await;
+    assert_eq!(st, StatusCode::OK, "{t}");
+    assert_eq!(t["reply"], "OK");
+    assert!(std::fs::read_to_string(app_dir.path().join("config.toml")).unwrap().contains("kind = \"api\""));
+    let (st, _) = c.post("/api/settings/engine", json!({"kind": "turbo"})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}

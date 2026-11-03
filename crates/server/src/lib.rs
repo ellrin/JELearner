@@ -22,6 +22,7 @@ use jl_core::crawler::Fetcher;
 use jl_core::db::Db;
 use jl_core::google::{Calendar, GmailApi, GoogleCalendarApi, Mailer, MemoryCalendar, MemoryMailer, StaticToken};
 use jl_core::import::{self, ImportReport};
+use jl_core::claude_code::{self, ClaudeCodeProvider};
 use jl_core::provider::{ClaudeProvider, LlamaServerProvider, LlmProvider};
 use jl_core::workspace::Workspace;
 pub use settings::{EngineKind, GoogleMode, Paths, Settings};
@@ -52,6 +53,9 @@ pub struct AppState {
     /// Tests may inject a provider; otherwise one is built per request from
     /// the current settings.
     pub provider_override: Option<Arc<dyn LlmProvider>>,
+    /// Claude Code CLI status (installed / signed in), refreshed at most once
+    /// a minute.
+    pub cc: claude_code::Cache,
 }
 
 pub type Shared = Arc<AppState>;
@@ -112,20 +116,63 @@ pub async fn load_workspace(settings: &Settings, root: Option<PathBuf>, init: bo
     Ok(Loaded { ws, db, demo, db_path: path, import: rep })
 }
 
+/// The engine a request will actually use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Resolved {
+    Subscription,
+    Api,
+    LlamaServer,
+}
+
+impl Resolved {
+    pub fn label(self) -> &'static str {
+        match self {
+            Resolved::Subscription => "Claude 訂閱",
+            Resolved::Api => "Claude API",
+            Resolved::LlamaServer => "本機模型",
+        }
+    }
+}
+
+const NO_CLAUDE: &str = "Claude 還沒連上：到「設定 → Claude」用瀏覽器登入你的 Claude 帳號（訂閱），或貼上 API key";
+
+/// Pick the engine from the settings: `auto` prefers the subscription when
+/// Claude Code is signed in, then an API key.
+pub async fn resolve_engine(s: &Shared, fresh: bool) -> Result<Resolved, String> {
+    let (kind, bin, has_key) = {
+        let st = s.settings.read().await;
+        let has_key = secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref()).is_some();
+        (st.engine, st.claude_bin.clone(), has_key)
+    };
+    let sub_ready = || async { s.cc.get(bin.as_deref(), fresh).await.ready };
+    match kind {
+        EngineKind::LlamaServer => Ok(Resolved::LlamaServer),
+        EngineKind::Api if has_key => Ok(Resolved::Api),
+        EngineKind::Api => Err("Claude API 尚未設定 key：請到「設定 → Claude」貼上，或設定環境變數 ANTHROPIC_API_KEY".into()),
+        EngineKind::Subscription if sub_ready().await => Ok(Resolved::Subscription),
+        EngineKind::Subscription => Err("Claude Code 沒有安裝或還沒登入：請到「設定 → Claude」用瀏覽器登入".into()),
+        EngineKind::Auto if sub_ready().await => Ok(Resolved::Subscription),
+        EngineKind::Auto if has_key => Ok(Resolved::Api),
+        EngineKind::Auto => Err(NO_CLAUDE.into()),
+    }
+}
+
 /// The engine for this request, from the current settings.
 pub async fn provider(s: &Shared) -> Result<Arc<dyn LlmProvider>, ApiError> {
     if let Some(p) = &s.provider_override {
         return Ok(p.clone());
     }
+    let which = resolve_engine(s, false).await.map_err(unavailable)?;
     let st = s.settings.read().await;
-    match st.engine {
-        EngineKind::LlamaServer => Ok(Arc::new(LlamaServerProvider::new(st.llama.clone()))),
-        EngineKind::Claude => {
-            let (key, _) = secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref())
-                .ok_or_else(|| unavailable("Claude 尚未設定 API key：請到「設定 → Claude」貼上，或設定環境變數 ANTHROPIC_API_KEY"))?;
-            Ok(Arc::new(ClaudeProvider::new(st.claude.clone(), key)))
+    Ok(match which {
+        Resolved::LlamaServer => Arc::new(LlamaServerProvider::new(st.llama.clone())),
+        Resolved::Subscription => Arc::new(ClaudeCodeProvider::new(st.claude_bin.clone(), st.claude.model.clone(), st.claude.effort.clone())),
+        Resolved::Api => {
+            let (key, _) = secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref()).ok_or_else(|| unavailable(NO_CLAUDE))?;
+            Arc::new(ClaudeProvider::new(st.claude.clone(), key))
         }
-    }
+    })
 }
 
 pub struct Options {
@@ -165,6 +212,7 @@ pub async fn build_state(settings: Settings, opts: Options) -> Shared {
         mock_mail,
         mock_calendar,
         provider_override: opts.provider,
+        cc: Default::default(),
     })
 }
 

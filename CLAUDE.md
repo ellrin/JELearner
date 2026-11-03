@@ -17,7 +17,8 @@ scripts/dev.sh --mock                        # both of the above together
 ## Layout
 
 - `crates/core` (`jl-core`): workspace, SQLite (`db.rs`), import, robots/crawler/news,
-  `provider.rs` (LlmProvider trait: Claude, llama-server, mock), `lesson.rs`,
+  `provider.rs` (LlmProvider trait: Claude API, llama-server, mock), `claude_code.rs`
+  (Claude subscription through Claude Code), `lesson.rs`,
   `google.rs` (Mailer / Calendar traits: REST + in-memory), `report.rs`, `catalog.rs`.
 - `crates/server` (`jl-server`): axum on 127.0.0.1, `api.rs` handlers, `settings.rs`,
   `secrets.rs`, `git.rs`. Handlers are plain async fns over `Shared` so they can become
@@ -33,8 +34,14 @@ scripts/dev.sh --mock                        # both of the above together
 
 ## Decisions (see docs/decisions.md for the reasons)
 
-- Inference: llama.cpp `llama-server` over HTTP (not candle). Claude API until the Mac
+- Inference: llama.cpp `llama-server` over HTTP (not candle). Claude until the Mac
   arrives. Everything goes through `LlmProvider`; upper layers never name an engine.
+- Claude has two ways in, like PaperComposer: the user's own **subscription** through the
+  official Claude Code CLI (`claude_code.rs`: `claude -p --safe-mode … --json-schema`,
+  empty temp folder, billing env vars stripped, sign-in via `claude auth login --claudeai`)
+  and an **API key** (`ClaudeProvider`). `[engine] kind = auto` prefers the subscription.
+  Never touch, store or forward Claude account credentials; never call the real CLI in
+  tests (test settings point `claude_bin` at a nonexistent path; use `claude_code::fake`).
 - Model names live in `models/catalog.json` / `config.toml`, never in code (tests excepted).
   Current Claude API: `anthropic-version: 2026-10-21`, no `temperature`/`top_p`,
   structured output via `output_config.format`, effort via `output_config.effort`,

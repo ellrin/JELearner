@@ -18,14 +18,15 @@
 │  import     CSV／每週 JSON、records 匯出還原  │
 │  robots ─ crawler ─ news   新聞爬蟲            │
 │  lesson     文章 → JSON 教材 → Markdown        │
-│  provider   LlmProvider：Claude／llama-server  │
+│  provider   LlmProvider：Claude API／llama-server│
+│  claude_code Claude 訂閱（官方 Claude Code CLI）│
 │  google     Mailer／Calendar：REST／記憶體     │
 │  report     週報、確認信、複習排程             │
 │  catalog    模型清單與記憶體估算               │
 └──┬────────────┬──────────────┬───────────────┘
    │            │              │
- 新聞網站     Claude API     Gmail／Calendar
-（robots.txt）（之後 llama-server）（目前模擬）
+ 新聞網站   Claude（訂閱經 Claude Code，或 API key）  Gmail／Calendar
+（robots.txt）（之後 llama-server）                  （目前模擬）
 ```
 
 ## 資料放在哪裡

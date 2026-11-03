@@ -1,7 +1,7 @@
 //! JSON API. Every handler is a plain async function over [`Shared`], so the
 //! same code can later sit behind Tauri commands.
 
-use crate::{bad, fail, git, load_workspace, provider, secrets, settings, unavailable, ApiError, Loaded, Shared};
+use crate::{bad, fail, git, load_workspace, provider, resolve_engine, secrets, settings, unavailable, ApiError, Loaded, Resolved, Shared};
 use axum::extract::{Path as AxPath, Query, State};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -55,6 +55,8 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .route("/api/records/export", post(export_records))
         .route("/api/claude", get(claude_status))
         .route("/api/settings/claude", post(claude_settings))
+        .route("/api/settings/engine", post(set_engine))
+        .route("/api/claude-code/login", post(claude_code_login))
         .route("/api/engine/test", post(engine_test))
         .route("/api/models", get(models))
         .route("/api/google", get(google_status))
@@ -180,6 +182,9 @@ struct Status {
     report_email: Option<String>,
     engine: String,
     engine_ready: bool,
+    /// 「Claude 訂閱」「Claude API」「本機模型」
+    engine_label: String,
+    engine_error: Option<String>,
     google: &'static str,
     import: Option<ImportReport>,
     stats: Value,
@@ -187,20 +192,19 @@ struct Status {
 }
 
 async fn status(State(s): State<Shared>) -> R<Status> {
-    let st = s.settings.read().await;
-    let engine_ready = s.provider_override.is_some()
-        || match st.engine {
-            settings::EngineKind::Claude => secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref()).is_some(),
-            settings::EngineKind::LlamaServer => true,
-        };
-    let engine = match &s.provider_override {
-        Some(p) => p.id(),
-        None => match st.engine {
-            settings::EngineKind::Claude => format!("claude:{}", st.claude.model),
-            settings::EngineKind::LlamaServer => format!("llama-server:{}", st.llama.model),
-        },
+    let (engine, engine_ready, engine_label, engine_error) = match &s.provider_override {
+        Some(p) => (p.id(), true, "測試".to_string(), None),
+        None => {
+            let st = s.settings.read().await;
+            let (model, llama) = (st.claude.model.clone(), st.llama.model.clone());
+            drop(st);
+            match resolve_engine(&s, false).await {
+                Ok(r @ Resolved::LlamaServer) => (format!("llama-server:{llama}"), true, r.label().to_string(), None),
+                Ok(r) => (model, true, r.label().to_string(), None),
+                Err(e) => (model, false, "未連線".to_string(), Some(e)),
+            }
+        }
     };
-    drop(st);
     let level_options = json!(Lang::ALL.iter().map(|l| (l.code(), l.levels())).collect::<std::collections::BTreeMap<_, _>>());
     let error = s.load_error.read().await.clone();
     let guard = s.loaded.read().await;
@@ -217,6 +221,8 @@ async fn status(State(s): State<Shared>) -> R<Status> {
             report_email: None,
             engine,
             engine_ready,
+            engine_label,
+            engine_error,
             google: s.mailer.mode(),
             import: None,
             stats: json!({}),
@@ -242,6 +248,8 @@ async fn status(State(s): State<Shared>) -> R<Status> {
         report_email: l.ws.meta.report_email.clone(),
         engine,
         engine_ready,
+        engine_label,
+        engine_error,
         google: s.mailer.mode(),
         import: Some(l.import.clone()),
         stats: Value::Object(stats),
@@ -835,18 +843,65 @@ async fn export_records(State(s): State<Shared>) -> R<Value> {
 
 // ── engines & models ────────────────────────────────────
 
-async fn claude_status(State(s): State<Shared>) -> R<Value> {
-    let st = s.settings.read().await;
-    let k = secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref());
+#[derive(Deserialize, Default)]
+struct FreshQuery {
+    fresh: Option<bool>,
+}
+
+async fn claude_status(State(s): State<Shared>, Query(q): Query<FreshQuery>) -> R<Value> {
+    let (k, model, effort, models, engine, bin) = {
+        let st = s.settings.read().await;
+        (
+            secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref()),
+            st.claude.model.clone(),
+            st.claude.effort.clone(),
+            st.catalog.cloud.models.clone(),
+            st.engine,
+            st.claude_bin.clone(),
+        )
+    };
+    let sub = s.cc.get(bin.as_deref(), q.fresh.unwrap_or(false)).await;
+    let active = resolve_engine(&s, false).await;
     Ok(Json(json!({
-        "configured": k.is_some(),
-        "source": k.as_ref().map(|(_, src)| *src),
-        "masked": k.as_ref().map(|(k, _)| secrets::mask(k)),
-        "model": st.claude.model,
-        "effort": st.claude.effort,
-        "models": st.catalog.cloud.models,
-        "engine": match st.engine { settings::EngineKind::Claude => "claude", settings::EngineKind::LlamaServer => "llama-server" },
+        "engine": engine.as_str(),
+        "active": active.as_ref().ok(),
+        "active_label": active.as_ref().map(|r| r.label()).ok(),
+        "active_error": active.err(),
+        "api": {
+            "configured": k.is_some(),
+            "source": k.as_ref().map(|(_, src)| *src),
+            "masked": k.as_ref().map(|(k, _)| secrets::mask(k)),
+        },
+        "subscription": sub,
+        "install": jl_core::claude_code::INSTALL_HINT,
+        "model": model,
+        "effort": effort,
+        "models": models,
     })))
+}
+
+#[derive(Deserialize)]
+struct EngineBody {
+    kind: String,
+}
+
+/// Choose the engine: auto, subscription, api or llama-server.
+async fn set_engine(State(s): State<Shared>, Json(b): Json<EngineBody>) -> R<Value> {
+    let kind = settings::EngineKind::parse(&b.kind).ok_or_else(|| bad("engine 只能是 auto、subscription、api、llama-server"))?;
+    let mut st = s.settings.write().await;
+    if let Some(dir) = &st.app_dir {
+        settings::write_config_value(dir, Some("engine"), "kind", toml::Value::String(kind.as_str().into())).map_err(fail)?;
+    }
+    st.engine = kind;
+    Ok(Json(json!({ "engine": kind.as_str() })))
+}
+
+/// `claude auth login --claudeai`: the browser opens on Anthropic's sign-in
+/// page; the UI polls `/api/claude?fresh=true` until it lands.
+async fn claude_code_login(State(s): State<Shared>) -> R<Value> {
+    let bin = s.settings.read().await.claude_bin.clone();
+    jl_core::claude_code::start_login(bin.as_deref()).map_err(bad)?;
+    Ok(Json(json!({ "started": true })))
 }
 
 #[derive(Deserialize)]
@@ -882,8 +937,34 @@ async fn claude_settings(State(s): State<Shared>, Json(b): Json<ClaudeSettingsBo
     Ok(Json(json!({ "ok": true, "stored_in": saved })))
 }
 
-async fn engine_test(State(s): State<Shared>) -> R<Value> {
-    let p = provider(&s).await?;
+#[derive(Deserialize, Default)]
+struct TestBody {
+    /// Test this path instead of the current choice: subscription | api.
+    engine: Option<String>,
+}
+
+async fn engine_test(State(s): State<Shared>, body: Option<Json<TestBody>>) -> R<Value> {
+    let want = body.and_then(|b| b.0.engine);
+    let (p, label): (std::sync::Arc<dyn jl_core::provider::LlmProvider>, &str) = match want.as_deref() {
+        None | Some("") => {
+            let label = resolve_engine(&s, true).await.map(|r| r.label()).unwrap_or("");
+            (provider(&s).await?, label)
+        }
+        Some(w) => {
+            let st = s.settings.read().await;
+            match w {
+                "subscription" => (
+                    std::sync::Arc::new(jl_core::claude_code::ClaudeCodeProvider::new(st.claude_bin.clone(), st.claude.model.clone(), st.claude.effort.clone())),
+                    Resolved::Subscription.label(),
+                ),
+                "api" => {
+                    let (key, _) = secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref()).ok_or_else(|| unavailable("尚未設定 API key"))?;
+                    (std::sync::Arc::new(jl_core::provider::ClaudeProvider::new(st.claude.clone(), key)), Resolved::Api.label())
+                }
+                _ => return Err(bad("engine 只能是 subscription 或 api")),
+            }
+        }
+    };
     let req = jl_core::provider::CompletionRequest {
         system: "Reply with exactly: OK".into(),
         user: "Say OK.".into(),
@@ -892,7 +973,7 @@ async fn engine_test(State(s): State<Shared>) -> R<Value> {
     };
     let t0 = std::time::Instant::now();
     let reply = p.complete(&req).await.map_err(|e| ApiError(axum::http::StatusCode::BAD_GATEWAY, e.to_string()))?;
-    Ok(Json(json!({ "engine": p.id(), "reply": reply.chars().take(80).collect::<String>(), "ms": t0.elapsed().as_millis() })))
+    Ok(Json(json!({ "engine": p.id(), "via": label, "reply": reply.chars().take(80).collect::<String>(), "ms": t0.elapsed().as_millis() })))
 }
 
 async fn models(State(s): State<Shared>) -> R<Value> {
@@ -1019,6 +1100,7 @@ async fn open_page(AxPath(page): AxPath<String>) -> R<Value> {
     let url = match page.as_str() {
         "anthropic-keys" => "https://console.anthropic.com/settings/keys",
         "github-new-repo" => "https://github.com/new?visibility=private",
+        "claude-code-setup" => jl_core::claude_code::SETUP_PAGE,
         _ => return Err(bad("unknown page")),
     };
     #[cfg(target_os = "macos")]

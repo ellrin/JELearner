@@ -161,17 +161,48 @@
 
         <section class="step" data-step="2" hidden>
           <div class="form">
+            <label><span>使用</span><select id="setEngine">
+              <option value="auto">自動：有登入就用訂閱，否則用 API key</option>
+              <option value="subscription">Claude 訂閱（Claude Code）</option>
+              <option value="api">Claude API key</option>
+              <option value="llama-server">本機模型（Mac 到貨後）</option>
+            </select></label>
+            <div class="now" id="setActive"></div>
+          </div>
+          <div class="seg-row">
+            <div class="seg wide" id="setVia">
+              <button data-v="subscription">登入帳號（訂閱）</button>
+              <button data-v="api">API key</button>
+            </div>
+            <button class="help" data-tip="登入帳號：在這台電腦執行官方的 Claude Code，用你自己的 Claude Pro／Max 帳號登入，用量算在你的訂閱額度內；登入在 Anthropic 的頁面完成，JELearner 不會接觸你的帳號憑證。API key：按用量另外計費，key 只存在這台電腦。兩種都設定好的話可以隨時切換。">?</button>
+          </div>
+
+          <div class="via" data-via="subscription">
+            <ul class="checks" id="ccChecks"></ul>
+            <div class="cmd" id="ccInstall" hidden><code id="ccCmd"></code><button class="ico" id="ccCopy" data-icon="copy" aria-label="複製指令"></button><button class="ico" id="ccSetup" data-icon="external" aria-label="Claude Code 安裝說明"></button></div>
+            <div class="actions-row">
+              <button class="ghost" id="ccRecheck">重新檢查</button>
+              <button class="primary small" id="ccLogin">用瀏覽器登入</button>
+            </div>
+            <div class="note">每次呼叫都在空的暫存資料夾執行，關閉所有工具、不載入任何外掛設定，只回答提示詞，不會讀寫你的檔案。</div>
+          </div>
+
+          <div class="via form" data-via="api" hidden>
             <div class="kv" id="setKeyShow"><span>API key</span><code class="masked" id="setKeyMasked"></code><span class="inline">
               <button class="ico" id="setKeyEdit" data-icon="pen" aria-label="更換 key"></button>
               <button class="ico" id="setKeyRemove" data-icon="trash" aria-label="移除 key"></button></span></div>
             <label id="setKeyEnter"><span>API key</span><input type="password" id="setKey" placeholder="sk-ant-…" autocomplete="off"><span class="inline">
               <button class="ico" id="setGetKey" data-icon="external" aria-label="到 Anthropic Console 建立 key"></button></span></label>
             <button class="primary small" id="setKeySave">儲存 key</button>
+            <div class="note">key 只存在系統金鑰圈（或設定資料夾的 credentials.toml），不會進任何 repo。</div>
+          </div>
+
+          <div class="form">
             <label><span>模型</span><select id="setModel"></select></label>
             <label><span>effort</span><select id="setEffort">
               <option value="">模型預設</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option>
             </select></label>
-            <div class="note">key 只存在系統金鑰圈（或設定資料夾的 credentials.toml），不會進任何 repo。模型清單來自 models/catalog.json。</div>
+            <div class="note">兩種連線方式用同一個模型設定；清單來自 models/catalog.json。</div>
           </div>
           <div class="actions-row"><button class="ghost" id="setTest">測試連線</button><span class="note" id="setTestOut"></span></div>
         </section>

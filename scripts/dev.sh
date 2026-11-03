@@ -21,7 +21,7 @@ if [ "$1" = "--mock" ]; then
   MOCK=$!
   trap 'kill $MOCK' EXIT INT TERM
   sleep 1
-  JELEARNER_CLAUDE_BASE_URL=http://127.0.0.1:7980 ANTHROPIC_API_KEY=sk-ant-mock JELEARNER_NO_KEYCHAIN=1 \
+  JELEARNER_ENGINE=api JELEARNER_CLAUDE_BASE_URL=http://127.0.0.1:7980 ANTHROPIC_API_KEY=sk-ant-mock JELEARNER_NO_KEYCHAIN=1 \
     cargo run -p jl-server
   exit
 fi

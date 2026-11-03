@@ -12,11 +12,12 @@
 - [x] 爬蟲：RSS／Atom、文章內文擷取、robots.txt（RFC 9309）、每站間隔；來源 BBC Technology、NHK NEWS WEB
 - [x] 教材：JSON Schema 結構化輸出 → Markdown，提示詞與版面模板放在 `prompts/`，可被工作區覆蓋
 - [x] Claude provider（key：環境變數／金鑰圈／設定資料夾）；llama-server provider（模擬測試）
+- [x] Claude 訂閱模式（比照 PaperComposer）：透過官方 Claude Code CLI、瀏覽器登入與自動偵測、引擎自動／手動切換（以假的 CLI 測試，尚未用真實帳號測試）
 - [x] Gmail／Calendar trait、REST 實作（模擬伺服器測試）、記憶體實作與模擬寄件匣；週報、排複習、排課
 - [x] 本機網頁：新聞或網址或貼文字 → 教材 → 存入 SQLite → 測驗 → 生字、文法、錯題、素材
 - [x] 測試：單元測試＋模擬伺服器的離線端到端測試
 
-**這個雲端開發環境連不到外部新聞網站與 Anthropic API**，所以真實新聞來源與真實 Claude 呼叫尚未實測；請在自己的電腦上執行一次「抓最新新聞」與「設定 → Claude → 測試連線」確認。
+**這個雲端開發環境連不到外部新聞網站與 Anthropic API，也不能登入你的 Claude 帳號**，所以真實新聞來源、真實 Claude API 與訂閱模式尚未實測；請在自己的電腦上執行一次「抓最新新聞」與「設定 → Claude → 測試連線」（訂閱與 API key 各一次）確認。
 
 ## 第二階段：向量庫＋RAG
 

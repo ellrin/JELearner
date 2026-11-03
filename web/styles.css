@@ -387,3 +387,11 @@ details.fmt pre { font: 11.5px/1.55 var(--mono); background: var(--surface); pad
   .viewbar input[type=search] { width: 100%; }
 }
 .tabs button:focus-visible { outline-offset: -2px; }
+/* engine switch in the status bar; Claude Code install command */
+.statusbar .eng { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.statusbar .eng:hover { color: var(--text); }
+.now.warn { color: var(--warn); }
+.cmd { display: flex; gap: 4px; align-items: center; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r); padding: 4px 4px 4px 10px; }
+.cmd code { flex: 1; font: 12px var(--mono); color: var(--text); overflow-x: auto; white-space: nowrap; }
+.via { display: flex; flex-direction: column; gap: 10px; }
+.via[hidden] { display: none; }

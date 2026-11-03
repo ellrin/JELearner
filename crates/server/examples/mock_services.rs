@@ -135,7 +135,7 @@ async fn main() {
     let l = tokio::net::TcpListener::bind(("127.0.0.1", PORT)).await.expect("port 7980 free");
     println!("Mock services on {}", base());
     println!("Run the app against them:");
-    println!("  JELEARNER_CLAUDE_BASE_URL={} ANTHROPIC_API_KEY=sk-ant-mock JELEARNER_NO_KEYCHAIN=1 cargo run -p jl-server", base());
+    println!("  JELEARNER_ENGINE=api JELEARNER_CLAUDE_BASE_URL={} ANTHROPIC_API_KEY=sk-ant-mock JELEARNER_NO_KEYCHAIN=1 cargo run -p jl-server", base());
     println!("and put these feeds in your workspace's sources.toml:");
     println!("  {}/feeds/en.xml   {}/feeds/ja.xml", base(), base());
     axum::serve(l, app).await.unwrap();

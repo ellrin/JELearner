@@ -24,10 +24,39 @@ impl Paths {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Which engine generates lessons. Same choices as PaperComposer, plus the
+/// local model for the Mac.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineKind {
-    Claude,
+    /// Claude subscription when Claude Code is signed in, else the API key.
+    Auto,
+    /// The user's own Claude subscription through the Claude Code CLI.
+    Subscription,
+    /// Anthropic API key (usage billing).
+    Api,
+    /// llama-server on this machine (the Mac).
     LlamaServer,
+}
+
+impl EngineKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EngineKind::Auto => "auto",
+            EngineKind::Subscription => "subscription",
+            EngineKind::Api => "api",
+            EngineKind::LlamaServer => "llama-server",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<EngineKind> {
+        match s.trim() {
+            "auto" | "" => Some(EngineKind::Auto),
+            "subscription" | "claude-code" => Some(EngineKind::Subscription),
+            "api" | "claude" | "claude-api" => Some(EngineKind::Api),
+            "llama-server" | "llama" | "local" => Some(EngineKind::LlamaServer),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +90,9 @@ pub struct Settings {
     /// Set by tests; otherwise the key is looked up (env, keychain, file).
     pub claude_api_key: Option<String>,
     pub use_keychain: bool,
+    /// Path of the Claude Code CLI when it is not on the usual paths
+    /// (`JELEARNER_CLAUDE_BIN` or `[claude] bin`); tests point it at a fake.
+    pub claude_bin: Option<PathBuf>,
     pub llama: LlamaServerConfig,
     pub google: GoogleSettings,
     pub crawler_delay_ms: u64,
@@ -92,6 +124,7 @@ struct ClaudeSection {
     model: Option<String>,
     effort: Option<String>,
     fallbacks: Option<bool>,
+    bin: Option<PathBuf>,
 }
 #[derive(Deserialize, Default)]
 struct LlamaSection {
@@ -148,10 +181,7 @@ impl Settings {
         let app_dir = env("JELEARNER_HOME").map(PathBuf::from).or_else(|| dirs::config_dir().map(|d| d.join("JELearner")));
         let cfg = read_config(app_dir.as_deref());
         let catalog = Catalog::load(app_dir.as_ref().map(|d| d.join("models/catalog.json")).as_deref());
-        let engine = match env("JELEARNER_ENGINE").or(cfg.engine.kind).as_deref() {
-            Some("llama-server") | Some("llama") | Some("local") => EngineKind::LlamaServer,
-            _ => EngineKind::Claude,
-        };
+        let engine = env("JELEARNER_ENGINE").or(cfg.engine.kind).and_then(|k| EngineKind::parse(&k)).unwrap_or(EngineKind::Auto);
         let google_mode = match env("JELEARNER_GOOGLE_MODE").or(cfg.google.mode).as_deref() {
             Some("api") | Some("google") => GoogleMode::Api,
             _ => GoogleMode::Mock,
@@ -168,6 +198,7 @@ impl Settings {
             },
             claude_api_key: None,
             use_keychain: env("JELEARNER_NO_KEYCHAIN").is_none(),
+            claude_bin: env("JELEARNER_CLAUDE_BIN").map(PathBuf::from).or(cfg.claude.bin),
             llama: LlamaServerConfig {
                 url: env("JELEARNER_LLAMA_URL").or(cfg.llama.url).unwrap_or_else(|| "http://127.0.0.1:8080/v1".into()),
                 model: env("JELEARNER_LLAMA_MODEL").or(cfg.llama.model).unwrap_or_else(|| catalog.defaults.brain.clone()),
@@ -196,7 +227,7 @@ impl Settings {
             paths,
             app_dir: Some(app_dir),
             workspace,
-            engine: EngineKind::Claude,
+            engine: EngineKind::Auto,
             claude: ClaudeConfig {
                 base_url: "http://127.0.0.1:9".into(),
                 model: catalog.cloud.default.clone(),
@@ -205,6 +236,8 @@ impl Settings {
             },
             claude_api_key: None,
             use_keychain: false,
+            // Never the real CLI in tests; a test that wants one sets a fake.
+            claude_bin: Some(PathBuf::from("/nonexistent/claude")),
             llama: LlamaServerConfig { url: "http://127.0.0.1:9/v1".into(), model: catalog.defaults.brain.clone() },
             google: GoogleSettings {
                 mode: GoogleMode::Mock,

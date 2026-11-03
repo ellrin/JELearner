@@ -2,7 +2,7 @@
 
 本機運作的英文／日文學習秘書：自動抓英日新聞、整理成單字與文法教材、排複習、記錯題、寄週報、排行事曆。之後加上即時語音對話與數位人像，並包成 Mac app。
 
-> 開發初期（第一版：文字管線）。已完成：私人工作區、SQLite（生字／文法／複習進度／錯題本）、英日新聞爬蟲（遵守 robots.txt）、新聞 → Markdown 教材（模板可替換）、Claude provider、Gmail／Calendar 介面與模擬實作、本機網頁、離線端到端測試。
+> 開發初期（第一版：文字管線）。已完成：私人工作區、SQLite（生字／文法／複習進度／錯題本）、英日新聞爬蟲（遵守 robots.txt）、新聞 → Markdown 教材（模板可替換）、Claude 兩種連線方式（訂閱／API key）、Gmail／Calendar 介面與模擬實作、本機網頁、離線端到端測試。
 > 尚未完成：向量庫與 RAG、Google OAuth、本機模型（等 Mac）、語音、Tauri 打包、數位人像。見 [`docs/roadmap.md`](docs/roadmap.md)。
 
 ## 執行
@@ -59,7 +59,22 @@ JELearner-private/
 
 ## Claude
 
-在「設定 → Claude」貼上 API key：存在系統金鑰圈（macOS 鑰匙圈），沒有金鑰圈時才存在設定資料夾的 `credentials.toml`（僅本人可讀）；也可以用環境變數 `ANTHROPIC_API_KEY`。模型清單與預設值在 [`models/catalog.json`](models/catalog.json) 的 `cloud`，或 `config.toml` 的 `[claude] model`／`effort`，程式裡不寫死模型名稱。
+和 PaperComposer 一樣有兩種連線方式，在「設定 → Claude」選擇，隨時可以切換（狀態列會顯示目前用哪一種）：
+
+- **登入帳號（訂閱）**：透過 [Claude Code](https://code.claude.com/docs/en/setup) 用你自己的 Claude Pro／Max 帳號，用量算在你的訂閱額度內。App 會偵測是否安裝 Claude Code、顯示官方安裝指令，按「用瀏覽器登入」後自動偵測登入完成。每次呼叫都在空的暫存資料夾執行 `claude -p`，關閉所有工具、不載入任何外掛設定（`--safe-mode`），並移除 `ANTHROPIC_API_KEY` 等環境變數，以免改走 API 計費。
+- **API key**：按用量計費。key 存在系統金鑰圈（macOS 鑰匙圈），沒有金鑰圈時才存在設定資料夾的 `credentials.toml`（僅本人可讀）；也可以用環境變數 `ANTHROPIC_API_KEY`。
+
+「使用」預設為**自動**：Claude Code 已用訂閱帳號登入就用訂閱，否則用 API key；也可以固定其中一種（`config.toml` 的 `[engine] kind = "auto" | "subscription" | "api" | "llama-server"`）。兩種方式都有「測試連線」，會標明走的是訂閱還是 API。
+
+模型清單與預設值在 [`models/catalog.json`](models/catalog.json) 的 `cloud`，或 `config.toml` 的 `[claude] model`／`effort`，兩種連線方式共用，程式裡不寫死模型名稱。
+
+### 關於「登入帳號（訂閱）」模式
+
+這個模式在你的電腦上執行官方、未修改的 Claude Code，用你自己的 Claude 帳號登入。登入在 Anthropic 的頁面完成，JELearner 不會接觸、保存或轉送你的帳號憑證；請求不經過任何第三方伺服器，用量只計入你自己的訂閱額度。
+
+Anthropic 的[使用規定](https://code.claude.com/docs/en/legal-and-compliance)寫明，訂閱額度以個人的一般使用為前提，並且不允許第三方應用代替使用者透過訂閱方案送出請求。這個模式是作者為自己的使用情境所寫；是否使用請自行判斷。若想避免疑慮，請改用 API key 模式（依用量計費，這是 Anthropic 建議開發者使用的方式）。
+
+JELearner 是非營利的個人專案，不代付、不轉售任何 Claude 用量。
 
 ## Gmail 與 Google 日曆
 
@@ -80,7 +95,7 @@ cargo test
 ## 專案結構
 
 ```
-crates/core         工作區、SQLite、匯入、爬蟲、robots.txt、provider trait、教材生成、Google trait
+crates/core         工作區、SQLite、匯入、爬蟲、robots.txt、provider trait（Claude API、Claude 訂閱、llama-server）、教材生成、Google trait
 crates/server       本機伺服器（127.0.0.1），之後的 Tauri 版共用同一組 handler
 web/                介面（HTML / CSS / JS，不需要建置）
 prompts/            教材的提示詞與 Markdown 模板（可被工作區覆蓋）
@@ -113,8 +128,11 @@ scripts/            開發啟動與 Git hooks
 | GET | `/api/materials` | 每週素材 |
 | POST | `/api/import?kind=vocab\|grammar\|materials&name=&lang=`（本文為檔案內容） | 匯入並存進工作區 |
 | POST | `/api/records/export` | 寫出 records/progress.csv、mistakes.csv |
-| GET / POST | `/api/claude`、`/api/settings/claude` `{ key, model, effort }` | Claude 設定 |
-| POST | `/api/engine/test` | 測試目前的引擎 |
+| GET | `/api/claude?fresh=` | 兩種連線方式的狀態（Claude Code 是否安裝、登入）、目前使用的引擎 |
+| POST | `/api/settings/claude` `{ key, model, effort }` | 存入或移除 API key、選擇模型 |
+| POST | `/api/settings/engine` `{ kind }` | 選擇引擎：auto、subscription、api、llama-server |
+| POST | `/api/claude-code/login` | 啟動 `claude auth login --claudeai`（在瀏覽器登入） |
+| POST | `/api/engine/test` `{ engine? }` | 測試目前的引擎，或指定 subscription／api |
 | GET | `/api/models` | 模型清單與記憶體估算 |
 | GET | `/api/google`、`/api/google/outbox` | Google 狀態、模擬寄件匣 |
 | POST | `/api/google/weekly-report`、`/api/google/schedule-reviews`、`/api/google/book-lesson` | 週報、排複習、排課 |

@@ -154,7 +154,10 @@ async function refreshStatus() {
   const sb = $("#statusbar");
   sb.innerHTML = "";
   const dot = el("span", `dot ${s.engine_ready ? "ok" : "warn"}`);
-  const eng = el("span"); eng.append(dot, document.createTextNode(s.engine_ready ? s.engine : `${s.engine}（未設定 key）`));
+  const eng = el("button", "eng", null);
+  eng.append(dot, document.createTextNode(s.engine_ready ? `${s.engine_label}・${s.engine}` : "Claude 未連線"));
+  eng.title = s.engine_error ?? "切換引擎：設定 → Claude";
+  eng.onclick = () => openSettings(2);
   sb.append(eng, el("span", null, `Google：${s.google === "mock" ? "模擬" : s.google}`), el("span", "grow"));
   if (s.import?.warnings?.length) {
     const w = el("span", null, `匯入警告 ${s.import.warnings.length}`);
@@ -171,7 +174,7 @@ function greet() {
   const st = s.stats?.[state.lang] ?? {};
   const name = s.owner ? `${s.owner}，` : "";
   if (s.demo) return say(`${name}歡迎！目前用的是示範資料。到「設定 → 工作區」連接你的私人 repo（例如 JELearner-private），生字和錯題才會存到你自己的地方。`);
-  if (!s.engine_ready) return say(`${name}還沒設定 Claude API key，產生教材前請到「設定 → Claude」。複習和錯題本可以先用。`);
+  if (!s.engine_ready) return say(`${name}Claude 還沒連上。到「設定 → Claude」用瀏覽器登入你的 Claude 帳號（用訂閱額度），或貼上 API key。複習和錯題本可以先用。`);
   const parts = [];
   if (st.due) parts.push(`${st.due} 張${langLabel(state.lang)}卡片要複習`);
   if (st.open_mistakes) parts.push(`${st.open_mistakes} 題錯題還沒訂正`);
@@ -935,19 +938,70 @@ $("#setSaveMe").onclick = () => busy($("#setSaveMe"), async () => {
   } catch (e) { flash(e.message, true); }
 });
 
-async function loadClaudeStep() {
-  const c = await api("/api/claude");
-  const editing = !c.configured;
+let via = store.get("jl.via", null);
+function setVia(v) {
+  via = v;
+  store.set("jl.via", v);
+  segment($("#setVia"), v, setVia);
+  $$(".step[data-step='2'] .via").forEach((n) => (n.hidden = n.dataset.via !== v));
+}
+
+async function loadClaudeStep(fresh = false) {
+  const c = await api(`/api/claude${fresh ? "?fresh=true" : ""}`);
+  $("#setEngine").value = c.engine;
+  const act = $("#setActive");
+  act.className = `now ${c.active ? "" : "warn"}`;
+  act.textContent = c.active ? `目前使用：${c.active_label}・${c.model}` : c.active_error;
+  if (!via) via = c.subscription.ready || !c.api.configured ? "subscription" : "api";
+  setVia(via);
+
+  // Subscription: installed → signed in → billing the subscription.
+  const sub = c.subscription;
+  const ul = $("#ccChecks");
+  ul.innerHTML = "";
+  const line = (ok, text) => { const li = el("li"); li.append(el("span", ok === true ? "ok" : ok === false ? "bad" : "mid", ok === true ? "✓" : ok === false ? "✕" : "•"), el("span", null, text)); ul.append(li); };
+  line(sub.installed, sub.installed ? `已安裝 Claude Code${sub.version ? ` ${sub.version}` : ""}` : "尚未安裝 Claude Code");
+  if (sub.installed) {
+    line(sub.logged_in, sub.logged_in ? `已登入${sub.account ? `：${sub.account}` : ""}` : "尚未登入");
+    if (sub.logged_in) line(sub.ready ? true : null, sub.ready ? "使用 Claude 訂閱額度" : `登入方式是 ${sub.auth_method ?? "未知"}，不是 Claude 訂閱；請用「用瀏覽器登入」改用訂閱帳號`);
+  }
+  $("#ccInstall").hidden = sub.installed;
+  $("#ccCmd").textContent = c.install;
+  $("#ccLogin").hidden = !sub.installed || sub.ready;
+
+  // API key.
+  const editing = !c.api.configured;
   $("#setKeyShow").hidden = editing;
   $("#setKeyEnter").hidden = !editing;
   $("#setKeySave").hidden = !editing;
-  $("#setKeyMasked").textContent = c.configured ? `${c.masked}　（${{ env: "環境變數", keychain: "系統金鑰圈", file: "設定資料夾", settings: "設定" }[c.source] ?? c.source}）` : "";
+  $("#setKeyMasked").textContent = c.api.configured ? `${c.api.masked}　（${{ env: "環境變數", keychain: "系統金鑰圈", file: "設定資料夾", settings: "設定" }[c.api.source] ?? c.api.source}）` : "";
+
   const sel = $("#setModel");
   sel.innerHTML = "";
   for (const m of c.models) { const o = el("option", null, `${m.id}　${m.summary}`); o.value = m.id; if (m.id === c.model) o.selected = true; sel.append(o); }
   if (!c.models.some((m) => m.id === c.model)) { const o = el("option", null, c.model); o.value = c.model; o.selected = true; sel.prepend(o); }
   $("#setEffort").value = c.effort ?? "";
+  return c;
 }
+$("#setEngine").onchange = async () => {
+  try { await api("/api/settings/engine", { kind: $("#setEngine").value }); await loadClaudeStep(); await refreshStatus(); greet(); }
+  catch (e) { flash(e.message, true); }
+};
+$("#ccRecheck").onclick = () => busy($("#ccRecheck"), async () => { await loadClaudeStep(true); await refreshStatus(); });
+$("#ccCopy").onclick = () => navigator.clipboard?.writeText($("#ccCmd").textContent).then(() => flash("已複製"));
+$("#ccSetup").onclick = () => api("/api/open/claude-code-setup", {}).catch((e) => flash(e.message, true));
+$("#ccLogin").onclick = async () => {
+  try {
+    await api("/api/claude-code/login", {});
+    flash("已開啟瀏覽器，請在 Anthropic 的頁面登入你的 Claude 帳號");
+    // Poll until the login lands (up to 5 minutes, or the dialog closes).
+    for (let i = 0; i < 100 && dlg.open; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const c = await loadClaudeStep(true);
+      if (c.subscription.ready) { flash("已登入，之後會使用你的 Claude 訂閱"); await refreshStatus(); greet(); break; }
+    }
+  } catch (e) { flash(e.message, true); }
+};
 $("#setKeyEdit").onclick = () => { $("#setKeyShow").hidden = true; $("#setKeyEnter").hidden = false; $("#setKeySave").hidden = false; $("#setKey").focus(); };
 $("#setKeyRemove").onclick = async () => { await api("/api/settings/claude", { key: "" }); await refreshStatus(); loadClaudeStep(); };
 $("#setGetKey").onclick = () => api("/api/open/anthropic-keys", {}).catch((e) => flash(e.message, true));
@@ -963,10 +1017,11 @@ $("#setKeySave").onclick = async () => {
 };
 $("#setModel").onchange = async () => { await api("/api/settings/claude", { model: $("#setModel").value }); refreshStatus(); };
 $("#setEffort").onchange = async () => { await api("/api/settings/claude", { effort: $("#setEffort").value }); };
+// Tests the method shown (subscription or API key), whatever is chosen above.
 $("#setTest").onclick = () => busy($("#setTest"), async () => {
   const out = $("#setTestOut");
   out.className = "note"; out.textContent = "測試中…";
-  try { const r = await api("/api/engine/test", {}); out.className = "note ok"; out.textContent = `${r.engine} 回覆「${r.reply}」（${r.ms} ms）`; }
+  try { const r = await api("/api/engine/test", { engine: via }); out.className = "note ok"; out.textContent = `${r.via}：回覆「${r.reply}」（${r.ms} ms）`; }
   catch (e) { out.className = "note err"; out.textContent = e.message; }
 });
 
