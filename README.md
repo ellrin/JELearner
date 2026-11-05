@@ -4,6 +4,7 @@
 
 > 開發初期（第一版：文字管線）。已完成：私人工作區、SQLite（生字／文法／複習進度／錯題本）、英日新聞爬蟲（遵守 robots.txt）、新聞 → Markdown 教材（模板可替換）、Claude 兩種連線方式（訂閱／API key）、Gmail／Calendar 介面與模擬實作、本機網頁、離線端到端測試。
 > 尚未完成：向量庫與 RAG、Google OAuth、本機模型（等 Mac）、語音、Tauri 打包、數位人像。見 [`docs/roadmap.md`](docs/roadmap.md)。
+> 第二版規劃（多使用者、積分與等級、AI 對話、每日課程、課程配方、語音、學習群組）：[`docs/plan.md`](docs/plan.md)。
 
 ## 執行
 

@@ -30,7 +30,9 @@ scripts/dev.sh --mock                        # both of the above together
 - `models/catalog.json`: cloud (Claude) model list and local models for the Mac.
 - `workspace-template/`: starting layout of a private workspace.
 - `docs/`: decisions, architecture, data formats, UI design, roadmap. Update them when a
-  decision changes.
+  decision changes. `docs/plan.md` is the agreed second-version plan (profiles, points and
+  levels, AI conversation, daily lessons, recipes, voice, study groups); follow its stages
+  (section 20) and update it first if a decision changes.
 
 ## Decisions (see docs/decisions.md for the reasons)
 
