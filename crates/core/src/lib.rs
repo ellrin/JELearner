@@ -7,6 +7,7 @@
 //! - [`provider`] — language-model providers (Claude API, llama-server, mock)
 //! - [`claude_code`] — Claude subscription engine through the official Claude Code CLI
 //! - [`lesson`] — article -> structured lesson -> Markdown (templates in files)
+//! - [`course`] — courses: outlines (topic, fixed…), lesson plans, unit plans
 //! - [`google`] — Gmail / Calendar traits, REST and in-memory implementations
 //! - [`report`] — weekly report, lesson confirmation, review scheduling
 //! - [`level`] — fine-grained levels and difficulty scores
@@ -14,6 +15,7 @@
 
 pub mod catalog;
 pub mod claude_code;
+pub mod course;
 pub mod crawler;
 pub mod db;
 pub mod google;

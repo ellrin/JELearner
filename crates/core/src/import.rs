@@ -50,7 +50,7 @@ pub enum ImportError {
     Invalid(String),
 }
 
-const WORD_ALIASES: &[(&str, &[&str])] = &[
+pub(crate) const WORD_ALIASES: &[(&str, &[&str])] = &[
     ("lang", &["lang", "language", "語言"]),
     ("term", &["term", "word", "vocab", "vocabulary", "front", "expression", "單字", "單詞", "単語", "語彙"]),
     ("reading", &["reading", "kana", "furigana", "pronunciation", "ipa", "phonetic", "讀音", "読み", "よみ", "發音"]),
@@ -61,7 +61,7 @@ const WORD_ALIASES: &[(&str, &[&str])] = &[
     ("tags", &["tags", "tag", "標籤", "タグ"]),
 ];
 
-const GRAMMAR_ALIASES: &[(&str, &[&str])] = &[
+pub(crate) const GRAMMAR_ALIASES: &[(&str, &[&str])] = &[
     ("lang", &["lang", "language", "語言"]),
     ("pattern", &["pattern", "grammar", "point", "structure", "文法", "句型", "文型"]),
     ("meaning", &["meaning", "translation", "意思", "意味"]),
@@ -72,7 +72,7 @@ const GRAMMAR_ALIASES: &[(&str, &[&str])] = &[
 ];
 
 /// Map canonical field name -> column index, from the header row.
-fn header_map(headers: &csv::StringRecord, aliases: &[(&'static str, &[&str])]) -> HashMap<&'static str, usize> {
+pub(crate) fn header_map(headers: &csv::StringRecord, aliases: &[(&'static str, &[&str])]) -> HashMap<&'static str, usize> {
     let mut map = HashMap::new();
     for (i, h) in headers.iter().enumerate() {
         let h = h.trim().trim_start_matches('\u{feff}').to_lowercase();
@@ -85,11 +85,11 @@ fn header_map(headers: &csv::StringRecord, aliases: &[(&'static str, &[&str])]) 
     map
 }
 
-fn field(rec: &csv::StringRecord, map: &HashMap<&'static str, usize>, key: &str) -> String {
+pub(crate) fn field(rec: &csv::StringRecord, map: &HashMap<&'static str, usize>, key: &str) -> String {
     map.get(key).and_then(|&i| rec.get(i)).unwrap_or("").trim().to_string()
 }
 
-fn reader(text: &str) -> csv::Reader<&[u8]> {
+pub(crate) fn reader(text: &str) -> csv::Reader<&[u8]> {
     // Tab-separated files (common from Anki / spreadsheets) are detected by
     // the header line.
     let first = text.lines().next().unwrap_or("");
