@@ -79,41 +79,45 @@ async function busy(btn, fn) {
 }
 
 // ── theme ──────────────────────────────────────────────
-// Ten cyberpunk (dark) and ten macaron (light) palettes in themes.css; each
-// theme is dark or light by itself. The same ids are in core's THEMES list.
+// Twenty palettes in themes.css: ten dark and ten light, each with five
+// single-hue themes and five combinations of three accents. Each theme is
+// dark or light by itself. The same ids are in core's THEMES list.
 const THEMES = [
-  { id: "neon", name: "霓虹夜市", dark: true, sw: ["#161731", "#ff3fb4", "#2de2e6"] },
-  { id: "acid", name: "酸性螢光", dark: true, sw: ["#1b1c1e", "#b6ff3b", "#3a3e43"] },
-  { id: "synthwave", name: "落日合成", dark: true, sw: ["#1e1329", "#ff8a3d", "#ff4fa0", "#9b5cff"] },
-  { id: "voltage", name: "電光藍", dark: true, sw: ["#121d33", "#4d94ff", "#e9f1ff"] },
-  { id: "plum", name: "熱粉梅", dark: true, sw: ["#24131f", "#ff4f9a", "#ffc2dc"] },
-  { id: "amber", name: "琥珀終端", dark: true, sw: ["#1c1a16", "#ffb000", "#ffdca8"] },
-  { id: "ice", name: "冰晶藍", dark: true, sw: ["#172028", "#5ce1ff", "#e8f7fb"] },
-  { id: "ultraviolet", name: "紫外線", dark: true, sw: ["#1b1530", "#ae7aff", "#c8ff3a"] },
-  { id: "toxic", name: "毒性黃", dark: true, sw: ["#1c1d15", "#f5e100", "#3d3f2e"] },
-  { id: "redalert", name: "紅色警戒", dark: true, sw: ["#1d1517", "#ff4752", "#fdeeee"] },
-  { id: "strawberry", name: "草莓", dark: false, sw: ["#f9e4ea", "#c8254f", "#f5b8c8"] },
-  { id: "pistachio", name: "開心果", dark: false, sw: ["#eaf0db", "#4a7718", "#b9d88a", "#c9a27a"] },
-  { id: "lavender", name: "薰衣草", dark: false, sw: ["#ebe7f6", "#6f4fd0", "#c9bdf0"] },
-  { id: "lemon", name: "檸檬塔", dark: false, sw: ["#faf2d2", "#b86f00", "#f5d64a"] },
-  { id: "peach", name: "蜜桃", dark: false, sw: ["#fae7da", "#d85a34", "#f8c3a6"] },
-  { id: "mint", name: "薄荷", dark: false, sw: ["#e2f3eb", "#0b7a5d", "#a8e0c8"] },
-  { id: "blueberry", name: "藍莓", dark: false, sw: ["#e3e8f6", "#3a4bb0", "#6b4fa0", "#f3ead8"] },
-  { id: "sakura", name: "櫻花", dark: false, sw: ["#f5eaee", "#d05a88", "#9bbf7a", "#6f5960"] },
-  { id: "caramel", name: "焦糖布丁", dark: false, sw: ["#f2e5d3", "#955222", "#e8c48f"] },
-  { id: "taro", name: "芋泥奶茶", dark: false, sw: ["#ebe0ec", "#934a8c", "#d9c3a5"] },
+  { id: "hacker", name: "駭客終端", dark: true, multi: false, sw: ["#121712", "#16c94d", "#39ff6a", "#a8ffbc"] },
+  { id: "amber", name: "琥珀終端", dark: true, multi: false, sw: ["#1c1a16", "#ff8a1f", "#ffb000", "#ffd98a"] },
+  { id: "ice", name: "冰晶藍", dark: true, multi: false, sw: ["#172028", "#2fb2e6", "#5ce1ff", "#b8f2ff"] },
+  { id: "ultraviolet", name: "紫外線", dark: true, multi: false, sw: ["#1b1530", "#8c5cff", "#ae7aff", "#dcc8ff"] },
+  { id: "redalert", name: "紅色警戒", dark: true, multi: false, sw: ["#1d1517", "#e8323f", "#ff4752", "#ffa3a8"] },
+  { id: "neon", name: "霓虹夜市", dark: true, multi: true, sw: ["#161731", "#ff3fb4", "#2de2e6", "#ffd23f"] },
+  { id: "shibuya", name: "澀谷雨夜", dark: true, multi: true, sw: ["#151c26", "#ff5fa2", "#4fd8ff", "#a98cff"] },
+  { id: "hongkong", name: "香港霓虹", dark: true, multi: true, sw: ["#122220", "#ff5147", "#2ee6a6", "#ffc845"] },
+  { id: "synthwave", name: "落日合成", dark: true, multi: true, sw: ["#1e1329", "#ff8a3d", "#ff4fa0", "#b691ff"] },
+  { id: "aurora", name: "極光", dark: true, multi: true, sw: ["#121b2a", "#4cf5a8", "#46c8ff", "#d58cff"] },
+  { id: "lavender", name: "薰衣草", dark: false, multi: false, sw: ["#ebe7f6", "#b7abdb", "#6f4fd0", "#5232ad"] },
+  { id: "lemon", name: "檸檬塔", dark: false, multi: false, sw: ["#faf2d2", "#d3c27a", "#b86f00", "#8f5a00"] },
+  { id: "mint", name: "薄荷", dark: false, multi: false, sw: ["#e2f3eb", "#9eccb5", "#0b7a5d", "#08604a"] },
+  { id: "blueberry", name: "藍莓", dark: false, multi: false, sw: ["#e3e8f6", "#a6b3db", "#3a4bb0", "#2a3888"] },
+  { id: "strawberry", name: "草莓", dark: false, multi: false, sw: ["#f9e4ea", "#d9a2b4", "#c8254f", "#9c1a3c"] },
+  { id: "giftbox", name: "甜點禮盒", dark: false, multi: true, sw: ["#f8efe4", "#c2366b", "#0f7d62", "#966500"] },
+  { id: "peachlavender", name: "蜜桃薰衣草", dark: false, multi: true, sw: ["#fae7da", "#d85a34", "#7556c9", "#b8487c"] },
+  { id: "sakuramatcha", name: "櫻花抹茶", dark: false, multi: true, sw: ["#f5eaee", "#d05a88", "#557619", "#8c4f42"] },
+  { id: "blueberrylemon", name: "藍莓檸檬", dark: false, multi: true, sw: ["#e6ebf7", "#3a4bb0", "#926400", "#8048a8"] },
+  { id: "caramelpistachio", name: "焦糖開心果", dark: false, multi: true, sw: ["#f2e7d6", "#955222", "#4c7a1a", "#a8475a"] },
 ];
-const DEFAULT_THEME = "peach";
+const DEFAULT_THEME = "giftbox";
+// Ids from earlier versions → the nearest current theme.
+const OLD_THEMES = { acid: "hacker", voltage: "ice", plum: "neon", toxic: "amber", pistachio: "mint", peach: "peachlavender", sakura: "sakuramatcha", caramel: "caramelpistachio", taro: "lavender" };
 const themeOf = (id) => THEMES.find((t) => t.id === id);
 
-// The browser's choice; old orange/night/terminal + light/dark values map to
-// the nearest new theme once.
+// The browser's choice; ids from earlier versions (and the first version's
+// orange/night/terminal + light/dark) map to the nearest theme once.
 function savedTheme() {
   let t = store.get("jl.theme", null);
   if (themeOf(t)) return t;
+  if (OLD_THEMES[t]) { store.set("jl.theme", OLD_THEMES[t]); return OLD_THEMES[t]; }
   if (t === "orange" || t === "night" || t === "terminal") {
     const light = store.get("jl.mode", matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") === "light";
-    t = { orange: light ? "peach" : "amber", night: light ? "lavender" : "neon", terminal: light ? "mint" : "acid" }[t];
+    t = { orange: light ? "peachlavender" : "amber", night: light ? "lavender" : "neon", terminal: light ? "mint" : "hacker" }[t];
     store.set("jl.theme", t);
     try { localStorage.removeItem("jl.mode"); } catch {}
     return t;
@@ -121,7 +125,10 @@ function savedTheme() {
   return DEFAULT_THEME;
 }
 // The user's own theme (saved in their profile) wins over the browser's.
-const currentTheme = () => (themeOf(state.status?.user?.theme) ? state.status.user.theme : savedTheme());
+const currentTheme = () => {
+  const u = state.status?.user?.theme;
+  return themeOf(u) ? u : themeOf(OLD_THEMES[u]) ? OLD_THEMES[u] : savedTheme();
+};
 
 function showTheme(id) {
   const t = themeOf(id) ?? themeOf(DEFAULT_THEME);
@@ -142,7 +149,8 @@ async function chooseTheme(id) {
   }
   applyTheme();
 }
-// Settings → 外觀: a swatch card per theme; hover or focus previews it.
+// Settings → 外觀: a swatch card per theme (dark row, then light row; single
+// hue first, then combinations); hover or focus previews it.
 for (const t of THEMES) {
   const b = el("button", "theme-card");
   b.dataset.theme = t.id;

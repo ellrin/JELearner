@@ -32,11 +32,13 @@ pub const TEMPLATE_PROFILE_DIR: &str = "profile";
 /// Top-level folders of a first-version (single-user) workspace.
 pub const V1_DIRS: &[&str] = &["vocab", "grammar", "materials", "lessons", "records", "avatar"];
 
-/// UI colour themes (web/themes.css): ten cyberpunk (dark) then ten macaron
-/// (light). A profile may only store one of these ids.
+/// UI colour themes (web/themes.css): ten dark then ten light; in each, five
+/// single-hue themes then five combinations. A profile may only store one of
+/// these ids.
 pub const THEMES: &[&str] = &[
-    "neon", "acid", "synthwave", "voltage", "plum", "amber", "ice", "ultraviolet", "toxic", "redalert",
-    "strawberry", "pistachio", "lavender", "lemon", "peach", "mint", "blueberry", "sakura", "caramel", "taro",
+    "hacker", "amber", "ice", "ultraviolet", "redalert", "neon", "shibuya", "hongkong", "synthwave", "aurora",
+    "lavender", "lemon", "mint", "blueberry", "strawberry", "giftbox", "peachlavender", "sakuramatcha", "blueberrylemon",
+    "caramelpistachio",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -750,6 +752,9 @@ mod tests {
             assert!(app.contains(&format!("id: \"{id}\"")), "{id} missing in app.js");
         }
         assert_eq!(css.matches(":root[data-theme=").count(), THEMES.len(), "themes.css has a theme not in THEMES");
+        for token in ["--accent:", "--accent-2:", "--accent-3:", "--accent-2-ink:", "--accent-3-ink:"] {
+            assert_eq!(css.matches(token).count(), THEMES.len(), "every theme defines {token}");
+        }
         // Old profiles without a theme still load, and none is written back.
         let p: Profile = toml::from_str("id = \"ellrin\"\nname = \"Ellrin\"\n").unwrap();
         assert_eq!(p.theme, None);
