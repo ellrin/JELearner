@@ -6,6 +6,7 @@
 ┌───────────────────▼──────────────────────────┐
 │ jl-server（axum）                             │
 │  api.rs   handler（之後可改為 Tauri command） │
+│  study.rs 今日、進度、積分、對話、大頭貼       │
 │  settings.rs  config.toml＋環境變數           │
 │  secrets.rs   API key：環境變數／金鑰圈／檔案 │
 │  git.rs       同步私人工作區（系統 git）      │
@@ -23,6 +24,8 @@
 │  google     Mailer／Calendar：REST／記憶體     │
 │  report     週報、確認信、複習排程             │
 │  catalog    模型清單與記憶體估算               │
+│  rules／points／progress  積分、等級、難度     │
+│  topics／conversation  主題與打字版 AI 對話     │
 └──┬────────────┬──────────────┬───────────────┘
    │            │              │
  新聞網站   Claude（訂閱經 Claude Code，或 API key）  Gmail／Calendar
@@ -74,6 +77,18 @@
 - `words`（lang, term, reading 唯一）、`grammar`（lang, pattern 唯一）：重複匯入時，空欄位不會蓋掉既有內容。
 - `progress`：每張卡片的 SM-2 狀態（ease、間隔、次數、遺忘次數、到期時間）；`reviews`：每次評分。
 - `articles`（url 唯一）、`lessons`（含完整 Markdown 與 JSON）、`mistakes`、`materials`。
+- A 階段（第 2 版 schema）：`points`、`units`（從 `records/points/` 重建）、`conversations`（從 `conversations/` 的 Markdown 重建）、`word_usage`、`topic_stats`、`difficulty_log`、`listening_time`；`lessons` 加 `topic`、`difficulty`、`recipe`。
+
+## AI 對話（打字版）
+
+```
+選題（topics.toml＋interests.csv，比例與輪替）＋目標字（自己的單字庫）
+  → conversation_<lang>.md（system prompt）＋ 開場提示 → LlmProvider::chat → AI 開場
+  → 每回合：檢查長度與「真的有開口」→ 整段對話 → chat（JSON：recast、question、used_targets、starters）
+     Claude API／llama-server：messages；Claude 訂閱：整段對話寫進 claude -p 的提示詞
+  → 回合上限 → 鎖定 → conversation_review.md（評估 JSON）→ 積分（records/points/）
+  → conversations/<lang>/<日期>-<主題>.md（內嵌資料）、word_usage、topic_stats、升級檢查
+```
 
 ## 測試策略
 

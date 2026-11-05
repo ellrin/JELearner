@@ -14,7 +14,9 @@ const store = {
 
 const state = {
   lang: store.get("jl.lang", "en"),
-  view: store.get("jl.view", "today"),
+  view: ["secretary"].includes(store.get("jl.view", "today")) ? "today" : store.get("jl.view", "today"),
+  todayMode: "tasks", // or "review"
+  conv: null,         // the open conversation
   status: null,
   picked: null,       // article chosen on the news page
   lessonId: null,     // lesson open on the lessons page
@@ -142,6 +144,7 @@ async function refreshStatus() {
     updatePicked();
     const out = $("#genOut"); out.textContent = ""; out.title = "";
   }
+  refreshMe();
   const st = s.stats?.[state.lang] ?? {};
   const set = (id, v, hot) => { const n = $(id); n.textContent = v ? String(v) : ""; n.classList.toggle("hot", !!hot); };
   set("#cDue", st.due, st.due > 0);
@@ -217,7 +220,7 @@ segment($("#lang"), state.lang, setLang);
 function applyUser() {
   const s = state.status;
   const u = s?.user;
-  $("#userDot").style.background = u?.color ?? "var(--faint)";
+  setAvatar($("#userDot"), u);
   $("#userName").textContent = u ? u.name : (s?.layout === "v1" ? "需要轉換工作區" : "選擇使用者");
   const langs = u?.languages ?? ["en", "ja"];
   if (!langs.includes(state.lang)) { state.lang = langs[0]; store.set("jl.lang", state.lang); }
@@ -238,7 +241,7 @@ $("#actUser").onclick = (e) => {
   } else {
     for (const u of s?.users ?? []) {
       const b = el("button");
-      const dot = el("span", "dot"); dot.style.background = u.color;
+      const dot = el("span", "dot"); setAvatar(dot, u);
       b.append(dot, document.createTextNode(u.name));
       if (u.admin) b.append(el("span", "tag", "管理員"));
       if (u.id === s.user?.id) b.setAttribute("aria-current", "true");
@@ -317,7 +320,16 @@ function langPicker(box, user, showProgress) {
   };
 }
 
-$$("#views button").forEach((b) => (b.onclick = () => { state.view = b.dataset.view; store.set("jl.view", state.view); state.query = ""; document.body.classList.remove("nav-open"); render(); }));
+$$("#views button").forEach((b) => (b.onclick = () => { go(b.dataset.view); }));
+
+/** Open a view (nav, task cards, next-step buttons). */
+function go(view, extra = {}) {
+  state.view = view; store.set("jl.view", view);
+  state.query = ""; state.todayMode = "tasks";
+  Object.assign(state, extra);
+  document.body.classList.remove("nav-open");
+  render();
+}
 
 function viewbar(title, count, ...extra) {
   const vb = $("#viewbar");
@@ -347,55 +359,41 @@ async function render() {
   const page = $("#page");
   page.innerHTML = "";
   try {
-    await ({ today: renderToday, news: renderNews, lessons: renderLessons, words: renderWords, grammar: renderGrammar,
-      mistakes: renderMistakes, materials: renderMaterials, secretary: renderSecretary }[state.view] ?? renderToday)(page);
+    await ({ today: renderToday, conversation: renderConversation, news: renderNews, lessons: renderLessons, words: renderWords, grammar: renderGrammar,
+      mistakes: renderMistakes, materials: renderMaterials, progress: renderProgress }[state.view] ?? renderToday)(page);
   } catch (e) {
     page.append(el("div", "empty", e.message));
   }
   $("#pageArea").scrollTop = 0;
 }
 
-// ── today: numbers and a review session ────────────────
-async function renderToday(page) {
-  viewbar("今日", null);
-  const st = state.status?.stats?.[state.lang] ?? {};
-  const tiles = el("div", "tiles");
-  const tile = (k, v, s, acc) => { const t = el("div", `tile${acc ? " acc" : ""}`); t.append(el("div", "k", k), el("div", "v", String(v ?? 0)), el("div", "s", s)); return t; };
-  const rate = st.reviews ? `${Math.round((st.reviews_correct / st.reviews) * 100)}% 答對` : "7 天內";
-  tiles.append(
-    tile("待複習", st.due, "單字＋文法", st.due > 0),
-    tile("新單字", st.new_words, "7 天內"),
-    tile("複習次數", st.reviews, rate),
-    tile("未訂正錯題", st.open_mistakes, `共 ${st.lessons ?? 0} 份教材`, st.open_mistakes > 0),
-  );
-  page.append(tiles);
-
+// ── review session (opened from the today page's review task) ──
+async function renderReview(page) {
+  const back = ghostButton("back", "今日", () => { state.todayMode = "tasks"; render(); });
+  viewbar("複習", null, back);
   const card = el("div", "card");
-  const h = el("h3"); h.append(document.createTextNode("複習"), el("span", "c", ""), el("span", "grow"));
-  card.append(h);
+  const h = el("h3"); h.append(document.createTextNode(langLabel(state.lang)), el("span", "c", ""), el("span", "grow"));
+  const round = el("div", "pts-bar thin"); round.append(el("i"));
+  card.append(h, round);
   page.append(card);
   if (!state.review.items.length || state.review.i >= state.review.items.length) {
-    state.review = { items: await api(`/api/review?lang=${state.lang}&limit=50`), i: 0, shown: false, done: state.review.done };
+    state.review = { items: await api(`/api/review?lang=${state.lang}&limit=50`), i: 0, shown: false, done: state.review.done, round: state.review.round };
   }
   drawReview(card);
-
-  const lessons = await api(`/api/lessons?lang=${state.lang}&limit=5`);
-  const lc = el("div", "card");
-  lc.append(el("h3", null, "最近的教材"));
-  if (!lessons.length) lc.append(el("div", "empty", "還沒有教材。到「新聞」挑一篇，或在右邊貼上文字。"));
-  const ul = el("ul", "list");
-  for (const l of lessons) ul.append(lessonItem(l));
-  lc.append(ul);
-  page.append(lc);
 }
 
 function drawReview(card) {
   const r = state.review;
   $$(".flash-card, .empty", card).forEach((n) => n.remove());
   $(".c", card).textContent = r.items.length ? `${Math.min(r.i + 1, r.items.length)} / ${r.items.length}` : "";
+  const bar = $(".pts-bar > i", card);
+  if (bar && r.round) bar.style.width = `${Math.min(100, (r.round.done / r.round.size) * 100)}%`;
   const it = r.items[r.i];
   if (!it) {
-    card.append(el("div", "empty", r.done ? `完成！這輪複習了 ${r.done} 張。` : "沒有到期的卡片。"));
+    if (r.award) return;
+    const e = el("div", "empty cta", r.done ? `這輪複習了 ${r.done} 張` : "沒有到期的卡片");
+    e.append(primaryButton("回到今日", () => { state.todayMode = "tasks"; render(); }));
+    card.append(e);
     return;
   }
   const fc = el("div", "flash-card");
@@ -425,15 +423,32 @@ async function gradeCard(card, grade) {
   const r = state.review;
   const it = r.items[r.i];
   try {
-    await api("/api/review", { kind: it.item_kind, id: it.item_id, grade });
+    const res = await api("/api/review", { kind: it.item_kind, id: it.item_id, grade });
     r.i += 1; r.shown = false; r.done += 1;
+    if (res?.round) r.round = res.round;
+    if (res?.award) {
+      // A full round: the result card, then carry on or go back.
+      r.award = res.award;
+      drawReview(card);
+      $$(".flash-card", card).forEach((n) => n.remove());
+      const more = r.i < r.items.length;
+      const home = () => { state.todayMode = "tasks"; render(); };
+      card.after(resultCard({
+        points: res.award.points, title: "完成一輪複習", score: res.award.score, levelUp: res.level_up,
+        next: more
+          ? [{ label: "再一輪", primary: true, onclick: () => { r.award = null; render(); } }, { label: "回到今日", onclick: home }]
+          : [{ label: "回到今日", primary: true, onclick: home }],
+      }));
+      refreshStatus().then(greet);
+      return;
+    }
     drawReview(card);
     if (r.i >= r.items.length) refreshStatus().then(greet);
   } catch (e) { flash(e.message, true); }
 }
 
 document.addEventListener("keydown", (e) => {
-  if (state.view !== "today" || e.target.closest("input, textarea, select, dialog")) return;
+  if (state.view !== "today" || state.todayMode !== "review" || e.target.closest("input, textarea, select, dialog")) return;
   const card = $(".flash-card")?.closest(".card");
   if (!card) return;
   if (e.key === " ") { e.preventDefault(); if (!state.review.shown) { state.review.shown = true; drawReview(card); } }
@@ -453,7 +468,9 @@ async function renderNews(page, refresh = false) {
     else flash(`取得 ${data.fetched} 則`);
   }
   if (!data.articles.length) {
-    page.append(el("div", "empty", "還沒有新聞。按「抓最新新聞」（來源在私人工作區的 sources.toml）。"));
+    const e = el("div", "empty cta", "還沒有新聞");
+    e.append(primaryButton("抓最新新聞", () => btn.click()));
+    page.append(e);
     return;
   }
   const ul = el("ul", "list");
@@ -501,7 +518,12 @@ async function renderLessons(page) {
   if (state.lessonId) return renderLesson(page, state.lessonId);
   const list = await api(`/api/lessons?lang=${state.lang}`);
   viewbar(`教材・${langLabel(state.lang)}`, list.length);
-  if (!list.length) { page.append(el("div", "empty", "還沒有教材。")); return; }
+  if (!list.length) {
+    const e = el("div", "empty cta", "還沒有教材");
+    e.append(primaryButton("從新聞做一份", () => go("news")));
+    page.append(e);
+    return;
+  }
   const ul = el("ul", "list");
   for (const l of list) ul.append(lessonItem(l));
   page.append(ul);
@@ -560,14 +582,18 @@ async function renderLesson(page, id) {
   });
 
   paper.append(h2("問答", lesson.questions.length));
-  lesson.questions.forEach((q, i) => paper.append(questionCard(id, q, i)));
+  // When every question has a verdict, the quiz is finished: result card.
+  const quiz = { id, lang: row.lang, total: lesson.questions.length, answers: {}, done: false, after: paper };
+  lesson.questions.forEach((q, i) => paper.append(questionCard(id, q, i, quiz)));
+  startReading();
 }
 
-function questionCard(lessonId, q, index) {
+function questionCard(lessonId, q, index, quiz) {
   const box = el("div", "q");
   box.append(el("div", "qt", `${index + 1}. ${q.question}`));
   const fb = el("div", "fb");
-  const showFeedback = (correct) => {
+  const showFeedback = (correct, answer) => {
+    if (quiz && correct !== null && correct !== undefined) quizAnswered(quiz, index, answer, correct);
     fb.innerHTML = "";
     const v = el("b", null, correct === true ? "答對 " : correct === false ? "答錯（已記入錯題本） " : "參考答案 ");
     fb.append(v, document.createTextNode(`${q.answer}　${q.explanation}`));
@@ -586,7 +612,7 @@ function questionCard(lessonId, q, index) {
           $$(".opt", opts).forEach((x) => (x.disabled = true));
           b.classList.add(r.correct ? "right" : "wrong");
           if (!r.correct) $$(".opt", opts).find((x) => x.textContent.endsWith(`. ${q.answer}`))?.classList.add("right");
-          showFeedback(r.correct);
+          showFeedback(r.correct, o);
           if (!r.correct) refreshStatus();
         } catch (e) { flash(e.message, true); }
       };
@@ -601,13 +627,13 @@ function questionCard(lessonId, q, index) {
     check.onclick = async () => {
       try {
         const r = await send(ta.value, null);
-        showFeedback(r.correct);
+        showFeedback(r.correct, ta.value);
         if (r.correct === null) {
           // The learner judges a free answer against the model answer.
           const ok = el("button", "ghost", "我答對了");
           const no = el("button", "ghost", "我答錯了");
-          ok.onclick = () => { showFeedback(true); ok.remove(); no.remove(); };
-          no.onclick = async () => { await send(ta.value, false); showFeedback(false); ok.remove(); no.remove(); refreshStatus(); };
+          ok.onclick = () => { showFeedback(true, ta.value); ok.remove(); no.remove(); };
+          no.onclick = async () => { await send(ta.value, false); showFeedback(false, ta.value); ok.remove(); no.remove(); refreshStatus(); };
           row.append(ok, no);
         }
         check.disabled = true;
@@ -754,7 +780,7 @@ async function renderMistakes(page) {
 // ── materials ──────────────────────────────────────────
 async function renderMaterials(page) {
   const list = await api("/api/materials");
-  const up = ghostButton("upload", "上傳 JSON", () => $("#impMaterials").click());
+  const up = ghostButton("upload", "匯入", () => openImport());
   viewbar("每週素材", list.length, up);
   const fmt = el("details", "fmt card");
   fmt.append(el("summary", null, "JSON 格式"));
@@ -768,7 +794,7 @@ async function renderMaterials(page) {
     ],
   }, null, 2)));
   page.append(fmt);
-  if (!list.length) { page.append(el("div", "empty", "還沒有素材。")); return; }
+  if (!list.length) { page.append(emptyImport("還沒有素材")); return; }
   const ul = el("ul", "list");
   for (const m of list) {
     const li = el("li", "item");
@@ -782,9 +808,10 @@ async function renderMaterials(page) {
   page.append(el("div", "note", "素材裡的文章會出現在「新聞」頁（來源標為 materials），可以直接做成教材。"));
 }
 
-// ── secretary: mail & calendar ─────────────────────────
-async function renderSecretary(page) {
-  viewbar("信件與行事曆", null);
+// ── mail & calendar (settings → 信件與行事曆) ─────────────
+async function renderMail(page) {
+  page.innerHTML = "";
+  const render = () => renderMail(page);
   const g = await api("/api/google");
   const mock = g.mail === "mock";
   const info = el("div", "card");
@@ -920,41 +947,6 @@ $("#genRun").onclick = async () => {
   }
 };
 
-// ── import ─────────────────────────────────────────────
-async function importFile(input, kind) {
-  const f = input.files?.[0];
-  if (!f) return;
-  const out = $("#impOut");
-  out.className = "note";
-  out.textContent = `匯入 ${f.name}…`;
-  try {
-    const text = await f.text();
-    const q = new URLSearchParams({ kind, name: f.name });
-    if (kind !== "materials") q.set("lang", state.lang);
-    const r = await apiText(`/api/import?${q}`, text);
-    const rep = r.report;
-    out.className = "note ok";
-    out.textContent = `已存成 ${r.file}：單字 ${rep.words}、文法 ${rep.grammar}${rep.articles ? `、文章 ${rep.articles}` : ""}${rep.warnings.length ? `（${rep.warnings.length} 個警告）` : ""}`;
-    if (rep.warnings.length) out.title = rep.warnings.join("\n");
-    await refreshStatus();
-    render();
-  } catch (e) {
-    out.className = "note err";
-    out.textContent = e.message;
-  } finally {
-    input.value = "";
-  }
-}
-$("#impVocab").onchange = (e) => importFile(e.target, "vocab");
-$("#impGrammar").onchange = (e) => importFile(e.target, "grammar");
-$("#impMaterials").onchange = (e) => importFile(e.target, "materials");
-$("#actImport").onclick = () => {
-  const blk = $("#impVocab").closest(".block");
-  blk.dataset.open = "true";
-  $(".toggle", blk).textContent = "−";
-  blk.scrollIntoView({ behavior: "smooth" });
-};
-
 // ── sync ───────────────────────────────────────────────
 $("#actSync").onclick = () => busy($("#actSync"), async () => {
   try {
@@ -978,7 +970,7 @@ function openSettings(step) {
 function showStep(step) {
   $$("#setTabs button").forEach((b) => b.setAttribute("aria-selected", String(Number(b.dataset.step) === step)));
   $$(".wizard .step", dlg).forEach((s) => (s.hidden = Number(s.dataset.step) !== step));
-  [loadWorkspaceStep, loadUserStep, loadLangsStep, loadClaudeStep, loadModelsStep, () => {}][step]();
+  [loadWorkspaceStep, loadUserStep, loadLangsStep, loadClaudeStep, loadModelsStep, () => renderMail($("#setMail")).catch((e) => ($("#setMail").textContent = e.message)), () => {}][step]();
 }
 $$("#setTabs button").forEach((b) => (b.onclick = () => showStep(Number(b.dataset.step))));
 

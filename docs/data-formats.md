@@ -124,6 +124,7 @@ timezone = "Asia/Taipei"
 level = "B1-3"            # 等級（只升不降）
 difficulty = 255          # 教材難度分數：每個大級 100 分（英文 A1–C2 = 0–600，日文 N5–N1 = 0–500）
 early_feedback_left = 5   # 還要在幾課結束時詢問難度
+level_since = "2026-11-06T09:00:00+08:00"  # 升到目前小階的時間（App 寫入；之後的積分算進下一階）
 
 [lang.ja]
 level = "N5-1"
@@ -156,7 +157,7 @@ name = "校園與社團"
 group = "生活"
 ```
 
-課程與對話會把使用者的興趣和這些通識主題混合（比例在 `profile.toml` 的 `interest_ratio`），可自由增減。
+課程與對話會把使用者的興趣和這些通識主題混合（比例在 `profile.toml` 的 `interest_ratio`：讓最近十段對話中興趣主題的比例最接近它），同類主題中選最久沒聊的，所以通識主題會輪流出現。可自由增減；檔案不存在或格式錯誤時用內建清單。
 
 ## `lessons/<lang>/*.md`：教材
 
@@ -169,6 +170,41 @@ App 產生，YAML front matter（title、language、level、date、source、engi
 
 按「同步」或「設定 → 匯出複習紀錄與錯題」時寫出。新電腦第一次開啟工作區、資料庫還沒有任何紀錄時自動還原。
 
+## `records/points/YYYY-MM-DD.csv`：積分紀錄
+
+一天一個檔案（以紀錄時間的當地日期命名），**只新增、不修改**，多台電腦同步不會衝突；資料庫的 `points`、`units` 表每次開啟工作區時從這些檔案補齊，換電腦也能還原。
+
+```csv
+time,lang,unit,skill,points,score,detail
+2026-11-06T09:12:00+08:00,en,conversation,writing,1.5,0.87,conversations/en/2026-11-06-校園與社團.md
+2026-11-06T09:30:00+08:00,en,quiz,reading,0,0.5,lessons/en/2026-11-06-chips.md
+2026-11-06T10:00:00+08:00,en,reading,reading,1,,50 min
+```
+
+- `unit`：`conversation`（對話）、`quiz`（教材測驗）、`review`（一輪複習卡片）、`reading`／`listening`（被動時間，`score` 空白）。
+- `skill`：`listening`、`reading`、`speaking`、`writing`、`vocab`（單字文法；也接受 `grammar`）。打字版對話記為 `writing`。
+- `points`：未通過＝0（照樣記錄，作為近期表現）；通過＝1；正確率 ≥ 95% 或對話評估優秀再 +0.5。
+- `detail`：相對於 `profiles/<id>/` 的檔案路徑，或 `50 min`、`20 張`。
+
+## `conversations/<lang>/*.md`：對話紀錄
+
+完成（評估過）的對話存成 `<日期>-<主題>.md`（不覆蓋，同名加 `-2`）：front matter（title、language、level、topic、date、turns、engine）、逐回合對話（AI 的換句話說以 `> ↺` 標示）、回饋（評分、可以說得更好的句子、目標字、建議加入的字、關鍵字），最後一行是內嵌資料 `<!-- jelearner:conversation {…} -->`，用來在其他電腦重建資料庫（含目標字的主動使用次數與主題紀錄）。版面模板是 `prompts/conversation.md.j2`。
+
+## `progress.toml`：積分、等級、難度規則（可選）
+
+內建數值在程式 repo 的 `config/progress.toml`（積分門檻依第二版規劃 §9.1）。工作區最上層放同名檔案，只寫想改的鍵即可覆蓋，例如：
+
+```toml
+[points]
+bonus = 0            # 關閉高分加成
+[levels.en]
+B1 = 1200
+```
+
+## 大頭貼（不在工作區）
+
+使用者的大頭貼只存在**每台電腦**的 `<config dir>/JELearner/avatars/<工作區 id>/<使用者 id>.jpg`（與資料庫放在一起），不進 Git、不會同步；換電腦要重新上傳。
+
 ## `prompts/`：自訂提示詞
 
-放和內建檔案同名的檔案即可取代：`lesson_system.md`、`lesson_user.md`、`lesson.md.j2`（[MiniJinja](https://docs.rs/minijinja) 語法）。可用的變數見內建版本（repo 的 `prompts/`）。
+放和內建檔案同名的檔案即可取代：`lesson_system.md`、`lesson_user.md`、`lesson.md.j2`、`conversation_en.md`、`conversation_ja.md`、`conversation_review.md`、`conversation.md.j2`（[MiniJinja](https://docs.rs/minijinja) 語法）。可用的變數見內建版本（repo 的 `prompts/`）。

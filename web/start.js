@@ -168,7 +168,7 @@ function loadStUser() {
   for (const u of people) {
     const li = el("li", "person");
     const b = el("button");
-    const dot = el("span", "big-dot", u.name.slice(0, 1).toUpperCase()); dot.style.background = u.color;
+    const dot = el("span", "big-dot", u.name.slice(0, 1).toUpperCase()); setAvatar(dot, u);
     b.append(dot, el("span", "n", u.name));
     if (u.admin) b.append(el("span", "tag", "管理員"));
     b.onclick = async () => {

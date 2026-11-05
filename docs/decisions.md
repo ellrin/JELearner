@@ -84,3 +84,9 @@ tokio、axum 0.8、reqwest（rustls）、sqlx 0.8（SQLite，執行期查詢，�
 - **原因**：家人共用一個 private repo；同一台電腦上不能用到別人的 Claude 帳號（docs/plan.md §2–§4）。
 - **第一版相容**：偵測到舊的單人結構時，由使用者確認後搬到 `profiles/<id>/`（`git mv`，不刪檔），第一版的 `workspace.toml` 設定移到 `profile.toml`；舊的資料庫與單一 API key 交給擁有者。
 - **尚未實測**：macOS 鑰匙圈中，不同 `CLAUDE_CONFIG_DIR` 的 Claude Code 登入是否確實分開（已確認 Claude Code 會使用指定資料夾）。
+
+## 13. 積分、等級與打字版對話（第二版 A 階段）
+
+- **決定**：積分以 `records/points/YYYY-MM-DD.csv` 為準（一天一檔、只新增，未通過也記 0 分），資料庫只是索引、每次開啟都從檔案補齊；規則數值放 `config/progress.toml`，工作區可覆蓋；等級只升不降、小階由條件 1–3 自動判斷、跨大級等 B 階段的檢核；教材難度與等級分開調整；`LlmProvider` 加 `chat`（多回合），Claude 訂閱把整段對話寫進提示詞；對話完成後存成 Markdown＋內嵌資料；大頭貼只存在本機。細節與理由見 `plan.md` 第 20 節「實作時決定的細節」。
+- **原因**：多台電腦同步不衝突、資料庫可重建；門檻需要實際使用後校準，所以放設定檔；介面三原則（完成感、正向回饋、不說「你錯了」）。
+- **尚未實測**：真實 Claude（API 與訂閱）的對話品質與回覆格式；目前以 mock 伺服器與假的 Claude Code 測試。

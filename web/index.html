@@ -29,17 +29,30 @@
   </header>
 
   <aside class="left" aria-label="導覽">
+    <section class="me" id="meCard" hidden>
+      <button class="me-avatar" id="meAvatar" aria-label="更換頭像"><span class="initial" id="meInitial"></span><img id="meImg" alt="" hidden><span class="cam" data-icon="camera"></span></button>
+      <input type="file" id="meAvatarFile" accept="image/*" hidden>
+      <div class="me-name" id="meName"></div>
+      <div class="me-level" id="meLevel"></div>
+      <div class="me-stats">
+        <div title="今日積分"><b class="acc" id="meToday">0</b><span>今日</span></div>
+        <div title="總積分"><b id="meTotal">0</b><span>總分</span></div>
+        <div title="連續天數"><b id="meStreak">0</b><span>連續</span></div>
+      </div>
+    </section>
     <ol class="views" id="views">
+      <li class="group">練習</li>
       <li><button data-view="today"><span data-icon="sun"></span><span class="t">今日</span><span class="count" id="cDue"></span></button></li>
-      <li><button data-view="news"><span data-icon="news"></span><span class="t">新聞</span></button></li>
+      <li><button data-view="conversation"><span data-icon="chat"></span><span class="t">對話</span></button></li>
       <li><button data-view="lessons"><span data-icon="book"></span><span class="t">教材</span><span class="count" id="cLessons"></span></button></li>
-      <li class="sep"></li>
+      <li><button data-view="news"><span data-icon="news"></span><span class="t">新聞</span></button></li>
+      <li class="group">我的資料</li>
       <li><button data-view="words"><span data-icon="cards"></span><span class="t">生字</span><span class="count" id="cWords"></span></button></li>
       <li><button data-view="grammar"><span data-icon="tree"></span><span class="t">文法</span><span class="count" id="cGrammar"></span></button></li>
       <li><button data-view="mistakes"><span data-icon="alert"></span><span class="t">錯題本</span><span class="count" id="cMistakes"></span></button></li>
-      <li><button data-view="materials"><span data-icon="folder"></span><span class="t">每週素材</span></button></li>
-      <li class="sep"></li>
-      <li><button data-view="secretary"><span data-icon="mail"></span><span class="t">信件與行事曆</span></button></li>
+      <li><button data-view="materials"><span data-icon="folder"></span><span class="t">素材</span></button></li>
+      <li class="group">進度</li>
+      <li><button data-view="progress"><span data-icon="chart"></span><span class="t">進度</span></button></li>
     </ol>
     <div class="left-foot" id="wsFoot"></div>
   </aside>
@@ -85,16 +98,14 @@
       </div>
     </section>
 
-    <section class="block" data-open="false">
+    <section class="block" data-open="true">
       <div class="block-head">
         <span class="n">02</span><h3>匯入</h3>
-        <button class="help" data-tip="檔案會先存進私人工作區（vocab/、grammar/、materials/週次/），再讀進資料庫，不會覆蓋同名檔案。欄位格式見 docs/data-formats.md。">?</button>
+        <button class="help" data-tip="單字 CSV、文法 CSV、每週素材 JSON 都可以直接拖進視窗，App 會自己判斷類型。檔案先存進私人工作區（vocab/、grammar/、materials/週次/），不會覆蓋同名檔案。欄位格式見 docs/data-formats.md。">?</button>
         <button class="toggle" aria-label="展開或收合">−</button>
       </div>
       <div class="block-body">
-        <div class="import-row"><span>單字 CSV</span><input type="file" id="impVocab" accept=".csv,.tsv,text/csv"></div>
-        <div class="import-row"><span>文法 CSV</span><input type="file" id="impGrammar" accept=".csv,.tsv,text/csv"></div>
-        <div class="import-row"><span>每週 JSON</span><input type="file" id="impMaterials" accept=".json,application/json"></div>
+        <div class="drop small" id="asideDrop" role="button" tabindex="0"><span data-icon="upload"></span><span>拖放或選擇檔案</span></div>
         <div class="note" id="impOut"></div>
       </div>
     </section>
@@ -210,6 +221,23 @@
 
   <div class="menu" id="userMenu" hidden role="menu"></div>
 
+  <!-- Import: drop a vocab CSV, grammar CSV or weekly JSON; the type is detected -->
+  <dialog class="dialog" id="dlgImport" aria-label="匯入">
+    <div class="dlg">
+      <div class="dlg-head">
+        <h2>匯入</h2>
+        <button class="help" data-tip="單字 CSV（term／word／單字 欄）、文法 CSV（pattern／文法 欄）、每週素材 JSON。可以一次放好幾個檔案；沒有語言欄的 CSV 用目前選的語言。">?</button>
+        <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
+      </div>
+      <div class="wizard">
+        <div class="drop" id="impDrop" role="button" tabindex="0"><span data-icon="upload"></span><b>拖放檔案到這裡</b><span class="note">或點一下選擇檔案</span></div>
+        <input type="file" id="impFiles" multiple accept=".csv,.tsv,.json,text/csv,application/json" hidden>
+        <ul class="imp-results" id="impResults"></ul>
+      </div>
+    </div>
+  </dialog>
+  <div class="drop-overlay" id="dropOverlay" hidden><div><span data-icon="upload"></span>放開即可匯入</div></div>
+
   <!-- Settings -->
   <dialog class="dialog" id="dlgSettings" aria-label="設定">
     <div class="dlg">
@@ -221,7 +249,8 @@
           <button data-step="2"><span class="c">03</span>學習語言</button>
           <button data-step="3"><span class="c">04</span>Claude</button>
           <button data-step="4"><span class="c">05</span>本機模型</button>
-          <button data-step="5">外觀</button>
+          <button data-step="5"><span class="c">06</span>信件與行事曆</button>
+          <button data-step="6">外觀</button>
         </div>
         <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
       </div>
@@ -344,6 +373,10 @@
         </section>
 
         <section class="step" data-step="5" hidden>
+          <div id="setMail"></div>
+        </section>
+
+        <section class="step" data-step="6" hidden>
           <div class="look-row"><span class="lbl">主題</span>
             <div class="themes">
               <button class="theme" data-theme="orange" aria-label="深灰橘"><span class="swatch"><i style="background:#27272a"></i><i style="background:#ff6b35"></i><i style="background:#f0f0f1"></i></span></button>
@@ -361,6 +394,7 @@
 </div>
 <script src="icons.js"></script>
 <script src="app.js"></script>
+<script src="study.js"></script>
 <script src="start.js"></script>
 </body>
 </html>

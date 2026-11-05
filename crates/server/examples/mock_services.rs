@@ -6,7 +6,9 @@
 //! ```
 //!
 //! - a Claude Messages API that answers with a canned lesson (English or
-//!   Japanese, depending on the article);
+//!   Japanese, depending on the article), conversation turns (a recast of the
+//!   learner's message and the next question) and the end evaluation — told
+//!   apart by the JSON schema in the request;
 //! - a news site with robots.txt (`/private/` disallowed), an English and a
 //!   Japanese RSS feed and article pages.
 
@@ -66,16 +68,84 @@ fn japanese_lesson() -> Value {
     })
 }
 
+const EN_QUESTIONS: &[&str] = &[
+    "Hi! I'm Sam, an exchange student. What do you usually do after class?",
+    "That sounds fun. How did you get into it?",
+    "What do you like most about it?",
+    "Is it popular among your friends too?",
+    "If you could change one thing about it, what would it be?",
+    "What would you recommend to someone who wants to try it?",
+];
+const JA_QUESTIONS: &[&str] = &["こんにちは！ゆきです。しゅみはなんですか。", "いいですね！いつもどこでしますか。", "だれとしますか。", "どうしてすきですか。"];
+
+/// One AI turn: a recast of the learner's last message and the next question.
+fn turn(b: &Value) -> Value {
+    let msgs = b["messages"].as_array().cloned().unwrap_or_default();
+    let ja = b["system"].as_str().unwrap_or("").contains("Japanese student");
+    let last = msgs.last().and_then(|m| m["content"].as_str()).unwrap_or("").trim().to_string();
+    let n = msgs.len() / 2;
+    let is_last = b["system"].as_str().unwrap_or("").contains("This was the learner's last turn");
+    let recast = if msgs.len() <= 1 {
+        String::new()
+    } else if ja {
+        format!("「{}」ですね。", last.trim_end_matches(['。', '.']))
+    } else {
+        let l = last.trim_end_matches('.');
+        format!("So, if I understand you, {}{}.", l.chars().next().map(|c| c.to_lowercase().to_string()).unwrap_or_default(), l.chars().skip(1).collect::<String>())
+    };
+    let question = if is_last {
+        if ja { "たのしかったです。またはなしましょう！".to_string() } else { "It was really nice talking with you — good luck with everything!".to_string() }
+    } else if ja {
+        JA_QUESTIONS[n % JA_QUESTIONS.len()].to_string()
+    } else {
+        EN_QUESTIONS[n % EN_QUESTIONS.len()].to_string()
+    };
+    let starters = if ja && !is_last { json!(["わたしは〜", "〜がすきです。なぜなら…", "よく〜します"]) } else { json!([]) };
+    json!({ "recast": recast, "question": question, "used_targets": [], "starters": starters })
+}
+
+fn review(ja: bool) -> Value {
+    if ja {
+        json!({
+            "fluency": 3, "target_use": 3, "grammar": 4, "overall": "good",
+            "summary": "每一回合都有用日文回答，很棒！",
+            "better": [{"original": "音楽すき", "suggestion": "音楽が好きです。", "why": "加上助詞「が」和「です」更自然"}],
+            "suggested_words": [{"term": "趣味", "reading": "しゅみ", "meaning": "興趣"}],
+            "keywords": ["音楽", "趣味"]
+        })
+    } else {
+        json!({
+            "fluency": 4, "target_use": 4, "grammar": 5, "overall": "excellent",
+            "summary": "你用完整的句子回答，而且自然地用到了目標字。",
+            "better": [
+                {"original": "I very like it", "suggestion": "I really like it.", "why": "very 不修飾動詞"},
+                {"original": "It make me relax", "suggestion": "It helps me relax.", "why": "主詞第三人稱單數"}
+            ],
+            "suggested_words": [
+                {"term": "unwind", "reading": "/ʌnˈwaɪnd/", "meaning": "放鬆"},
+                {"term": "get into", "reading": "/ɡet ˈɪntuː/", "meaning": "開始喜歡上"}
+            ],
+            "keywords": ["music", "club", "weekend"]
+        })
+    }
+}
+
 async fn messages(Json(b): Json<Value>) -> Json<Value> {
     let user = b["messages"][0]["content"].as_str().unwrap_or("");
     let ja = user.chars().any(|c| ('\u{3040}'..='\u{30ff}').contains(&c));
-    let text = if b["output_config"]["format"].is_object() {
-        if ja { japanese_lesson() } else { english_lesson() }.to_string()
+    let props = &b["output_config"]["format"]["schema"]["properties"];
+    let (text, wait) = if props["recast"].is_object() {
+        (turn(&b).to_string(), 500)
+    } else if props["fluency"].is_object() {
+        let ja = b["system"].as_str().unwrap_or("").contains("in Japanese");
+        (review(ja).to_string(), 900)
+    } else if b["output_config"]["format"].is_object() {
+        (if ja { japanese_lesson() } else { english_lesson() }.to_string(), 800)
     } else {
-        "OK".to_string()
+        ("OK".to_string(), 200)
     };
     // Simulate thinking time.
-    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
     Json(json!({
         "id": "msg_mock", "type": "message", "role": "assistant", "model": b["model"],
         "content": [{"type": "text", "text": text}], "stop_reason": "end_turn",

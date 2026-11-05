@@ -4,7 +4,7 @@
 
 > 開發初期（第一版：文字管線）。已完成：私人工作區、SQLite（生字／文法／複習進度／錯題本）、英日新聞爬蟲（遵守 robots.txt）、新聞 → Markdown 教材（模板可替換）、Claude 兩種連線方式（訂閱／API key）、Gmail／Calendar 介面與模擬實作、本機網頁、離線端到端測試。
 > 尚未完成：向量庫與 RAG、Google OAuth、本機模型（等 Mac）、語音、Tauri 打包、數位人像。見 [`docs/roadmap.md`](docs/roadmap.md)。
-> 第二版進行中：**0-1 起始流程與多使用者已完成**。完整規劃（多使用者、積分與等級、AI 對話、每日課程、課程配方、語音、學習群組）：[`docs/plan.md`](docs/plan.md)。
+> 第二版進行中：**0-1 起始流程與多使用者、A 階段（積分、等級、難度調整、打字版 AI 對話、今日任務與進度頁）已完成**。完整規劃（多使用者、積分與等級、AI 對話、每日課程、課程配方、語音、學習群組）：[`docs/plan.md`](docs/plan.md)。
 
 ## 執行
 
@@ -43,7 +43,7 @@ JELearner-private/
     materials/          每週素材（materials/2026-W45/*.json）
     lessons/en|ja/      產生的教材（Markdown）
     conversations/      對話紀錄
-    records/            積分、複習進度與錯題本（CSV）
+    records/            積分（records/points/）、複習進度與錯題本（CSV）
 ```
 
 **使用者**：第一次開啟時有起始流程（歡迎 → 工作區 → 使用者 → 學習語言 → Claude → 興趣 → 完成）。之後從頂列的使用者選單切換或新增使用者；選名字即可進入，不需要密碼。同一個工作區的成員看得到彼此的所有檔案（包括單字庫），適合家人；朋友請各自用自己的工作區（學習群組在之後的階段加入）。第一版的單人工作區會在開啟時詢問名字，搬到 `profiles/〈你〉/`（Git repository 裡用 `git mv`，不刪任何檔案）。
@@ -137,7 +137,20 @@ scripts/            開發啟動與 Git hooks
 | GET / POST | `/api/review`（POST `{ kind, id, grade }`） | 到期卡片／評分（1–5） |
 | GET / POST | `/api/mistakes`、`/api/mistakes/{id}/resolve` | 錯題本 |
 | GET | `/api/materials` | 每週素材 |
-| POST | `/api/import?kind=vocab\|grammar\|materials&name=&lang=`（本文為檔案內容） | 匯入並存進工作區 |
+| POST | `/api/import?kind=vocab\|grammar\|materials\|auto&name=&lang=`（本文為檔案內容） | 匯入並存進工作區；`auto` 自動判斷類型（拖放） |
+| GET | `/api/today?lang=` | 今日任務（複習、對話、教材測驗、錯題）與等級、今日積分、連續天數 |
+| GET | `/api/progress?lang=` | 進度頁：升級條件 1–3、分技能積分、最近 14 天、主題、最近得分 |
+| POST | `/api/progress/assess` `{ lang }` | 立即檢查升級（每個單元結束後也會自動檢查） |
+| POST | `/api/difficulty/feedback` `{ lang, feedback: too_easy\|right\|too_hard }` | 前 5 課的難度回饋（±15） |
+| POST | `/api/passive` `{ lang, kind: reading\|listening, seconds }` | App 內閱讀／聆聽時間（每 50 分鐘 1 分，無法手動登記） |
+| POST | `/api/lessons/{id}/finish` `{ answers }` | 教材測驗結算：積分（每份教材一次）、難度與升級 |
+| GET / POST | `/api/conversations`（POST `{ lang, topic_id? }`） | 對話列表／開始一段對話（選題、目標字、AI 開場） |
+| GET | `/api/conversations/next?lang=&skip=` | 下一段對話的主題（不呼叫模型） |
+| GET | `/api/conversations/{id}` | 對話內容 |
+| POST | `/api/conversations/{id}/turns` `{ text }` | 一回合：換句話說＋下一個問題；最後一回合後鎖定 |
+| POST | `/api/conversations/{id}/finish` | 評估、積分、存成 `conversations/<lang>/*.md` |
+| POST / DELETE | `/api/user/avatar`（本文為圖片，≤ 2 MB） | 上傳或移除大頭貼（存在這台電腦，不進工作區） |
+| GET | `/api/avatars/{user}` | 大頭貼 |
 | POST | `/api/records/export` | 寫出 records/progress.csv、mistakes.csv |
 | GET | `/api/claude?fresh=` | 兩種連線方式的狀態（Claude Code 是否安裝、登入）、目前使用的引擎 |
 | POST | `/api/settings/claude` `{ key, model, effort }` | 存入或移除 API key、選擇模型 |
