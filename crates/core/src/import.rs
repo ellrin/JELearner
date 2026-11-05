@@ -314,7 +314,7 @@ pub fn lang_from_path(path: &Path, fallback: Lang) -> Lang {
 /// Re-read every file in the workspace into the database (idempotent).
 pub async fn sync_workspace(ws: &Workspace, db: &Db) -> ImportReport {
     let mut rep = ImportReport::default();
-    let fallback = ws.meta.languages.first().copied().unwrap_or(Lang::En);
+    let fallback = ws.profile.languages.first().copied().unwrap_or(Lang::En);
     for path in files_with_ext(&ws.vocab_dir(), &["csv", "tsv"]) {
         let origin = ws.relative(&path);
         let r = match std::fs::read_to_string(&path) {

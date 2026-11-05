@@ -9,6 +9,7 @@
 //! - [`lesson`] — article -> structured lesson -> Markdown (templates in files)
 //! - [`google`] — Gmail / Calendar traits, REST and in-memory implementations
 //! - [`report`] — weekly report, lesson confirmation, review scheduling
+//! - [`level`] — fine-grained levels and difficulty scores
 //! - [`catalog`] — local model catalog (for the Mac)
 
 pub mod catalog;
@@ -19,6 +20,7 @@ pub mod google;
 pub mod import;
 pub mod lang;
 pub mod lesson;
+pub mod level;
 pub mod news;
 pub mod provider;
 pub mod report;

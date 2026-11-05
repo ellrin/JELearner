@@ -24,7 +24,7 @@ use jl_core::google::{Calendar, GmailApi, GoogleCalendarApi, Mailer, MemoryCalen
 use jl_core::import::{self, ImportReport};
 use jl_core::claude_code::{self, ClaudeCodeProvider};
 use jl_core::provider::{ClaudeProvider, LlamaServerProvider, LlmProvider};
-use jl_core::workspace::Workspace;
+use jl_core::workspace::{Layout, MemberKind, Profile, Root, Workspace};
 pub use settings::{EngineKind, GoogleMode, Paths, Settings};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -32,6 +32,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
+/// The open workspace, before or after a user is chosen.
+pub struct OpenRoot {
+    pub root: Root,
+    pub demo: bool,
+}
+
+/// A user inside the open workspace: their files and their database.
 pub struct Loaded {
     pub ws: Workspace,
     pub db: Db,
@@ -42,6 +49,7 @@ pub struct Loaded {
 
 pub struct AppState {
     pub settings: RwLock<Settings>,
+    pub root: RwLock<Option<OpenRoot>>,
     pub loaded: RwLock<Option<Loaded>>,
     pub load_error: RwLock<Option<String>>,
     pub fetcher: Fetcher,
@@ -85,35 +93,110 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
-/// Database file for a workspace id.
-pub fn db_path(settings: &Settings, id: &str) -> PathBuf {
+/// Database file for a workspace and user.
+pub fn db_path(settings: &Settings, ws_id: &str, user: &str) -> PathBuf {
     let base = settings.app_dir.clone().unwrap_or_else(std::env::temp_dir);
-    base.join("data").join(id).join("learner.sqlite")
+    base.join("data").join(ws_id).join(user).join("learner.sqlite")
 }
 
-/// Open a workspace and its database, then read the workspace files in.
-pub async fn load_workspace(settings: &Settings, root: Option<PathBuf>, init: bool) -> Result<Loaded, String> {
-    let (root, demo) = match root.or_else(|| settings.workspace.clone()) {
+/// This user's own Claude Code sign-in folder (`CLAUDE_CONFIG_DIR`).
+pub fn claude_dir(settings: &Settings, ws_id: &str, user: &str) -> PathBuf {
+    let base = settings.app_dir.clone().unwrap_or_else(std::env::temp_dir);
+    base.join("claude").join(ws_id).join(user)
+}
+
+pub const DEMO_USER: &str = "demo";
+
+/// Open (or with `init`, create or complete) a workspace. Without a path,
+/// the configured workspace or the demo workspace.
+pub fn open_workspace(settings: &Settings, path: Option<PathBuf>, init: bool) -> Result<OpenRoot, String> {
+    let (path, demo) = match path.or_else(|| settings.workspace.clone()) {
         Some(r) => (r, false),
         None => {
             let base = settings.app_dir.clone().ok_or("系統沒有設定資料夾")?;
             (base.join("demo-workspace"), true)
         }
     };
-    let ws = if init || demo {
-        Workspace::init(&root, &settings.paths.template)
-    } else {
-        Workspace::open(&root)
+    let template = &settings.paths.template;
+    let mut root = if init || demo { Root::init(&path, template) } else { Root::open(&path) }.map_err(|e| e.to_string())?;
+    if demo && root.list_profiles().is_empty() && root.layout() == Layout::V2 {
+        let mut p = Profile::new(DEMO_USER, "示範使用者");
+        p.languages = vec![jl_core::Lang::En, jl_core::Lang::Ja];
+        root.create_profile(template, p).map_err(|e| e.to_string())?;
     }
-    .map_err(|e| e.to_string())?;
-    let path = db_path(settings, &ws.meta.id);
+    Ok(OpenRoot { root, demo })
+}
+
+/// Enter as a user: open their database and read their files in.
+pub async fn enter_user(settings: &Settings, open: &OpenRoot, id: &str) -> Result<Loaded, String> {
+    let ws = open.root.user(id).map_err(|e| e.to_string())?;
+    let path = db_path(settings, &ws.meta.id, id);
+    // First version: one database per workspace. The owner keeps it.
+    if !path.exists() && is_owner(&open.root, id) {
+        let base = settings.app_dir.clone().unwrap_or_else(std::env::temp_dir);
+        let legacy = base.join("data").join(&ws.meta.id).join("learner.sqlite");
+        if legacy.exists() {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+            for ext in ["", "-wal", "-shm"] {
+                let from = PathBuf::from(format!("{}{ext}", legacy.display()));
+                if from.exists() {
+                    std::fs::rename(&from, format!("{}{ext}", path.display())).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+    }
     let db = Db::open(&path).await.map_err(|e| format!("無法開啟資料庫 {}：{e}", path.display()))?;
     let mut rep = import::sync_workspace(&ws, &db).await;
     match import::restore_records(&ws, &db).await {
         Ok(r) => rep.merge(r),
         Err(e) => rep.warnings.push(format!("records: {e}")),
     }
-    Ok(Loaded { ws, db, demo, db_path: path, import: rep })
+    Ok(Loaded { ws, db, demo: open.demo, db_path: path, import: rep })
+}
+
+/// The workspace owner (or first admin) may inherit first-version settings
+/// such as the single API key and database.
+pub fn is_owner(root: &Root, id: &str) -> bool {
+    root.meta.members.iter().any(|m| m.id == id && m.kind == MemberKind::Owner) || root.meta.admins.first().is_some_and(|a| a == id)
+}
+
+/// The user to enter automatically: the one this computer used last in this
+/// workspace, or the only user there is.
+pub fn default_user(settings: &Settings, root: &Root) -> Option<String> {
+    let users = root.list_profiles();
+    settings
+        .active_users
+        .get(&root.meta.id)
+        .filter(|id| users.iter().any(|p| &p.id == *id))
+        .cloned()
+        .or_else(|| (users.len() == 1).then(|| users[0].id.clone()))
+}
+
+/// Whose Claude: the chosen user's key and sign-in folder.
+pub async fn claude_identity(s: &Shared) -> (Option<secrets::Who>, claude_code::Cli) {
+    let st = s.settings.read().await;
+    let bin = st.claude_bin.clone();
+    let root = s.root.read().await;
+    let loaded = s.loaded.read().await;
+    match (root.as_ref(), loaded.as_ref()) {
+        (Some(r), Some(l)) => {
+            let ws_id = l.ws.meta.id.clone();
+            let user = l.ws.profile.id.clone();
+            let cli = claude_code::Cli { bin, config_dir: Some(claude_dir(&st, &ws_id, &user)) };
+            let legacy = is_owner(&r.root, &user);
+            (Some(secrets::Who { workspace: ws_id, user, legacy }), cli)
+        }
+        // No user chosen: nobody's sign-in may be used.
+        _ => (None, claude_code::Cli { bin, config_dir: st.app_dir.as_ref().map(|d| d.join("claude").join("_nobody")) }),
+    }
+}
+
+pub async fn api_key(s: &Shared) -> Option<(String, secrets::KeySource)> {
+    let (who, _) = claude_identity(s).await;
+    let st = s.settings.read().await;
+    secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref(), who.as_ref())
 }
 
 /// The engine a request will actually use.
@@ -140,12 +223,13 @@ const NO_CLAUDE: &str = "Claude 還沒連上：到「設定 → Claude」用瀏�
 /// Pick the engine from the settings: `auto` prefers the subscription when
 /// Claude Code is signed in, then an API key.
 pub async fn resolve_engine(s: &Shared, fresh: bool) -> Result<Resolved, String> {
-    let (kind, bin, has_key) = {
-        let st = s.settings.read().await;
-        let has_key = secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref()).is_some();
-        (st.engine, st.claude_bin.clone(), has_key)
-    };
-    let sub_ready = || async { s.cc.get(bin.as_deref(), fresh).await.ready };
+    let kind = s.settings.read().await.engine;
+    let has_key = api_key(s).await.is_some();
+    let (who, cli) = claude_identity(s).await;
+    if who.is_none() && kind != EngineKind::LlamaServer && s.settings.read().await.claude_api_key.is_none() && !has_key {
+        return Err("請先選擇使用者".into());
+    }
+    let sub_ready = || async { who.is_some() && s.cc.get(&cli, fresh).await.ready };
     match kind {
         EngineKind::LlamaServer => Ok(Resolved::LlamaServer),
         EngineKind::Api if has_key => Ok(Resolved::Api),
@@ -164,12 +248,19 @@ pub async fn provider(s: &Shared) -> Result<Arc<dyn LlmProvider>, ApiError> {
         return Ok(p.clone());
     }
     let which = resolve_engine(s, false).await.map_err(unavailable)?;
+    provider_for(s, which).await
+}
+
+/// A provider for one specific engine, as the chosen user.
+pub async fn provider_for(s: &Shared, which: Resolved) -> Result<Arc<dyn LlmProvider>, ApiError> {
+    let (_, cli) = claude_identity(s).await;
+    let key = api_key(s).await;
     let st = s.settings.read().await;
     Ok(match which {
         Resolved::LlamaServer => Arc::new(LlamaServerProvider::new(st.llama.clone())),
-        Resolved::Subscription => Arc::new(ClaudeCodeProvider::new(st.claude_bin.clone(), st.claude.model.clone(), st.claude.effort.clone())),
+        Resolved::Subscription => Arc::new(ClaudeCodeProvider::new(cli, st.claude.model.clone(), st.claude.effort.clone())),
         Resolved::Api => {
-            let (key, _) = secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref()).ok_or_else(|| unavailable(NO_CLAUDE))?;
+            let (key, _) = key.ok_or_else(|| unavailable(NO_CLAUDE))?;
             Arc::new(ClaudeProvider::new(st.claude.clone(), key))
         }
     })
@@ -198,12 +289,25 @@ pub async fn build_state(settings: Settings, opts: Options) -> Shared {
         }
     };
     let fetcher = Fetcher::new(settings.user_agent.clone(), Duration::from_millis(settings.crawler_delay_ms));
-    let (loaded, err) = match load_workspace(&settings, None, false).await {
-        Ok(l) => (Some(l), None),
-        Err(e) => (None, Some(e)),
+    let (root, loaded, err) = match open_workspace(&settings, None, false) {
+        Ok(open) => {
+            let mut loaded = None;
+            let mut err = None;
+            if open.root.layout() == Layout::V2
+                && let Some(id) = default_user(&settings, &open.root)
+            {
+                match enter_user(&settings, &open, &id).await {
+                    Ok(l) => loaded = Some(l),
+                    Err(e) => err = Some(e),
+                }
+            }
+            (Some(open), loaded, err)
+        }
+        Err(e) => (None, None, Some(e)),
     };
     Arc::new(AppState {
         settings: RwLock::new(settings),
+        root: RwLock::new(root),
         loaded: RwLock::new(loaded),
         load_error: RwLock::new(err),
         fetcher,

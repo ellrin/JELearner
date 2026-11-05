@@ -93,6 +93,8 @@ pub struct Settings {
     /// Path of the Claude Code CLI when it is not on the usual paths
     /// (`JELEARNER_CLAUDE_BIN` or `[claude] bin`); tests point it at a fake.
     pub claude_bin: Option<PathBuf>,
+    /// The user this computer last entered, per workspace id.
+    pub active_users: std::collections::BTreeMap<String, String>,
     pub llama: LlamaServerConfig,
     pub google: GoogleSettings,
     pub crawler_delay_ms: u64,
@@ -103,6 +105,8 @@ pub struct Settings {
 #[derive(Deserialize, Default)]
 struct ConfigFile {
     workspace_path: Option<PathBuf>,
+    #[serde(default)]
+    active_users: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     engine: EngineSection,
     #[serde(default)]
@@ -199,6 +203,7 @@ impl Settings {
             claude_api_key: None,
             use_keychain: env("JELEARNER_NO_KEYCHAIN").is_none(),
             claude_bin: env("JELEARNER_CLAUDE_BIN").map(PathBuf::from).or(cfg.claude.bin),
+            active_users: cfg.active_users,
             llama: LlamaServerConfig {
                 url: env("JELEARNER_LLAMA_URL").or(cfg.llama.url).unwrap_or_else(|| "http://127.0.0.1:8080/v1".into()),
                 model: env("JELEARNER_LLAMA_MODEL").or(cfg.llama.model).unwrap_or_else(|| catalog.defaults.brain.clone()),
@@ -222,7 +227,8 @@ impl Settings {
     /// `app_dir/config.toml`.
     pub fn for_tests(paths: Paths, app_dir: PathBuf) -> Settings {
         let catalog = Catalog::bundled();
-        let workspace = read_config(Some(&app_dir)).workspace_path;
+        let cfg = read_config(Some(&app_dir));
+        let workspace = cfg.workspace_path;
         Settings {
             paths,
             app_dir: Some(app_dir),
@@ -238,6 +244,7 @@ impl Settings {
             use_keychain: false,
             // Never the real CLI in tests; a test that wants one sets a fake.
             claude_bin: Some(PathBuf::from("/nonexistent/claude")),
+            active_users: cfg.active_users,
             llama: LlamaServerConfig { url: "http://127.0.0.1:9/v1".into(), model: catalog.defaults.brain.clone() },
             google: GoogleSettings {
                 mode: GoogleMode::Mock,

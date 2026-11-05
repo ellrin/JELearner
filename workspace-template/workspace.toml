@@ -1,13 +1,6 @@
-# JELearner private workspace. This file is yours; edit freely.
-# `id` names this workspace's local database; it is filled in on first use.
+# JELearner workspace. `id` names the local databases; it is filled in on
+# first use — keep it stable. Members and admins are managed in the app
+# (設定 → 使用者); each user's own settings are in profiles/<id>/profile.toml.
 id = ""
-# owner = "你的名字"
-languages = ["en", "ja"]
-native_language = "zh-TW"
-timezone = "Asia/Taipei"
-# Weekly reports and reminders go here (only when you set it).
-# report_email = "you@example.com"
-
-[levels]
-en = "B2"
-ja = "N3"
+name = ""
+admins = []

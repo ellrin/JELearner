@@ -131,6 +131,16 @@ async function refreshStatus() {
     return;
   }
   const s = state.status;
+  applyUser();
+  // Another user or language: the review queue and selections belong to them.
+  const who = `${s.user?.id ?? ""}/${state.lang}`;
+  if (state.who !== who) {
+    state.who = who;
+    state.review = { items: [], i: 0, shown: false, done: 0 };
+    state.picked = null;
+    state.lessonId = null;
+    updatePicked();
+  }
   const st = s.stats?.[state.lang] ?? {};
   const set = (id, v, hot) => { const n = $(id); n.textContent = v ? String(v) : ""; n.classList.toggle("hot", !!hot); };
   set("#cDue", st.due, st.due > 0);
@@ -144,12 +154,22 @@ async function refreshStatus() {
     const f = $("#wsFoot");
     f.append(el("b", null, s.demo ? "示範工作區" : "私人工作區"), el("br"), document.createTextNode(s.workspace));
   }
-  // Level options for the generator.
+  // Level choices for the generator: the steps around the learner's
+  // current difficulty (one major level below and above).
   const lv = $("#genLevel");
-  const opts = s.level_options?.[state.lang] ?? [];
-  const cur = s.levels?.[state.lang];
   lv.innerHTML = "";
-  for (const o of opts) { const op = el("option", null, o); op.value = o; if (o === cur) op.selected = true; lv.append(op); }
+  const cur = s.user?.levels?.[state.lang];
+  const majors = (s.level_options?.[state.lang] ?? []);
+  const at = Math.max(0, majors.findIndex((m) => m.major === cur?.major));
+  for (const m of majors.slice(Math.max(0, at - 1), at + 2)) {
+    for (let i = 1; i <= m.steps; i++) {
+      const label = `${m.major}-${i}`;
+      const op = el("option", null, label === cur?.difficulty_label ? `${label}（目前）` : label);
+      op.value = label;
+      if (label === cur?.difficulty_label) op.selected = true;
+      lv.append(op);
+    }
+  }
 
   const sb = $("#statusbar");
   sb.innerHTML = "";
@@ -157,7 +177,7 @@ async function refreshStatus() {
   const eng = el("button", "eng", null);
   eng.append(dot, document.createTextNode(s.engine_ready ? `${s.engine_label}・${s.engine}` : "Claude 未連線"));
   eng.title = s.engine_error ?? "切換引擎：設定 → Claude";
-  eng.onclick = () => openSettings(2);
+  eng.onclick = () => openSettings(3);
   sb.append(eng, el("span", null, `Google：${s.google === "mock" ? "模擬" : s.google}`), el("span", "grow"));
   if (s.import?.warnings?.length) {
     const w = el("span", null, `匯入警告 ${s.import.warnings.length}`);
@@ -172,9 +192,10 @@ function greet() {
   const s = state.status;
   if (!s) return;
   const st = s.stats?.[state.lang] ?? {};
-  const name = s.owner ? `${s.owner}，` : "";
+  if (!s.user) return say("請先選擇使用者，或新增一位。");
+  const name = s.demo ? "" : `${s.user.name}，`;
   if (s.demo) return say(`${name}歡迎！目前用的是示範資料。到「設定 → 工作區」連接你的私人 repo（例如 JELearner-private），生字和錯題才會存到你自己的地方。`);
-  if (!s.engine_ready) return say(`${name}Claude 還沒連上。到「設定 → Claude」用瀏覽器登入你的 Claude 帳號（用訂閱額度），或貼上 API key。複習和錯題本可以先用。`);
+  if (!s.engine_ready) return say(`${name}你的 Claude 還沒連上。到「設定 → Claude」用瀏覽器登入你自己的 Claude 帳號（用訂閱額度），或貼上 API key。複習和錯題本可以先用。`);
   const parts = [];
   if (st.due) parts.push(`${st.due} 張${langLabel(state.lang)}卡片要複習`);
   if (st.open_mistakes) parts.push(`${st.open_mistakes} 題錯題還沒訂正`);
@@ -182,12 +203,105 @@ function greet() {
 }
 
 // ── language & views ───────────────────────────────────
-segment($("#lang"), state.lang, (v) => {
+function setLang(v) {
   state.lang = v; store.set("jl.lang", v);
   state.picked = null; state.lessonId = null; state.review = { items: [], i: 0, shown: false, done: 0 };
   updatePicked();
   refreshStatus().then(() => { greet(); render(); });
-});
+}
+segment($("#lang"), state.lang, setLang);
+
+// ── the user ───────────────────────────────────────────
+// Top bar: who is studying, and only the languages they chose.
+function applyUser() {
+  const s = state.status;
+  const u = s?.user;
+  $("#userDot").style.background = u?.color ?? "var(--faint)";
+  $("#userName").textContent = u ? u.name : (s?.layout === "v1" ? "需要轉換工作區" : "選擇使用者");
+  const langs = u?.languages ?? ["en", "ja"];
+  if (!langs.includes(state.lang)) { state.lang = langs[0]; store.set("jl.lang", state.lang); }
+  $$("#lang button").forEach((b) => { b.hidden = !langs.includes(b.dataset.v); b.setAttribute("aria-pressed", String(b.dataset.v === state.lang)); });
+  $("#lang").hidden = langs.length < 2;
+}
+
+const userMenu = $("#userMenu");
+$("#actUser").onclick = (e) => {
+  e.stopPropagation();
+  if (!userMenu.hidden) { userMenu.hidden = true; return; }
+  const s = state.status;
+  userMenu.innerHTML = "";
+  if (s?.layout === "v1") {
+    const b = el("button", null, "轉成多使用者結構…");
+    b.onclick = () => { userMenu.hidden = true; startWizard("migrate"); };
+    userMenu.append(b);
+  } else {
+    for (const u of s?.users ?? []) {
+      const b = el("button");
+      const dot = el("span", "dot"); dot.style.background = u.color;
+      b.append(dot, document.createTextNode(u.name));
+      if (u.admin) b.append(el("span", "tag", "管理員"));
+      if (u.id === s.user?.id) b.setAttribute("aria-current", "true");
+      b.onclick = () => { userMenu.hidden = true; switchUser(u.id); };
+      userMenu.append(b);
+    }
+    userMenu.append(el("div", "sep"));
+    const add = el("button", null, "新增使用者…");
+    add.onclick = () => { userMenu.hidden = true; startWizard("add"); };
+    userMenu.append(add);
+    if (s?.user) {
+      const me = el("button", null, "我的設定…");
+      me.onclick = () => { userMenu.hidden = true; openSettings(1); };
+      userMenu.append(me);
+    }
+  }
+  const r = $("#actUser").getBoundingClientRect();
+  userMenu.style.left = `${r.left}px`;
+  userMenu.style.top = `${r.bottom + 4}px`;
+  userMenu.hidden = false;
+};
+document.addEventListener("click", (e) => { if (!userMenu.hidden && !userMenu.contains(e.target)) userMenu.hidden = true; });
+
+async function switchUser(id) {
+  try {
+    await api("/api/users/select", { id });
+    state.picked = null; state.lessonId = null; state.review = { items: [], i: 0, shown: false, done: 0 };
+    updatePicked();
+    await refreshStatus();
+    greet();
+    render();
+  } catch (e) { flash(e.message, true); }
+}
+
+// Language pickers (wizard and settings): a checkbox per language and the
+// self-assessed major level with a one-line description.
+function langPicker(box, user, showProgress) {
+  box.innerHTML = "";
+  const rows = {};
+  for (const code of ["en", "ja"]) {
+    const row = el("div", "lang-row");
+    const on = el("input"); on.type = "checkbox"; on.checked = user ? (user.languages ?? []).includes(code) : code === "en";
+    const name = el("label", "lang-name"); name.append(on, document.createTextNode(code === "en" ? "英文（CEFR）" : "日文（JLPT）"));
+    const sel = el("select");
+    const hint = el("div", "note");
+    const cur = user?.levels?.[code];
+    for (const m of state.status?.level_options?.[code] ?? []) {
+      const o = el("option", null, `${m.major}　${m.hint}`); o.value = m.major;
+      if (cur ? m.major === cur.major : m.major === (code === "en" ? "B1" : "N5")) o.selected = true;
+      sel.append(o);
+    }
+    if (showProgress && cur) hint.textContent = `等級 ${cur.level}・教材難度 ${cur.difficulty_label}（${cur.steps} 小階制）`;
+    sel.disabled = !on.checked;
+    on.onchange = () => (sel.disabled = !on.checked);
+    row.append(name, sel, hint);
+    box.append(row);
+    rows[code] = { on, sel };
+  }
+  return () => {
+    const languages = Object.keys(rows).filter((c) => rows[c].on.checked);
+    const majors = Object.fromEntries(languages.map((c) => [c, rows[c].sel.value]));
+    return { languages, majors };
+  };
+}
 
 $$("#views button").forEach((b) => (b.onclick = () => { state.view = b.dataset.view; store.set("jl.view", state.view); state.query = ""; render(); }));
 
@@ -664,7 +778,7 @@ async function renderSecretary(page) {
   info.append(el("div", "note", mock
     ? "Gmail 與 Google 日曆還沒串接（OAuth 在下一階段），信件和行程會放在下面的「模擬寄件匣」，格式與真正寄出的一樣。"
     : "信件從你的 Gmail 寄出，行程寫入你的 Google 日曆。"));
-  info.append(el("div", "note", `週報信箱：${g.report_email ?? "未設定（設定 → 個人）"}`));
+  info.append(el("div", "note", `週報信箱：${g.report_email ?? "未設定（設定 → 使用者）"}`));
   page.append(info);
 
   const rep = el("div", "card");
@@ -849,7 +963,7 @@ function openSettings(step) {
 function showStep(step) {
   $$("#setTabs button").forEach((b) => b.setAttribute("aria-selected", String(Number(b.dataset.step) === step)));
   $$(".wizard .step", dlg).forEach((s) => (s.hidden = Number(s.dataset.step) !== step));
-  [loadWorkspaceStep, loadMeStep, loadClaudeStep, loadModelsStep, () => {}][step]();
+  [loadWorkspaceStep, loadUserStep, loadLangsStep, loadClaudeStep, loadModelsStep, () => {}][step]();
 }
 $$("#setTabs button").forEach((b) => (b.onclick = () => showStep(Number(b.dataset.step))));
 
@@ -857,7 +971,7 @@ let wsMode = "open";
 function setWsMode(m) {
   wsMode = m;
   segment($("#setWsMode"), m, setWsMode);
-  $$(".step[data-step='0'] .form[data-mode]").forEach((f) => (f.hidden = f.dataset.mode !== m));
+  $$("#dlgSettings .step[data-step='0'] .form[data-mode]").forEach((f) => (f.hidden = f.dataset.mode !== m));
 }
 setWsMode("open");
 
@@ -887,11 +1001,14 @@ async function loadWorkspaceStep() {
 
 const wsOut = (msg, err) => { const o = $("#setWsOut"); o.className = `note${err ? " err" : " ok"}`; o.textContent = msg; };
 async function afterWorkspace(r) {
-  wsOut(`已開啟 ${r.workspace}：讀入單字 ${r.import.words}、文法 ${r.import.grammar}、教材 ${r.import.lessons}${r.git ? `；${r.git}` : ""}${r.git_error ? `；Git：${r.git_error}` : ""}`, !!r.git_error);
+  const imp = r.import ? `：讀入單字 ${r.import.words}、文法 ${r.import.grammar}、教材 ${r.import.lessons}` : "";
+  wsOut(`已開啟 ${r.workspace}${imp}${r.git ? `；${r.git}` : ""}${r.git_error ? `；Git：${r.git_error}` : ""}`, !!r.git_error);
   await refreshStatus();
   loadWorkspaceStep();
   greet();
   render();
+  // A new or first-version workspace needs a user (or a migration) next.
+  if (!state.status?.user) { dlg.close(); checkStart(); }
 }
 $("#setOpen").onclick = () => busy($("#setOpen"), async () => {
   try { await afterWorkspace(await api("/api/setup/workspace", { path: $("#setOpenPath").value, init: $("#setOpenInit").checked })); } catch (e) { wsOut(e.message, true); }
@@ -916,25 +1033,58 @@ $("#setReindex").onclick = () => busy($("#setReindex"), async () => {
   catch (e) { wsOut(e.message, true); }
 });
 
-function fillLevels(sel, lang) {
-  sel.innerHTML = "";
-  for (const o of state.status?.level_options?.[lang] ?? []) {
-    const op = el("option", null, o); op.value = o;
-    if (o === state.status?.levels?.[lang]) op.selected = true;
-    sel.append(op);
+// 02 使用者
+function loadUserStep() {
+  const s = state.status;
+  const u = s?.user;
+  $("#setName").value = u?.name ?? "";
+  $("#setColor").value = u?.color ?? "#ff6b35";
+  $("#setEmail").value = u?.report_email ?? "";
+  const ul = $("#setMembers");
+  ul.innerHTML = "";
+  for (const m of s?.users ?? []) {
+    const li = el("li");
+    const dot = el("span", "dot"); dot.style.background = m.color;
+    li.append(dot, el("span", "n", m.name), el("span", "tag", m.kind === "owner" ? "擁有者" : "家庭成員"));
+    if (m.admin) li.append(el("span", "tag acc", "管理員"));
+    if (m.id === u?.id) li.append(el("span", "tag ok", "目前"));
+    else { const b = el("button", "ghost", "切換"); b.onclick = async () => { await switchUser(m.id); loadUserStep(); }; li.append(b); }
+    ul.append(li);
   }
 }
-function loadMeStep() {
-  $("#setOwner").value = state.status?.owner ?? "";
-  $("#setEmail").value = state.status?.report_email ?? "";
-  fillLevels($("#setLvEn"), "en");
-  fillLevels($("#setLvJa"), "ja");
-}
-$("#setSaveMe").onclick = () => busy($("#setSaveMe"), async () => {
+$("#setSaveUser").onclick = () => busy($("#setSaveUser"), async () => {
   try {
-    await api("/api/workspace", { owner: $("#setOwner").value, report_email: $("#setEmail").value, levels: { en: $("#setLvEn").value, ja: $("#setLvJa").value } }, "PUT");
-    flash("已儲存到 workspace.toml");
-    await refreshStatus();
+    await api("/api/user", { name: $("#setName").value, color: $("#setColor").value, report_email: $("#setEmail").value }, "PUT");
+    flash("已儲存");
+    await refreshStatus(); loadUserStep(); greet();
+  } catch (e) { flash(e.message, true); }
+});
+$("#setAddUser").onclick = () => { dlg.close(); startWizard("add"); };
+
+// 03 學習語言
+let readSetLangs = () => ({});
+function loadLangsStep() {
+  const u = state.status?.user;
+  readSetLangs = langPicker($("#setLangs"), u, true);
+  $("#setDaily").value = u?.daily_minutes ?? 30;
+  $("#setSecs").value = u?.conversation?.seconds_per_turn ?? 15;
+  $("#setTurns").value = u?.conversation?.turns ?? 20;
+  $("#setRatio").value = Math.round((u?.conversation?.interest_ratio ?? 0.6) * 100);
+  $("#setRatio").oninput();
+}
+$("#setRatio").oninput = () => { const v = Number($("#setRatio").value); $("#setRatioOut").textContent = `興趣 ${v}%・通識 ${100 - v}%`; };
+$("#setSaveLangs").onclick = () => busy($("#setSaveLangs"), async () => {
+  try {
+    const { languages, majors } = readSetLangs();
+    await api("/api/user", {
+      languages, majors,
+      daily_minutes: Number($("#setDaily").value),
+      seconds_per_turn: Number($("#setSecs").value),
+      turns: Number($("#setTurns").value),
+      interest_ratio: Number($("#setRatio").value) / 100,
+    }, "PUT");
+    flash("已儲存");
+    await refreshStatus(); loadLangsStep(); render();
   } catch (e) { flash(e.message, true); }
 });
 
@@ -943,7 +1093,7 @@ function setVia(v) {
   via = v;
   store.set("jl.via", v);
   segment($("#setVia"), v, setVia);
-  $$(".step[data-step='2'] .via").forEach((n) => (n.hidden = n.dataset.via !== v));
+  $$("#dlgSettings .step[data-step='3'] .via").forEach((n) => (n.hidden = n.dataset.via !== v));
 }
 
 async function loadClaudeStep(fresh = false) {
@@ -1057,5 +1207,5 @@ updatePicked();
 refreshStatus().then(() => {
   greet();
   render();
-  if (state.status?.demo && !store.get("jl.welcomed", false)) { store.set("jl.welcomed", true); openSettings(0); }
+  checkStart();
 });

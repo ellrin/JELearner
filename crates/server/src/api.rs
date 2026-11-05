@@ -1,7 +1,7 @@
 //! JSON API. Every handler is a plain async function over [`Shared`], so the
 //! same code can later sit behind Tauri commands.
 
-use crate::{bad, fail, git, load_workspace, provider, resolve_engine, secrets, settings, unavailable, ApiError, Loaded, Resolved, Shared};
+use crate::{api_key, bad, claude_identity, default_user, enter_user, fail, git, open_workspace, provider, provider_for, resolve_engine, secrets, settings, unavailable, ApiError, Loaded, Resolved, Shared};
 use axum::extract::{Path as AxPath, Query, State};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -13,7 +13,8 @@ use jl_core::import::{self, ImportReport};
 use jl_core::lesson::{self, LessonInput, Templates};
 use jl_core::news::{self, Source};
 use jl_core::report;
-use jl_core::workspace::{slug, Workspace};
+use jl_core::level;
+use jl_core::workspace::{slug, LangProfile, Layout, Profile, Root, Workspace};
 use jl_core::Lang;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -28,7 +29,10 @@ const BUNDLED_SOURCES: &str = include_str!("../../../workspace-template/sources.
 pub fn routes(web: PathBuf) -> Router<Shared> {
     Router::new()
         .route("/api/status", get(status))
-        .route("/api/workspace", put(update_workspace))
+        .route("/api/user", put(update_user))
+        .route("/api/users", post(create_user))
+        .route("/api/users/select", post(select_user))
+        .route("/api/workspace/migrate", post(migrate_workspace))
         .route("/api/workspace/reindex", post(reindex))
         .route("/api/setup/workspace", post(setup_workspace))
         .route("/api/setup/new", post(setup_new))
@@ -70,14 +74,24 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
 
 // ── helpers ─────────────────────────────────────────────
 
-/// The loaded workspace, or 503 with the reason it is not loaded.
+/// The chosen user's workspace, or 503 with the reason there is none.
 async fn ws(s: &Shared) -> Result<RwLockReadGuard<'_, Loaded>, ApiError> {
     let g = s.loaded.read().await;
     if g.is_none() {
-        let why = s.load_error.read().await.clone().unwrap_or_else(|| "尚未選擇工作區".into());
+        let why = match (s.load_error.read().await.clone(), s.root.read().await.as_ref()) {
+            (Some(e), _) => e,
+            (None, Some(r)) if r.root.layout() == Layout::V1 => "這個工作區需要先轉成多使用者結構".into(),
+            (None, Some(_)) => "請先選擇使用者".into(),
+            (None, None) => "尚未選擇工作區".into(),
+        };
         return Err(unavailable(why));
     }
     Ok(RwLockReadGuard::map(g, |o| o.as_ref().unwrap()))
+}
+
+/// The open workspace folder (with or without a chosen user).
+async fn root_path(s: &Shared) -> Result<PathBuf, ApiError> {
+    s.root.read().await.as_ref().map(|r| r.root.root.clone()).ok_or_else(|| unavailable("尚未選擇工作區"))
 }
 
 #[derive(Deserialize, Default)]
@@ -170,16 +184,29 @@ fn remove_csv_rows(path: &Path, key: &[&str]) -> Result<usize, ApiError> {
 // ── status & workspace ──────────────────────────────────
 
 #[derive(Serialize)]
+struct UserCard {
+    id: String,
+    name: String,
+    color: String,
+    kind: String,
+    admin: bool,
+}
+
+#[derive(Serialize)]
 struct Status {
     workspace: Option<String>,
+    workspace_name: Option<String>,
     demo: bool,
     error: Option<String>,
+    /// `v1` (needs migration) or `v2`.
+    layout: Option<Layout>,
+    users: Vec<UserCard>,
+    /// The chosen user (their profile.toml), when there is one.
+    user: Option<Value>,
+    admin: bool,
     db: Option<String>,
-    owner: Option<String>,
-    languages: Vec<Lang>,
-    levels: Value,
+    /// Majors per language with a self-assessment hint.
     level_options: Value,
-    report_email: Option<String>,
     engine: String,
     engine_ready: bool,
     /// 「Claude 訂閱」「Claude API」「本機模型」
@@ -189,6 +216,33 @@ struct Status {
     import: Option<ImportReport>,
     stats: Value,
     prompts_overridden: Vec<String>,
+}
+
+fn level_options() -> Value {
+    json!(Lang::ALL
+        .iter()
+        .map(|&l| (
+            l.code(),
+            level::majors(l).iter().map(|m| json!({ "major": m, "hint": level::self_assessment_hint(l, m), "steps": level::steps_in(l, m) })).collect::<Vec<_>>()
+        ))
+        .collect::<std::collections::BTreeMap<_, _>>())
+}
+
+/// profile.toml plus the levels spelled out for the UI.
+fn user_json(ws: &Workspace) -> Value {
+    let p = &ws.profile;
+    let mut v = serde_json::to_value(p).unwrap_or_default();
+    let mut langs = serde_json::Map::new();
+    for &l in &p.languages {
+        let lp = p.lang(l);
+        let d = level::from_score(l, lp.difficulty);
+        langs.insert(
+            l.code().into(),
+            json!({ "level": lp.level, "difficulty": lp.difficulty, "difficulty_label": d.label, "major": d.major, "step": d.step, "steps": d.steps, "early_feedback_left": lp.early_feedback_left }),
+        );
+    }
+    v["levels"] = Value::Object(langs);
+    v
 }
 
 async fn status(State(s): State<Shared>) -> R<Status> {
@@ -205,88 +259,273 @@ async fn status(State(s): State<Shared>) -> R<Status> {
             }
         }
     };
-    let level_options = json!(Lang::ALL.iter().map(|l| (l.code(), l.levels())).collect::<std::collections::BTreeMap<_, _>>());
     let error = s.load_error.read().await.clone();
-    let guard = s.loaded.read().await;
-    let Some(l) = guard.as_ref() else {
-        return Ok(Json(Status {
-            workspace: None,
-            demo: false,
-            error,
-            db: None,
-            owner: None,
-            languages: Lang::ALL.to_vec(),
-            levels: json!({}),
-            level_options,
-            report_email: None,
-            engine,
-            engine_ready,
-            engine_label,
-            engine_error,
-            google: s.mailer.mode(),
-            import: None,
-            stats: json!({}),
-            prompts_overridden: vec![],
-        }));
+    let root = s.root.read().await;
+    let (workspace, workspace_name, demo, layout, users) = match root.as_ref() {
+        Some(r) => (
+            Some(r.root.root.display().to_string()),
+            Some(r.root.meta.name.clone()).filter(|n| !n.is_empty()),
+            r.demo,
+            Some(r.root.layout()),
+            r.root
+                .list_profiles()
+                .into_iter()
+                .map(|p| UserCard {
+                    kind: r.root.meta.members.iter().find(|m| m.id == p.id).map(|m| format!("{:?}", m.kind).to_lowercase()).unwrap_or_else(|| "household".into()),
+                    admin: r.root.is_admin(&p.id),
+                    id: p.id,
+                    name: p.name,
+                    color: p.color,
+                })
+                .collect(),
+        ),
+        None => (None, None, false, None, vec![]),
     };
+    let admin_of = |id: &str| root.as_ref().is_some_and(|r| r.root.is_admin(id));
+    let guard = s.loaded.read().await;
+    let mut out = Status {
+        workspace,
+        workspace_name,
+        demo,
+        error,
+        layout,
+        users,
+        user: None,
+        admin: false,
+        db: None,
+        level_options: level_options(),
+        engine,
+        engine_ready,
+        engine_label,
+        engine_error,
+        google: s.mailer.mode(),
+        import: None,
+        stats: json!({}),
+        prompts_overridden: vec![],
+    };
+    let Some(l) = guard.as_ref() else { return Ok(Json(out)) };
     let now = Utc::now();
     let mut stats = serde_json::Map::new();
     for lang in Lang::ALL {
         let st = l.db.stats(Some(lang), now - Duration::days(7), now).await?;
         stats.insert(lang.code().into(), serde_json::to_value(st).unwrap_or_default());
     }
-    let levels = json!(Lang::ALL.iter().map(|&x| (x.code(), l.ws.meta.level(x))).collect::<std::collections::BTreeMap<_, _>>());
-    Ok(Json(Status {
-        workspace: Some(l.ws.root.display().to_string()),
-        demo: l.demo,
-        error,
-        db: Some(l.db_path.display().to_string()),
-        owner: l.ws.meta.owner.clone(),
-        languages: l.ws.meta.languages.clone(),
-        levels,
-        level_options,
-        report_email: l.ws.meta.report_email.clone(),
-        engine,
-        engine_ready,
-        engine_label,
-        engine_error,
-        google: s.mailer.mode(),
-        import: Some(l.import.clone()),
-        stats: Value::Object(stats),
-        prompts_overridden: Templates::load(Some(&l.ws.prompts_dir())).overridden,
-    }))
+    out.user = Some(user_json(&l.ws));
+    out.admin = admin_of(&l.ws.profile.id);
+    out.db = Some(l.db_path.display().to_string());
+    out.import = Some(l.import.clone());
+    out.stats = Value::Object(stats);
+    out.prompts_overridden = Templates::load(Some(&l.ws.prompts_dir())).overridden;
+    Ok(Json(out))
+}
+
+// ── users ───────────────────────────────────────────────
+
+/// Enter as a user and remember the choice for this computer.
+async fn select_user_inner(s: &Shared, id: &str) -> Result<Value, ApiError> {
+    let st = s.settings.read().await.clone();
+    let loaded = {
+        let root = s.root.read().await;
+        let open = root.as_ref().ok_or_else(|| unavailable("尚未選擇工作區"))?;
+        if open.root.layout() == Layout::V1 {
+            return Err(bad("這個工作區需要先轉成多使用者結構"));
+        }
+        enter_user(&st, open, id).await.map_err(bad)?
+    };
+    let ws_id = loaded.ws.meta.id.clone();
+    if let Some(dir) = &st.app_dir {
+        settings::write_config_value(dir, Some("active_users"), &ws_id, toml::Value::String(id.into())).map_err(fail)?;
+    }
+    s.settings.write().await.active_users.insert(ws_id, id.into());
+    let report = loaded.import.clone();
+    let user = user_json(&loaded.ws);
+    *s.loaded.write().await = Some(loaded);
+    *s.load_error.write().await = None;
+    Ok(json!({ "user": user, "import": report }))
 }
 
 #[derive(Deserialize)]
-struct WorkspaceUpdate {
-    owner: Option<String>,
-    report_email: Option<String>,
-    levels: Option<std::collections::BTreeMap<Lang, String>>,
+struct SelectBody {
+    id: String,
 }
 
-async fn update_workspace(State(s): State<Shared>, Json(b): Json<WorkspaceUpdate>) -> R<Value> {
-    let mut g = s.loaded.write().await;
-    let l = g.as_mut().ok_or_else(|| unavailable("尚未選擇工作區"))?;
-    if let Some(o) = b.owner {
-        l.ws.meta.owner = Some(o.trim().to_string()).filter(|s| !s.is_empty());
+async fn select_user(State(s): State<Shared>, Json(b): Json<SelectBody>) -> R<Value> {
+    Ok(Json(select_user_inner(&s, b.id.trim()).await?))
+}
+
+#[derive(Deserialize, Default)]
+struct UserBody {
+    name: Option<String>,
+    color: Option<String>,
+    languages: Option<Vec<Lang>>,
+    /// Self-assessed major level per language, e.g. `{ "en": "B1" }`.
+    majors: Option<std::collections::BTreeMap<Lang, String>>,
+    daily_minutes: Option<u32>,
+    report_email: Option<String>,
+    seconds_per_turn: Option<u32>,
+    turns: Option<u32>,
+    interest_ratio: Option<f32>,
+    interests: Option<Vec<String>>,
+}
+
+/// Apply a settings change to a profile; validates everything first.
+fn apply_user(p: &mut Profile, b: &UserBody) -> Result<(), ApiError> {
+    if let Some(n) = &b.name {
+        let n = n.trim();
+        if n.is_empty() || n.chars().count() > 40 {
+            return Err(bad("名字需為 1–40 個字"));
+        }
+        p.name = n.into();
     }
-    if let Some(e) = b.report_email {
-        let e = e.trim().to_string();
+    if let Some(c) = &b.color {
+        let ok = c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|x| x.is_ascii_hexdigit());
+        if !ok {
+            return Err(bad("顏色格式需為 #rrggbb"));
+        }
+        p.color = c.clone();
+    }
+    if let Some(langs) = &b.languages {
+        if langs.is_empty() {
+            return Err(bad("至少選一種學習語言"));
+        }
+        let mut l = langs.clone();
+        l.sort();
+        l.dedup();
+        p.languages = l;
+    }
+    if let Some(majors) = &b.majors {
+        for (lang, major) in majors {
+            let major = major.trim().to_ascii_uppercase();
+            if level::major_start(*lang, &major).is_none() {
+                return Err(bad(format!("{} 的程度只能是 {}", lang.label(), level::majors(*lang).join("、"))));
+            }
+            // A new self-assessment restarts this language at that major
+            // level; choosing the same major keeps the progress made.
+            if p.lang.get(lang).map(|lp| level::from_score(*lang, lp.difficulty).major.to_string()) != Some(major.clone()) {
+                p.lang.insert(*lang, LangProfile::starting_at(*lang, &major));
+            }
+        }
+    }
+    for &l in &p.languages.clone() {
+        p.lang.entry(l).or_insert_with(|| LangProfile::starting_at(l, l.default_major()));
+    }
+    if let Some(m) = b.daily_minutes {
+        if !(5..=240).contains(&m) {
+            return Err(bad("每日目標需為 5–240 分鐘"));
+        }
+        p.daily_minutes = m;
+    }
+    if let Some(e) = &b.report_email {
+        let e = e.trim();
         if !e.is_empty() && (!e.contains('@') || e.contains(char::is_whitespace)) {
             return Err(bad("email 格式不正確"));
         }
-        l.ws.meta.report_email = Some(e).filter(|s| !s.is_empty());
+        p.report_email = Some(e.to_string()).filter(|s| !s.is_empty());
     }
-    if let Some(levels) = b.levels {
-        for (lang, lv) in levels {
-            if !lang.levels().contains(&lv.as_str()) {
-                return Err(bad(format!("{} 的程度只能是 {}", lang.label(), lang.levels().join("、"))));
-            }
-            l.ws.meta.levels.insert(lang, lv);
+    if let Some(sec) = b.seconds_per_turn {
+        if !(5..=120).contains(&sec) {
+            return Err(bad("每回合秒數需為 5–120"));
+        }
+        p.conversation.seconds_per_turn = sec;
+    }
+    if let Some(t) = b.turns {
+        if !(5..=40).contains(&t) {
+            return Err(bad("對話回合需為 5–40"));
+        }
+        p.conversation.turns = t;
+    }
+    if let Some(r) = b.interest_ratio {
+        if !(0.0..=1.0).contains(&r) {
+            return Err(bad("興趣比例需在 0–1 之間"));
+        }
+        p.conversation.interest_ratio = r;
+    }
+    Ok(())
+}
+
+/// Append keywords to interests.csv (keyword,lang,weight,updated_at).
+fn add_interests(ws: &Workspace, keywords: &[String]) -> Result<usize, ApiError> {
+    let file = ws.interests_file();
+    let existing = std::fs::read_to_string(&file).unwrap_or_default();
+    let have: Vec<String> = existing.lines().skip(1).filter_map(|l| l.split(',').next()).map(|k| k.trim().trim_matches('"').to_lowercase()).collect();
+    let now = Utc::now().to_rfc3339();
+    let mut n = 0;
+    for k in keywords {
+        let k = k.trim();
+        if k.is_empty() || have.contains(&k.to_lowercase()) {
+            continue;
+        }
+        append_csv(&file, &["keyword", "lang", "weight", "updated_at"], &[k, "", "1", &now])?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+/// Add a user to the workspace (anyone at this computer may; the workspace
+/// is shared by trust) and enter as them.
+async fn create_user(State(s): State<Shared>, Json(b): Json<UserBody>) -> R<Value> {
+    let name = b.name.clone().unwrap_or_default();
+    let mut p = Profile::new("", name.trim());
+    apply_user(&mut p, &b)?;
+    let template = s.settings.read().await.paths.template.clone();
+    let ws = {
+        let mut root = s.root.write().await;
+        let open = root.as_mut().ok_or_else(|| unavailable("尚未選擇工作區"))?;
+        if open.root.layout() == Layout::V1 {
+            return Err(bad("這個工作區需要先轉成多使用者結構"));
+        }
+        open.root.create_profile(&template, p).map_err(|e| bad(e.to_string()))?
+    };
+    if let Some(k) = &b.interests {
+        add_interests(&ws, k)?;
+    }
+    Ok(Json(select_user_inner(&s, &ws.profile.id).await?))
+}
+
+/// Change the chosen user's own settings.
+async fn update_user(State(s): State<Shared>, Json(b): Json<UserBody>) -> R<Value> {
+    let mut g = s.loaded.write().await;
+    let l = g.as_mut().ok_or_else(|| unavailable("請先選擇使用者"))?;
+    let mut p = l.ws.profile.clone();
+    apply_user(&mut p, &b)?;
+    l.ws.profile = p;
+    l.ws.save_profile().map_err(|e| fail(e.to_string()))?;
+    if let Some(k) = &b.interests {
+        add_interests(&l.ws, k)?;
+    }
+    // Keep the member list's display name in step.
+    if b.name.is_some() {
+        let mut root = s.root.write().await;
+        if let Some(open) = root.as_mut()
+            && let Some(m) = open.root.meta.members.iter_mut().find(|m| m.id == l.ws.profile.id)
+        {
+            m.name = l.ws.profile.name.clone();
+            open.root.save().map_err(|e| fail(e.to_string()))?;
         }
     }
-    l.ws.save_meta().map_err(|e| fail(e.to_string()))?;
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(json!({ "user": user_json(&l.ws) })))
+}
+
+#[derive(Deserialize)]
+struct MigrateBody {
+    name: String,
+}
+
+/// Turn a first-version workspace into the multi-user layout; the person
+/// running it becomes its owner.
+async fn migrate_workspace(State(s): State<Shared>, Json(b): Json<MigrateBody>) -> R<Value> {
+    if b.name.trim().is_empty() {
+        return Err(bad("請輸入名字"));
+    }
+    let template = s.settings.read().await.paths.template.clone();
+    let m = {
+        let mut root = s.root.write().await;
+        let open = root.as_mut().ok_or_else(|| unavailable("尚未選擇工作區"))?;
+        open.root.migrate_v1(&template, b.name.trim(), None).map_err(|e| bad(e.to_string()))?
+    };
+    let mut out = select_user_inner(&s, &m.profile).await?;
+    out["migration"] = json!(m);
+    Ok(Json(out))
 }
 
 async fn reindex(State(s): State<Shared>) -> R<ImportReport> {
@@ -301,18 +540,28 @@ struct WorkspaceBody {
     init: bool,
 }
 
-/// Switch to a workspace folder and remember it in config.toml.
+/// Switch to a workspace folder and remember it in config.toml; enter the
+/// user this computer used there last (or the only one).
 async fn use_workspace(s: &Shared, path: PathBuf, init: bool) -> Result<Value, ApiError> {
     let st = s.settings.read().await.clone();
-    let loaded = load_workspace(&st, Some(path.clone()), init).await.map_err(bad)?;
+    let open = open_workspace(&st, Some(path.clone()), init).map_err(bad)?;
     if let Some(dir) = &st.app_dir {
         settings::write_config_value(dir, None, "workspace_path", toml::Value::String(path.display().to_string())).map_err(fail)?;
     }
     s.settings.write().await.workspace = Some(path.clone());
-    let report = loaded.import.clone();
-    *s.loaded.write().await = Some(loaded);
+    let layout = open.root.layout();
+    let next = if layout == Layout::V2 { default_user(&st, &open.root) } else { None };
+    let users = open.root.list_profiles().len();
+    *s.root.write().await = Some(open);
+    *s.loaded.write().await = None;
     *s.load_error.write().await = None;
-    Ok(json!({ "workspace": path.display().to_string(), "import": report }))
+    let mut out = json!({ "workspace": path.display().to_string(), "layout": layout, "users": users });
+    if let Some(id) = next {
+        let entered = select_user_inner(s, &id).await?;
+        out["user"] = entered["user"].clone();
+        out["import"] = entered["import"].clone();
+    }
+    Ok(out)
 }
 
 fn expand_home(p: &str) -> PathBuf {
@@ -336,14 +585,14 @@ struct NewBody {
 }
 
 /// New workspace from the template; `git init`, and push to the user's own
-/// empty private repo when a remote is given.
+/// empty private repo when a remote is given. Users are added next.
 async fn setup_new(State(s): State<Shared>, Json(b): Json<NewBody>) -> R<Value> {
     let path = expand_home(b.path.trim());
     if path.exists() && std::fs::read_dir(&path).map(|mut d| d.next().is_some()).unwrap_or(false) {
         return Err(bad("資料夾不是空的；要使用現有資料夾請選「開啟資料夾」"));
     }
     let template = s.settings.read().await.paths.template.clone();
-    Workspace::init(&path, &template).map_err(|e| bad(e.to_string()))?;
+    Root::init(&path, &template).map_err(|e| bad(e.to_string()))?;
     let mut out = use_workspace(&s, path.clone(), true).await?;
     match git::init_and_push(&path, b.remote.as_deref().map(str::trim).filter(|r| !r.is_empty())).await {
         Ok(msg) => out["git"] = json!(msg),
@@ -370,16 +619,24 @@ async fn setup_clone(State(s): State<Shared>, Json(b): Json<CloneBody>) -> R<Val
 }
 
 async fn git_status(State(s): State<Shared>) -> R<git::GitStatus> {
-    let root = ws(&s).await?.ws.root.clone();
+    let root = root_path(&s).await?;
     Ok(Json(git::status(&root).await))
 }
 
 async fn git_pull(State(s): State<Shared>) -> R<Value> {
-    let root = ws(&s).await?.ws.root.clone();
+    let root = root_path(&s).await?;
     let pulled = git::pull(&root).await.map_err(bad)?;
     if pulled {
-        let l = ws(&s).await?;
-        let rep = import::sync_workspace(&l.ws, &l.db).await;
+        // Another device may have added users or changed workspace.toml.
+        if let Some(open) = s.root.write().await.as_mut()
+            && let Ok(fresh) = Root::open(&open.root.root)
+        {
+            open.root = fresh;
+        }
+        let rep = match ws(&s).await {
+            Ok(l) => Some(import::sync_workspace(&l.ws, &l.db).await),
+            Err(_) => None,
+        };
         return Ok(Json(json!({ "pulled": true, "import": rep })));
     }
     Ok(Json(json!({ "pulled": false })))
@@ -391,7 +648,7 @@ struct SyncBody {
 }
 
 async fn git_sync(State(s): State<Shared>, body: Option<Json<SyncBody>>) -> R<git::SyncResult> {
-    let root = ws(&s).await?.ws.root.clone();
+    let root = root_path(&s).await?;
     let msg = body.and_then(|b| b.0.message);
     Ok(Json(git::sync(&root, msg).await.map_err(bad)?))
 }
@@ -538,11 +795,13 @@ async fn create_lesson(State(s): State<Shared>, Json(b): Json<LessonBody>) -> R<
         let l = ws(&s).await?;
         let a = l.db.get_article(article_id).await?.ok_or_else(|| fail("文章消失了"))?;
         let lang: Lang = a.lang.parse().map_err(bad)?;
-        let level = b.level.clone().filter(|v| lang.levels().contains(&v.as_str())).unwrap_or_else(|| l.ws.meta.level(lang));
+        // An explicit level (e.g. `B1-3` or `B1`) wins; otherwise the
+        // learner's current content difficulty.
+        let level = b.level.as_deref().and_then(|v| level::parse(lang, v)).unwrap_or_else(|| l.ws.profile.difficulty(lang)).label;
         let known: Vec<String> = l.db.list_words(Some(lang), "", 400).await?.into_iter().map(|w| w.term).collect();
         let url = if a.url.starts_with("manual://") || a.url.starts_with("material://") { String::new() } else { a.url.clone() };
         (
-            LessonInput { lang, level, native_language: l.ws.meta.native_language.clone(), title: a.title, url, source: a.source, text: a.body, known_words: known },
+            LessonInput { lang, level, native_language: l.ws.profile.native_language.clone(), title: a.title, url, source: a.source, text: a.body, known_words: known },
             Templates::load(Some(&l.ws.prompts_dir())),
         )
     };
@@ -790,7 +1049,7 @@ async fn import_file(State(s): State<Shared>, Query(q): Query<ImportQuery>, body
         return Err(bad("檔案是空的"));
     }
     let l = ws(&s).await?;
-    let fallback = l.ws.meta.languages.first().copied().unwrap_or(Lang::En);
+    let fallback = l.ws.profile.languages.first().copied().unwrap_or(Lang::En);
     let raw_name = q.name.clone().unwrap_or_default();
     let stem_src = Path::new(&raw_name).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
     let lang = parse_lang(&q.lang)?;
@@ -849,18 +1108,14 @@ struct FreshQuery {
 }
 
 async fn claude_status(State(s): State<Shared>, Query(q): Query<FreshQuery>) -> R<Value> {
-    let (k, model, effort, models, engine, bin) = {
+    let (model, effort, models, engine) = {
         let st = s.settings.read().await;
-        (
-            secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref()),
-            st.claude.model.clone(),
-            st.claude.effort.clone(),
-            st.catalog.cloud.models.clone(),
-            st.engine,
-            st.claude_bin.clone(),
-        )
+        (st.claude.model.clone(), st.claude.effort.clone(), st.catalog.cloud.models.clone(), st.engine)
     };
-    let sub = s.cc.get(bin.as_deref(), q.fresh.unwrap_or(false)).await;
+    let k = api_key(&s).await;
+    let (who, cli) = claude_identity(&s).await;
+    // Without a chosen user nobody's sign-in is shown.
+    let sub = if who.is_some() { s.cc.get(&cli, q.fresh.unwrap_or(false)).await } else { Default::default() };
     let active = resolve_engine(&s, false).await;
     Ok(Json(json!({
         "engine": engine.as_str(),
@@ -899,8 +1154,11 @@ async fn set_engine(State(s): State<Shared>, Json(b): Json<EngineBody>) -> R<Val
 /// `claude auth login --claudeai`: the browser opens on Anthropic's sign-in
 /// page; the UI polls `/api/claude?fresh=true` until it lands.
 async fn claude_code_login(State(s): State<Shared>) -> R<Value> {
-    let bin = s.settings.read().await.claude_bin.clone();
-    jl_core::claude_code::start_login(bin.as_deref()).map_err(bad)?;
+    let (who, cli) = claude_identity(&s).await;
+    if who.is_none() {
+        return Err(bad("請先選擇使用者，登入的會是這位使用者自己的 Claude 帳號"));
+    }
+    jl_core::claude_code::start_login(&cli).map_err(bad)?;
     Ok(Json(json!({ "started": true })))
 }
 
@@ -912,11 +1170,14 @@ struct ClaudeSettingsBody {
 }
 
 async fn claude_settings(State(s): State<Shared>, Json(b): Json<ClaudeSettingsBody>) -> R<Value> {
-    let mut st = s.settings.write().await;
     let mut saved = None;
     if let Some(k) = &b.key {
-        saved = Some(secrets::save_key(k, st.use_keychain, st.app_dir.as_deref()).map_err(fail)?);
+        let (who, _) = claude_identity(&s).await;
+        let who = who.ok_or_else(|| bad("請先選擇使用者，key 會存給這位使用者"))?;
+        let st = s.settings.read().await;
+        saved = Some(secrets::save_key(k, st.use_keychain, st.app_dir.as_deref(), &who).map_err(fail)?);
     }
+    let mut st = s.settings.write().await;
     if let Some(m) = b.model.filter(|m| !m.trim().is_empty()) {
         let m = m.trim().to_string();
         if let Some(dir) = &st.app_dir {
@@ -951,18 +1212,20 @@ async fn engine_test(State(s): State<Shared>, body: Option<Json<TestBody>>) -> R
             (provider(&s).await?, label)
         }
         Some(w) => {
-            let st = s.settings.read().await;
-            match w {
-                "subscription" => (
-                    std::sync::Arc::new(jl_core::claude_code::ClaudeCodeProvider::new(st.claude_bin.clone(), st.claude.model.clone(), st.claude.effort.clone())),
-                    Resolved::Subscription.label(),
-                ),
+            if claude_identity(&s).await.0.is_none() && s.settings.read().await.claude_api_key.is_none() {
+                return Err(bad("請先選擇使用者"));
+            }
+            let which = match w {
+                "subscription" => Resolved::Subscription,
                 "api" => {
-                    let (key, _) = secrets::key(st.claude_api_key.as_deref(), st.use_keychain, st.app_dir.as_deref()).ok_or_else(|| unavailable("尚未設定 API key"))?;
-                    (std::sync::Arc::new(jl_core::provider::ClaudeProvider::new(st.claude.clone(), key)), Resolved::Api.label())
+                    if api_key(&s).await.is_none() {
+                        return Err(unavailable("尚未設定 API key"));
+                    }
+                    Resolved::Api
                 }
                 _ => return Err(bad("engine 只能是 subscription 或 api")),
-            }
+            };
+            (provider_for(&s, which).await?, which.label())
         }
     };
     let req = jl_core::provider::CompletionRequest {
@@ -997,7 +1260,7 @@ async fn models(State(s): State<Shared>) -> R<Value> {
 // ── Google (mock until OAuth) ───────────────────────────
 
 async fn google_status(State(s): State<Shared>) -> R<Value> {
-    let email = s.loaded.read().await.as_ref().and_then(|l| l.ws.meta.report_email.clone());
+    let email = s.loaded.read().await.as_ref().and_then(|l| l.ws.profile.report_email.clone());
     Ok(Json(json!({ "mail": s.mailer.mode(), "calendar": s.calendar.mode(), "report_email": email })))
 }
 
@@ -1014,7 +1277,7 @@ struct ReportBody {
 
 async fn recipient(s: &Shared, to: Option<String>) -> Result<String, ApiError> {
     to.filter(|t| !t.trim().is_empty())
-        .or(ws(s).await?.ws.meta.report_email.clone())
+        .or(ws(s).await?.ws.profile.report_email.clone())
         .ok_or_else(|| bad("請先在「設定 → 個人」填寫週報信箱"))
 }
 
@@ -1024,11 +1287,11 @@ async fn weekly_report(State(s): State<Shared>, body: Option<Json<ReportBody>>) 
         let l = ws(&s).await?;
         let now = Utc::now();
         let mut per = vec![];
-        for lang in l.ws.meta.languages.clone() {
+        for lang in l.ws.profile.languages.clone() {
             per.push((lang, l.db.stats(Some(lang), now - Duration::days(7), now).await?));
         }
         let week = report::iso_week(now.date_naive());
-        (report::weekly_report(&to, l.ws.meta.owner.as_deref(), &per, &week), per.len())
+        (report::weekly_report(&to, Some(&l.ws.profile.name), &per, &week), per.len())
     };
     let id = s.mailer.send(&email).await.map_err(|e| bad(e.to_string()))?;
     Ok(Json(json!({ "id": id, "mode": s.mailer.mode(), "languages": langs, "email": email })))
@@ -1081,7 +1344,7 @@ async fn book_lesson(State(s): State<Shared>, Json(b): Json<BookBody>) -> R<Valu
         reminder_minutes: Some(15),
     };
     let event_id = s.calendar.create_event(&ev).await.map_err(|e| bad(e.to_string()))?;
-    let tz = ws(&s).await?.ws.meta.timezone.clone();
+    let tz = ws(&s).await?.ws.profile.timezone.clone();
     let mut out = json!({ "event_id": event_id, "event": ev, "mode": s.calendar.mode() });
     match recipient(&s, b.to).await {
         Ok(to) => {

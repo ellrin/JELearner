@@ -77,3 +77,10 @@ tokio、axum 0.8、reqwest（rustls）、sqlx 0.8（SQLite，執行期查詢，�
 - **原因**：作者自己用訂閱額度，不必另外付 API 費用；API key 留給沒有訂閱、或想避免規定疑慮的使用者。
 - **界線**：App 不接觸、不保存、不轉送任何 Claude 帳號憑證或 token，也不提供自己的 claude.ai 登入頁；不代付、不轉售用量；不修改 Claude Code。README 說明 Anthropic 的相關規定（訂閱以個人一般使用為前提、第三方不得代替使用者透過訂閱送出請求），由使用者自行判斷。規定若改變，拿掉訂閱模式、只留 API key 即可，上層不受影響。
 - **測試**：`claude_code::fake` 產生假的 `claude` 執行檔（模擬 `--version`、`auth status`、`auth login`、`-p`），檢查參數、stdin、空資料夾、環境變數移除與登入流程。測試設定一律把 CLI 指向不存在的路徑，絕不呼叫真的 Claude Code。**尚未用真實帳號從 App 測試。**
+
+## 12. 多使用者工作區（第二版 0-1）
+
+- **決定**：一個工作區可有多位使用者（`profiles/<id>/`），選名字進入、不用密碼；第一位使用者是擁有者與管理員。設定分三層：這台電腦（`config.toml`，含 `[active_users]`）、使用者（`profile.toml`）、工作區（`workspace.toml`）。每位使用者有自己的資料庫、Claude Code 登入資料夾（`CLAUDE_CONFIG_DIR`）與 API key；Claude Code 子程序另外移除 `CLAUDE_CODE_OAUTH_TOKEN`，避免繞過登入資料夾。
+- **原因**：家人共用一個 private repo；同一台電腦上不能用到別人的 Claude 帳號（docs/plan.md §2–§4）。
+- **第一版相容**：偵測到舊的單人結構時，由使用者確認後搬到 `profiles/<id>/`（`git mv`，不刪檔），第一版的 `workspace.toml` 設定移到 `profile.toml`；舊的資料庫與單一 API key 交給擁有者。
+- **尚未實測**：macOS 鑰匙圈中，不同 `CLAUDE_CONFIG_DIR` 的 Claude Code 登入是否確實分開（已確認 Claude Code 會使用指定資料夾）。

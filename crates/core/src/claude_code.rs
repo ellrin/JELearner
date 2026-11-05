@@ -34,7 +34,22 @@ pub const STRIP_ENV: &[&str] = &[
     "CLAUDE_CODE_USE_BEDROCK",
     "CLAUDE_CODE_USE_VERTEX",
     "CLAUDE_CODE_USE_FOUNDRY",
+    // Would make Claude Code use that token instead of the user's own
+    // sign-in folder (and so possibly someone else's account).
+    "CLAUDE_CODE_OAUTH_TOKEN",
 ];
+
+/// Which Claude Code to run and with whose sign-in.
+///
+/// `config_dir` is passed as `CLAUDE_CONFIG_DIR`, so every JELearner user on
+/// a computer signs in to their own Claude account (docs/plan.md §4).
+/// **Not yet tested on macOS**, where Claude Code keeps credentials in the
+/// Keychain.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct Cli {
+    pub bin: Option<PathBuf>,
+    pub config_dir: Option<PathBuf>,
+}
 
 /// Official install command shown in the settings window.
 pub const INSTALL_HINT: &str = "curl -fsSL https://claude.ai/install.sh | bash";
@@ -57,10 +72,19 @@ pub fn binary(explicit: Option<&Path>) -> Option<PathBuf> {
     dirs.into_iter().map(|d| d.join(exe)).find(|p| p.is_file())
 }
 
-fn command(bin: &Path) -> Command {
+fn command(bin: &Path, config_dir: Option<&Path>) -> Command {
     let mut c = Command::new(bin);
     for v in STRIP_ENV {
         c.env_remove(v);
+    }
+    match config_dir {
+        Some(d) => {
+            let _ = std::fs::create_dir_all(d);
+            c.env("CLAUDE_CONFIG_DIR", d);
+        }
+        None => {
+            c.env_remove("CLAUDE_CONFIG_DIR");
+        }
     }
     c.stdin(Stdio::null()).kill_on_drop(true);
     c
@@ -79,10 +103,10 @@ pub struct Status {
     pub ready: bool,
 }
 
-pub async fn status(bin: Option<&Path>) -> Status {
-    let Some(bin) = binary(bin) else { return Status::default() };
+pub async fn status(cli: &Cli) -> Status {
+    let Some(bin) = binary(cli.bin.as_deref()) else { return Status::default() };
     let run = |args: &'static [&'static str]| {
-        let mut c = command(&bin);
+        let mut c = command(&bin, cli.config_dir.as_deref());
         c.args(args);
         async move { tokio::time::timeout(Duration::from_secs(20), c.output()).await.ok().and_then(|r| r.ok()) }
     };
@@ -104,27 +128,29 @@ pub async fn status(bin: Option<&Path>) -> Status {
 
 /// `claude auth status` spawns a process and the UI polls; keep the answer
 /// for a minute unless a fresh one is asked for.
+/// One entry per sign-in folder (each user has their own).
 #[derive(Default)]
-pub struct Cache(tokio::sync::Mutex<Option<(Instant, Status)>>);
+pub struct Cache(tokio::sync::Mutex<std::collections::HashMap<Cli, (Instant, Status)>>);
 
 impl Cache {
-    pub async fn get(&self, bin: Option<&Path>, fresh: bool) -> Status {
+    pub async fn get(&self, cli: &Cli, fresh: bool) -> Status {
         let mut c = self.0.lock().await;
-        if let (false, Some((at, s))) = (fresh, c.as_ref())
-            && at.elapsed() < Duration::from_secs(60) {
-                return s.clone();
-            }
-        let s = status(bin).await;
-        *c = Some((Instant::now(), s.clone()));
+        if let (false, Some((at, s))) = (fresh, c.get(cli))
+            && at.elapsed() < Duration::from_secs(60)
+        {
+            return s.clone();
+        }
+        let s = status(cli).await;
+        c.insert(cli.clone(), (Instant::now(), s.clone()));
         s
     }
 }
 
 /// Start `claude auth login --claudeai`: Claude Code opens the browser and
 /// the sign-in completes on Anthropic's pages. The UI then polls status.
-pub fn start_login(bin: Option<&Path>) -> Result<(), String> {
-    let bin = binary(bin).ok_or("找不到 Claude Code，請先安裝")?;
-    let mut c = command(&bin);
+pub fn start_login(cli: &Cli) -> Result<(), String> {
+    let bin = binary(cli.bin.as_deref()).ok_or("找不到 Claude Code，請先安裝")?;
+    let mut c = command(&bin, cli.config_dir.as_deref());
     c.args(["auth", "login", "--claudeai"]).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(false);
     let mut child = c.spawn().map_err(|e| format!("無法啟動 Claude Code 登入：{e}"))?;
     tokio::spawn(async move {
@@ -136,15 +162,15 @@ pub fn start_login(bin: Option<&Path>) -> Result<(), String> {
 }
 
 pub struct ClaudeCodeProvider {
-    pub bin: Option<PathBuf>,
+    pub cli: Cli,
     pub model: String,
     pub effort: Option<String>,
     pub timeout: Duration,
 }
 
 impl ClaudeCodeProvider {
-    pub fn new(bin: Option<PathBuf>, model: String, effort: Option<String>) -> ClaudeCodeProvider {
-        ClaudeCodeProvider { bin, model, effort, timeout: Duration::from_secs(600) }
+    pub fn new(cli: Cli, model: String, effort: Option<String>) -> ClaudeCodeProvider {
+        ClaudeCodeProvider { cli, model, effort, timeout: Duration::from_secs(600) }
     }
 
     /// Command-line arguments for one call (the prompt goes on stdin).
@@ -172,11 +198,11 @@ impl LlmProvider for ClaudeCodeProvider {
 
     async fn complete(&self, req: &CompletionRequest) -> Result<String, ProviderError> {
         let name = "Claude 訂閱".to_string();
-        let bin = binary(self.bin.as_deref()).ok_or_else(|| ProviderError::NotConfigured("找不到 Claude Code，請先安裝並登入".into()))?;
+        let bin = binary(self.cli.bin.as_deref()).ok_or_else(|| ProviderError::NotConfigured("找不到 Claude Code，請先安裝並登入".into()))?;
         // An empty folder of its own: Claude Code has nothing to read there.
         let dir = std::env::temp_dir().join(format!("jelearner-claude-{}-{}", std::process::id(), unique()));
         std::fs::create_dir_all(&dir).map_err(|e| ProviderError::Network(name.clone(), e.to_string()))?;
-        let mut c = command(&bin);
+        let mut c = command(&bin, self.cli.config_dir.as_deref());
         c.current_dir(&dir).args(self.args(req)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let result = async {
             let mut child = c.spawn().map_err(|e| ProviderError::Network(name.clone(), format!("無法啟動 Claude Code：{e}")))?;
@@ -224,11 +250,14 @@ pub fn parse_output(stdout: &[u8], stderr: &[u8]) -> Result<String, ProviderErro
 
 /// A stand-in `claude` executable for offline tests (Unix shells only).
 ///
-/// It answers `--version`, `auth status`, `auth login` and `-p`, and leaves
-/// evidence in its folder: `last-args`, `last-stdin`, `cwd-entries`,
-/// `login-called`. Put a JSON reply in `reply.json` for `--json-schema`
-/// calls; create `logged-out` to simulate a signed-out CLI. If any variable
-/// from [`STRIP_ENV`] reaches it, it fails loudly.
+/// It answers `--version`, `auth status`, `auth login` and `-p`. Sign-in is
+/// kept per `CLAUDE_CONFIG_DIR` (or the fake's own folder when unset), like
+/// the real CLI: signed in when that folder has `fake-login`, which
+/// `auth login` creates; the account name comes from `fake-account`.
+/// Evidence is left in the fake's folder: `last-args`, `last-stdin`,
+/// `cwd-entries`, `last-config-dir`, `login-called`. Put a JSON reply in
+/// `reply.json` for `--json-schema` calls. If any variable from
+/// [`STRIP_ENV`] reaches it, it fails loudly.
 #[cfg(unix)]
 pub mod fake {
     use std::path::{Path, PathBuf};
@@ -240,19 +269,23 @@ pub mod fake {
         let script = format!(
             r#"#!/bin/sh
 D="{d}"
+S="${{CLAUDE_CONFIG_DIR:-$D}}"
 case "$1" in
   --version) echo "9.9.9 (Claude Code)"; exit 0 ;;
   auth)
-    if [ "$2" = "login" ]; then touch "$D/login-called"; rm -f "$D/logged-out"; exit 0; fi
-    if [ -f "$D/logged-out" ]; then echo '{{"loggedIn":false}}'; exit 1; fi
-    echo '{{"loggedIn":true,"authMethod":"claude.ai","email":"learner@example.com"}}'; exit 0 ;;
+    if [ "$2" = "login" ]; then mkdir -p "$S"; touch "$S/fake-login" "$D/login-called"; exit 0; fi
+    if [ ! -f "$S/fake-login" ]; then echo '{{"loggedIn":false}}'; exit 1; fi
+    A="learner@example.com"; [ -f "$S/fake-account" ] && A="$(cat "$S/fake-account")"
+    echo "{{\"loggedIn\":true,\"authMethod\":\"claude.ai\",\"email\":\"$A\"}}"; exit 0 ;;
 esac
 printf '%s\n' "$@" > "$D/last-args"
+printf '%s' "$CLAUDE_CONFIG_DIR" > "$D/last-config-dir"
 cat > "$D/last-stdin"
 ls -A | wc -l | tr -d ' ' > "$D/cwd-entries"
-if [ -n "$ANTHROPIC_API_KEY$ANTHROPIC_AUTH_TOKEN$ANTHROPIC_BASE_URL$CLAUDE_CODE_USE_BEDROCK" ]; then
+if [ -n "$ANTHROPIC_API_KEY$ANTHROPIC_AUTH_TOKEN$ANTHROPIC_BASE_URL$CLAUDE_CODE_USE_BEDROCK$CLAUDE_CODE_OAUTH_TOKEN" ]; then
   echo '{{"type":"result","is_error":true,"result":"billing variable leaked"}}'; exit 1
 fi
+if [ ! -f "$S/fake-login" ]; then echo '{{"type":"result","is_error":true,"result":"Not logged in"}}'; exit 1; fi
 case " $* " in
   *" --json-schema "*) printf '{{"type":"result","is_error":false,"result":"","structured_output":%s}}' "$(cat "$D/reply.json")" ;;
   *) echo '{{"type":"result","is_error":false,"result":"OK"}}' ;;
@@ -263,6 +296,13 @@ esac
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
+    }
+
+    /// Sign a sign-in folder in as `account` (as if the browser login ran).
+    pub fn sign_in(state_dir: &Path, account: &str) {
+        std::fs::create_dir_all(state_dir).unwrap();
+        std::fs::write(state_dir.join("fake-login"), "").unwrap();
+        std::fs::write(state_dir.join("fake-account"), account).unwrap();
     }
 }
 
@@ -277,29 +317,47 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bin = fake::write(dir.path());
         std::fs::write(dir.path().join("reply.json"), r#"{"ok":true}"#).unwrap();
+        let me = Cli { bin: Some(bin.clone()), config_dir: Some(dir.path().join("me")) };
 
-        let st = status(Some(&bin)).await;
-        assert!(st.ready, "{st:?}");
-        assert_eq!(st.version.as_deref(), Some("9.9.9"));
-        assert_eq!(st.account.as_deref(), Some("learner@example.com"));
-
-        let p = ClaudeCodeProvider::new(Some(bin.clone()), "claude-opus-5-5".into(), None);
-        let req = CompletionRequest { system: "sys".into(), user: "the article".into(), max_tokens: 10, json_schema: Some(json!({"type":"object"})) };
-        assert_eq!(p.complete(&req).await.unwrap(), r#"{"ok":true}"#);
-        assert_eq!(std::fs::read_to_string(dir.path().join("last-stdin")).unwrap(), "the article");
-        assert_eq!(std::fs::read_to_string(dir.path().join("cwd-entries")).unwrap().trim(), "0", "runs in an empty folder");
-        assert!(std::fs::read_to_string(dir.path().join("last-args")).unwrap().contains("--safe-mode"));
-
-        std::fs::write(dir.path().join("logged-out"), "").unwrap();
-        assert!(!status(Some(&bin)).await.ready);
-        start_login(Some(&bin)).unwrap();
+        let st = status(&me).await;
+        assert!(st.installed && !st.ready, "{st:?}");
+        start_login(&me).unwrap();
         for _ in 0..50 {
             if dir.path().join("login-called").exists() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert!(status(Some(&bin)).await.ready, "login lands");
+        let st = status(&me).await;
+        assert!(st.ready, "login lands: {st:?}");
+        assert_eq!(st.version.as_deref(), Some("9.9.9"));
+
+        let p = ClaudeCodeProvider::new(me.clone(), "claude-opus-5-5".into(), None);
+        let req = CompletionRequest { system: "sys".into(), user: "the article".into(), max_tokens: 10, json_schema: Some(json!({"type":"object"})) };
+        assert_eq!(p.complete(&req).await.unwrap(), r#"{"ok":true}"#);
+        assert_eq!(std::fs::read_to_string(dir.path().join("last-stdin")).unwrap(), "the article");
+        assert_eq!(std::fs::read_to_string(dir.path().join("cwd-entries")).unwrap().trim(), "0", "runs in an empty folder");
+        assert!(std::fs::read_to_string(dir.path().join("last-args")).unwrap().contains("--safe-mode"));
+        assert_eq!(std::fs::read_to_string(dir.path().join("last-config-dir")).unwrap(), dir.path().join("me").display().to_string());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn each_user_has_their_own_sign_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake::write(dir.path());
+        let a = Cli { bin: Some(bin.clone()), config_dir: Some(dir.path().join("a")) };
+        let b = Cli { bin: Some(bin.clone()), config_dir: Some(dir.path().join("b")) };
+        fake::sign_in(&dir.path().join("a"), "a@example.com");
+        let cache = Cache::default();
+        assert_eq!(cache.get(&a, true).await.account.as_deref(), Some("a@example.com"));
+        assert!(!cache.get(&b, true).await.ready, "B is not signed in by A's login");
+        let p = ClaudeCodeProvider::new(b.clone(), "m".into(), None);
+        let req = CompletionRequest { system: "s".into(), user: "u".into(), max_tokens: 10, json_schema: None };
+        assert!(p.complete(&req).await.is_err(), "B cannot use A's sign-in");
+        fake::sign_in(&dir.path().join("b"), "b@example.com");
+        assert_eq!(cache.get(&b, true).await.account.as_deref(), Some("b@example.com"));
+        assert_eq!(cache.get(&a, false).await.account.as_deref(), Some("a@example.com"));
     }
 
     #[test]
@@ -314,7 +372,7 @@ mod tests {
 
     #[test]
     fn args_turn_everything_off_and_pass_schema() {
-        let p = ClaudeCodeProvider::new(None, "claude-opus-5-5".into(), Some("medium".into()));
+        let p = ClaudeCodeProvider::new(Cli::default(), "claude-opus-5-5".into(), Some("medium".into()));
         let req = CompletionRequest { system: "sys".into(), user: "u".into(), max_tokens: 10, json_schema: Some(json!({"type":"object"})) };
         let a = p.args(&req);
         let has = |k: &str, v: &str| a.windows(2).any(|w| w[0] == k && w[1] == v);
@@ -328,7 +386,7 @@ mod tests {
 
     #[test]
     fn billing_variables_are_removed_from_the_child() {
-        let c = command(Path::new("claude"));
+        let c = command(Path::new("claude"), None);
         let removed: Vec<String> = c
             .as_std()
             .get_envs()

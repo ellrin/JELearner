@@ -37,18 +37,11 @@ impl Lang {
         }
     }
 
-    /// Level scale used for this language: CEFR for English, JLPT for Japanese.
-    pub fn levels(self) -> &'static [&'static str] {
+    /// Major level a new learner starts at before self-assessment.
+    pub fn default_major(self) -> &'static str {
         match self {
-            Lang::En => &["A2", "B1", "B2", "C1", "C2"],
-            Lang::Ja => &["N5", "N4", "N3", "N2", "N1"],
-        }
-    }
-
-    pub fn default_level(self) -> &'static str {
-        match self {
-            Lang::En => "B2",
-            Lang::Ja => "N3",
+            Lang::En => "B1",
+            Lang::Ja => "N5",
         }
     }
 }

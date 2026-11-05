@@ -190,10 +190,24 @@ async fn full_text_pipeline_offline() {
     assert_eq!(s["engine_ready"], true);
     let (st, r) = c.post("/api/setup/workspace", json!({"path": ws_path, "init": true})).await;
     assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["users"], 0, "a new workspace has no users yet");
+    let (st, e) = c.get("/api/words?lang=en").await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "nothing before a user is chosen: {e}");
+    // The first user: languages and self-assessed levels.
+    let (st, r) = c
+        .post("/api/users", json!({"name": "Ellrin", "languages": ["en", "ja"], "majors": {"en": "B1", "ja": "N5"}, "interests": ["AI chips"]}))
+        .await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["user"]["id"], "ellrin");
+    assert_eq!(r["user"]["levels"]["en"]["level"], "B1-1");
+    assert_eq!(r["user"]["levels"]["ja"]["steps"], 6, "N5 has six steps");
     assert!(r["import"]["words"].as_u64().unwrap() >= 4, "template vocab imported: {r}");
+    assert!(ws_path.join("profiles/ellrin/interests.csv").exists());
     let cfg = std::fs::read_to_string(app_dir.path().join("config.toml")).unwrap();
     assert!(cfg.contains("JELearner-private"), "workspace remembered outside the repo");
+    assert!(cfg.contains("active_users"), "this computer remembers the user");
     let (_, s) = c.get("/api/status").await;
+    assert_eq!(s["admin"], true, "the first user is the admin");
     assert_eq!(s["demo"], false);
     let db = s["db"].as_str().unwrap();
     assert!(db.starts_with(app_dir.path().to_str().unwrap()), "database lives in the app folder, not the workspace");
@@ -256,7 +270,7 @@ async fn full_text_pipeline_offline() {
     // Paste text instead of a URL (Japanese).
     let (st, l2) = c.post("/api/lessons", json!({"lang": "ja", "title": "メモ", "text": "政府は半導体工場を支援する。"})).await;
     assert_eq!(st, StatusCode::OK, "{l2}");
-    assert!(l2["path"].as_str().unwrap().starts_with("lessons/ja/"));
+    assert!(l2["path"].as_str().unwrap().starts_with("profiles/ellrin/lessons/ja/"), "{l2}");
 
     // Own vocabulary: CSV upload and a word typed in by hand.
     let (st, imp) = c
@@ -269,7 +283,7 @@ async fn full_text_pipeline_offline() {
     assert_eq!(st, StatusCode::BAD_REQUEST, "{bad}");
     let (st, _) = c.post("/api/words", json!({"lang": "en", "term": "mitigate", "meaning": "減輕"})).await;
     assert_eq!(st, StatusCode::OK);
-    let mine = std::fs::read_to_string(ws_path.join("vocab/my-words-en.csv")).unwrap();
+    let mine = std::fs::read_to_string(ws_path.join("profiles/ellrin/vocab/my-words-en.csv")).unwrap();
     assert!(mine.contains("mitigate,,減輕"));
 
     // Weekly material JSON.
@@ -278,7 +292,7 @@ async fn full_text_pipeline_offline() {
         {"kind": "grammar", "pattern": "〜につれて", "meaning": "隨著"}]});
     let (st, imp) = c.post_text("/api/import?kind=materials&name=week46.json", &material.to_string()).await;
     assert_eq!(st, StatusCode::OK, "{imp}");
-    assert!(imp["file"].as_str().unwrap().starts_with("materials/2026-W46/"));
+    assert!(imp["file"].as_str().unwrap().starts_with("profiles/ellrin/materials/2026-W46/"));
     let (_, mats) = c.get("/api/materials").await;
     assert_eq!(mats.as_array().unwrap().len(), 2, "template sample + uploaded");
 
@@ -298,14 +312,14 @@ async fn full_text_pipeline_offline() {
     let (st, rec) = c.post("/api/records/export", json!({})).await;
     assert_eq!(st, StatusCode::OK);
     assert!(rec["progress"].as_u64().unwrap() >= 6);
-    assert!(std::fs::read_to_string(ws_path.join("records/mistakes.csv")).unwrap().contains("New factories"));
+    assert!(std::fs::read_to_string(ws_path.join("profiles/ellrin/records/mistakes.csv")).unwrap().contains("New factories"));
 
     // Google (mock server with the real REST shapes).
     let (st, e) = c.post("/api/google/weekly-report", json!({})).await;
     assert_eq!(st, StatusCode::BAD_REQUEST, "no address yet: {e}");
     let (st, _) = c.post_text("/api/status", "").await;
     assert_eq!(st, StatusCode::METHOD_NOT_ALLOWED);
-    let r = c.http.put(format!("{}/api/workspace", c.base)).json(&json!({"owner": "Ellrin", "report_email": "me@example.com"})).send().await.unwrap();
+    let r = c.http.put(format!("{}/api/user", c.base)).json(&json!({"report_email": "me@example.com"})).send().await.unwrap();
     assert!(r.status().is_success());
     let (st, rep) = c.post("/api/google/weekly-report", json!({})).await;
     assert_eq!(st, StatusCode::OK, "{rep}");
@@ -359,7 +373,7 @@ async fn engine_errors_are_reported() {
     assert!(e["error"].as_str().unwrap().contains("401"), "{e}");
 
     // Mock Google mode keeps a simulated outbox.
-    let r = c.http.put(format!("{}/api/workspace", c.base)).json(&json!({"report_email": "me@example.com"})).send().await.unwrap();
+    let r = c.http.put(format!("{}/api/user", c.base)).json(&json!({"report_email": "me@example.com"})).send().await.unwrap();
     assert!(r.status().is_success());
     let (st, _) = c.post("/api/google/weekly-report", json!({})).await;
     assert_eq!(st, StatusCode::OK);
@@ -394,7 +408,6 @@ async fn subscription_engine_through_claude_code() {
     let cli_dir = tempfile::tempdir().unwrap();
     let cli = jl_core::claude_code::fake::write(cli_dir.path());
     std::fs::write(cli_dir.path().join("reply.json"), lesson_json().to_string()).unwrap();
-    std::fs::write(cli_dir.path().join("logged-out"), "").unwrap();
 
     let app_dir = tempfile::tempdir().unwrap();
     let ws_dir = tempfile::tempdir().unwrap();
@@ -404,6 +417,11 @@ async fn subscription_engine_through_claude_code() {
     s.workspace = Some(ws_dir.path().to_path_buf());
     let c = start(s).await;
     let (st, _) = c.post("/api/setup/workspace", json!({"path": ws_dir.path(), "init": true})).await;
+    assert_eq!(st, StatusCode::OK);
+    // No user yet: nobody can sign in.
+    let (st, _) = c.post("/api/claude-code/login", json!({})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+    let (st, _) = c.post("/api/users", json!({"name": "Ellrin", "languages": ["en"]})).await;
     assert_eq!(st, StatusCode::OK);
 
     // Installed but signed out, no key: nothing to generate with.
@@ -438,6 +456,30 @@ async fn subscription_engine_through_claude_code() {
     assert!(args.contains("--json-schema") && args.contains("--safe-mode"), "{args}");
     assert!(std::fs::read_to_string(cli_dir.path().join("last-stdin")).unwrap().contains("Several chipmakers"));
     assert!(claude_calls.lock().unwrap().is_empty(), "the API was not used");
+    let ellrin_dir = std::fs::read_to_string(cli_dir.path().join("last-config-dir")).unwrap();
+    assert!(ellrin_dir.ends_with("/ellrin"), "Claude Code ran with Ellrin's own sign-in folder: {ellrin_dir}");
+
+    // A second user on the same computer does not get Ellrin's Claude.
+    let (st, r) = c.post("/api/users", json!({"name": "daidai", "languages": ["ja"], "majors": {"ja": "N5"}})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["user"]["id"], "daidai");
+    let (_, cl) = c.get("/api/claude?fresh=true").await;
+    assert_eq!(cl["subscription"]["ready"], false, "daidai is not signed in by Ellrin's login: {cl}");
+    assert!(cl["active"].is_null());
+    let (st, _) = c.post("/api/lessons", json!({"lang": "ja", "text": "テスト"})).await;
+    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "no fallback to someone else's Claude");
+    let (_, words) = c.get("/api/words?lang=en&q=accel").await;
+    assert!(words.as_array().unwrap().is_empty(), "daidai's database is her own");
+    let (_, st2) = c.get("/api/status").await;
+    assert_eq!(st2["users"].as_array().unwrap().len(), 2);
+    assert_eq!(st2["admin"], false, "only the first user is admin");
+    // Back to Ellrin: signed in again, her words are there.
+    let (st, _) = c.post("/api/users/select", json!({"id": "ellrin"})).await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, cl) = c.get("/api/claude").await;
+    assert_eq!(cl["active"], "subscription");
+    let (_, words) = c.get("/api/words?lang=en&q=accel").await;
+    assert_eq!(words.as_array().unwrap().len(), 1);
 
     // Add an API key: auto still prefers the subscription; switch to API explicitly.
     let (st, _) = c.post("/api/settings/claude", json!({"key": "sk-ant-test-key-0000"})).await;
@@ -457,4 +499,59 @@ async fn subscription_engine_through_claude_code() {
     assert!(std::fs::read_to_string(app_dir.path().join("config.toml")).unwrap().contains("kind = \"api\""));
     let (st, _) = c.post("/api/settings/engine", json!({"kind": "turbo"})).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
+}
+
+/// A first-version (single-user) workspace in a git repository is moved into
+/// profiles/<id>/ with `git mv`, nothing is lost, and the owner keeps the
+/// first version's database.
+#[tokio::test]
+async fn migrates_a_first_version_workspace() {
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws = ws_dir.path();
+    std::fs::write(ws.join("workspace.toml"), "id = \"ws-v1\"\nlanguages = [\"en\", \"ja\"]\n[levels]\nen = \"B2\"\nja = \"N5\"\n").unwrap();
+    std::fs::create_dir_all(ws.join("vocab")).unwrap();
+    std::fs::write(ws.join("vocab/mine-en.csv"), "term,meaning\nmitigate,減輕\n").unwrap();
+    std::fs::create_dir_all(ws.join("records")).unwrap();
+    std::fs::write(ws.join("records/mistakes.csv"), "lang,question,user_answer,correct_answer,explanation,created_at,resolved_at\nen,Q?,a,b,,2026-11-01T00:00:00Z,\n").unwrap();
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git").args(args).current_dir(ws).output().unwrap();
+        assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "v1"]);
+
+    let app_dir = tempfile::tempdir().unwrap();
+    // The first version's database for this workspace.
+    let legacy = app_dir.path().join("data/ws-v1/learner.sqlite");
+    jl_core::db::Db::open(&legacy).await.unwrap();
+    let mut s = Settings::for_tests(Paths::from_repo(), app_dir.path().to_path_buf());
+    s.workspace = Some(ws.to_path_buf());
+    let c = start(s).await;
+
+    let (_, st) = c.get("/api/status").await;
+    assert_eq!(st["layout"], "v1");
+    let (code, e) = c.get("/api/words?lang=en").await;
+    assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(e["error"].as_str().unwrap().contains("多使用者"), "{e}");
+
+    let (code, r) = c.post("/api/workspace/migrate", json!({"name": "Ellrin"})).await;
+    assert_eq!(code, StatusCode::OK, "{r}");
+    assert_eq!(r["migration"]["profile"], "ellrin");
+    assert_eq!(r["user"]["levels"]["en"]["level"], "B2-1", "first-version levels carried over");
+    assert_eq!(std::fs::read_to_string(ws.join("profiles/ellrin/vocab/mine-en.csv")).unwrap(), "term,meaning\nmitigate,減輕\n");
+    let porcelain = git(&["status", "--porcelain"]);
+    assert!(porcelain.contains("R  vocab/mine-en.csv -> profiles/ellrin/vocab/mine-en.csv"), "moved with git mv:\n{porcelain}");
+    assert!(app_dir.path().join("data/ws-v1/ellrin/learner.sqlite").exists(), "the owner keeps the old database");
+    assert!(!legacy.exists());
+
+    let (_, words) = c.get("/api/words?lang=en&q=mitigate").await;
+    assert_eq!(words.as_array().unwrap().len(), 1);
+    let (_, ms) = c.get("/api/mistakes?lang=en").await;
+    assert_eq!(ms.as_array().unwrap().len(), 1, "records restored");
+    let (_, st) = c.get("/api/status").await;
+    assert_eq!(st["layout"], "v2");
+    let (code, _) = c.post("/api/workspace/migrate", json!({"name": "Ellrin"})).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "only once");
 }

@@ -36,8 +36,10 @@
 | 程式、提示詞模板、範本 | 這個 repo | 是（公開） |
 | 單字、文法、每週素材、教材、紀錄匯出 | 私人工作區（例如 `JELearner-private`） | 是（**你自己的 private repo**） |
 | `config.toml`（工作區位置、模型選擇） | `<config dir>/JELearner/` | 否 |
-| API key | 系統金鑰圈，或 `<config dir>/JELearner/credentials.toml` | 否 |
-| SQLite | `<config dir>/JELearner/data/<工作區 id>/learner.sqlite` | 否 |
+| 這台電腦最後使用的使用者 | `config.toml` 的 `[active_users]` | 否 |
+| API key（每位使用者一把） | 系統金鑰圈（帳號 `anthropic-api-key:<工作區 id>:<使用者 id>`），或 `<config dir>/JELearner/credentials/<工作區 id>/<使用者 id>.toml` | 否 |
+| Claude Code 登入（每位使用者一個） | `<config dir>/JELearner/claude/<工作區 id>/<使用者 id>/`（`CLAUDE_CONFIG_DIR`） | 否 |
+| SQLite（每位使用者一個） | `<config dir>/JELearner/data/<工作區 id>/<使用者 id>/learner.sqlite` | 否 |
 | 示範工作區 | `<config dir>/JELearner/demo-workspace/` | 否 |
 
 `<config dir>`：macOS `~/Library/Application Support`，Linux `~/.config`，Windows `%APPDATA%`。
@@ -47,8 +49,9 @@
 1. 讀 `Settings`（`config.toml` → 環境變數覆蓋）。
 2. 找工作區：`JELEARNER_WORKSPACE` → `config.toml` 的 `workspace_path` → 示範工作區。
 3. `Workspace::open`（示範時 `init`，只補缺少的檔案），沒有 id 就產生一個寫回 `workspace.toml`。
-4. 開啟（或建立）該 id 的 SQLite，套用 schema（`PRAGMA user_version`）。
-5. `import::sync_workspace`：讀 `vocab/`、`grammar/`、`materials/`、`lessons/`；`restore_records`：資料庫是新的時從 `records/` 還原進度與錯題。
+4. 第一版結構（單人）→ 起始流程詢問名字並搬到 `profiles/<id>/`；否則選使用者：這台電腦上次用的、或唯一的那位；都沒有就顯示使用者選擇。
+5. 開啟（或建立）「工作區 id＋使用者 id」的 SQLite，套用 schema（`PRAGMA user_version`）；第一版的資料庫交給擁有者。
+6. `import::sync_workspace`：讀 `vocab/`、`grammar/`、`materials/`、`lessons/`；`restore_records`：資料庫是新的時從 `records/` 還原進度與錯題。
 
 ## 產生教材
 

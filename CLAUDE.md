@@ -54,9 +54,11 @@ scripts/dev.sh --mock                        # both of the above together
 - Gmail / Calendar: traits first, mock implementations and mock servers; OAuth later.
 - UI: axum on 127.0.0.1 + static web now; Tauri later.
 - Privacy / multi-user: personal data lives in the user's own private repo (the
-  workspace, e.g. `JELearner-private`). App settings, credentials and the SQLite
-  database live in `<config dir>/JELearner/` (`dirs::config_dir()`), the database keyed
-  by the workspace id. Nothing personal ever goes into this repo.
+  workspace, e.g. `JELearner-private`), one `profiles/<id>/` per user. App settings,
+  credentials and the SQLite databases live in `<config dir>/JELearner/`
+  (`dirs::config_dir()`): one database, one Claude Code sign-in folder and one API key
+  per workspace id + user id. A user never falls back to another user's Claude.
+  Nothing personal ever goes into this repo.
 
 ## Rules
 

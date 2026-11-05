@@ -1,0 +1,84 @@
+# General topics (docs/plan.md §7). Lessons and conversations mix the
+# learner's own interests with these, so that, besides favourite subjects,
+# everyday conversation with students abroad is covered too.
+# Add, remove or rename freely; `group` is only for display.
+
+[[topic]]
+id = "daily-life"
+name = "日常生活"
+group = "生活"
+
+[[topic]]
+id = "school"
+name = "校園與社團"
+group = "生活"
+
+[[topic]]
+id = "food"
+name = "飲食"
+group = "生活"
+
+[[topic]]
+id = "travel"
+name = "旅行"
+group = "生活"
+
+[[topic]]
+id = "hobbies"
+name = "興趣嗜好"
+group = "生活"
+
+[[topic]]
+id = "entertainment"
+name = "影視音樂與遊戲"
+group = "生活"
+
+[[topic]]
+id = "sports"
+name = "運動"
+group = "生活"
+
+[[topic]]
+id = "relationships"
+name = "人際關係與感情"
+group = "生活"
+
+[[topic]]
+id = "work"
+name = "打工與職涯"
+group = "生活"
+
+[[topic]]
+id = "technology"
+name = "科技與網路"
+group = "社會"
+
+[[topic]]
+id = "health"
+name = "健康"
+group = "社會"
+
+[[topic]]
+id = "environment"
+name = "環境"
+group = "社會"
+
+[[topic]]
+id = "society"
+name = "社會議題"
+group = "社會"
+
+[[topic]]
+id = "culture"
+name = "文化與歷史"
+group = "社會"
+
+[[topic]]
+id = "economy"
+name = "經濟"
+group = "社會"
+
+[[topic]]
+id = "news"
+name = "時事"
+group = "社會"
