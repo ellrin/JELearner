@@ -140,6 +140,7 @@ async function refreshStatus() {
     state.picked = null;
     state.lessonId = null;
     updatePicked();
+    const out = $("#genOut"); out.textContent = ""; out.title = "";
   }
   const st = s.stats?.[state.lang] ?? {};
   const set = (id, v, hot) => { const n = $(id); n.textContent = v ? String(v) : ""; n.classList.toggle("hot", !!hot); };
@@ -260,6 +261,19 @@ $("#actUser").onclick = (e) => {
   userMenu.hidden = false;
 };
 document.addEventListener("click", (e) => { if (!userMenu.hidden && !userMenu.contains(e.target)) userMenu.hidden = true; });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!userMenu.hidden) { userMenu.hidden = true; $("#actUser").focus(); }
+  document.body.classList.remove("aside-open", "nav-open");
+});
+
+// Narrow windows: the right panel and the left nav become drawers.
+$("#actAside").onclick = (e) => { e.stopPropagation(); document.body.classList.toggle("aside-open"); document.body.classList.remove("nav-open"); };
+$("#actNav").onclick = (e) => { e.stopPropagation(); document.body.classList.toggle("nav-open"); document.body.classList.remove("aside-open"); };
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".right, .left, #actAside, #actNav, dialog")) return;
+  document.body.classList.remove("aside-open", "nav-open");
+});
 
 async function switchUser(id) {
   try {
@@ -303,7 +317,7 @@ function langPicker(box, user, showProgress) {
   };
 }
 
-$$("#views button").forEach((b) => (b.onclick = () => { state.view = b.dataset.view; store.set("jl.view", state.view); state.query = ""; render(); }));
+$$("#views button").forEach((b) => (b.onclick = () => { state.view = b.dataset.view; store.set("jl.view", state.view); state.query = ""; document.body.classList.remove("nav-open"); render(); }));
 
 function viewbar(title, count, ...extra) {
   const vb = $("#viewbar");
@@ -414,7 +428,7 @@ async function gradeCard(card, grade) {
     await api("/api/review", { kind: it.item_kind, id: it.item_id, grade });
     r.i += 1; r.shown = false; r.done += 1;
     drawReview(card);
-    if (r.i >= r.items.length) refreshStatus();
+    if (r.i >= r.items.length) refreshStatus().then(greet);
   } catch (e) { flash(e.message, true); }
 }
 
@@ -891,7 +905,8 @@ $("#genRun").onclick = async () => {
   try {
     const r = await api("/api/lessons", body);
     out.className = "note ok";
-    out.textContent = `完成：${r.path}（新增單字 ${r.added.words}、文法 ${r.added.grammar}）`;
+    out.textContent = `✓ 已加入 ${r.added.words} 個字・${r.added.grammar} 個文法`;
+    out.title = r.path;
     say(`教材好了：「${r.lesson.title}」。單字已加入複習，問答答錯的會自動進錯題本。`);
     state.view = "lessons"; state.lessonId = r.id; state.showMd = false;
     await refreshStatus();
@@ -973,7 +988,7 @@ function setWsMode(m) {
   segment($("#setWsMode"), m, setWsMode);
   $$("#dlgSettings .step[data-step='0'] .form[data-mode]").forEach((f) => (f.hidden = f.dataset.mode !== m));
 }
-setWsMode("open");
+setWsMode("new");
 
 async function loadWorkspaceStep() {
   const s = state.status;
@@ -1112,12 +1127,12 @@ async function loadClaudeStep(fresh = false) {
   const line = (ok, text) => { const li = el("li"); li.append(el("span", ok === true ? "ok" : ok === false ? "bad" : "mid", ok === true ? "✓" : ok === false ? "✕" : "•"), el("span", null, text)); ul.append(li); };
   line(sub.installed, sub.installed ? `已安裝 Claude Code${sub.version ? ` ${sub.version}` : ""}` : "尚未安裝 Claude Code");
   if (sub.installed) {
-    line(sub.logged_in, sub.logged_in ? `已登入${sub.account ? `：${sub.account}` : ""}` : "尚未登入");
+    line(sub.logged_in ? (sub.account ? true : null) : false, sub.logged_in ? (sub.account ? `已登入：${sub.account}` : "已登入，但無法確認是哪個帳號；若不是你的帳號，請按「用瀏覽器登入」") : "尚未登入");
     if (sub.logged_in) line(sub.ready ? true : null, sub.ready ? "使用 Claude 訂閱額度" : `登入方式是 ${sub.auth_method ?? "未知"}，不是 Claude 訂閱；請用「用瀏覽器登入」改用訂閱帳號`);
   }
   $("#ccInstall").hidden = sub.installed;
   $("#ccCmd").textContent = c.install;
-  $("#ccLogin").hidden = !sub.installed || sub.ready;
+  $("#ccLogin").hidden = !sub.installed || (sub.ready && !!sub.account);
 
   // API key.
   const editing = !c.api.configured;

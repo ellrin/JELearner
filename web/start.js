@@ -19,6 +19,13 @@ const FLOWS = {
   migrate: ["migrate", "done"],
 };
 
+/** Avatar colours; a new user gets the first one nobody uses yet. */
+const USER_COLORS = ["#ff6b35", "#5b3df5", "#11965a", "#e5484d", "#0ea5e9", "#d4a017", "#c026d3", "#64748b"];
+function freeColor() {
+  const used = new Set((state.status?.users ?? []).map((u) => u.color.toLowerCase()));
+  return USER_COLORS.find((c) => !used.has(c)) ?? USER_COLORS[(state.status?.users ?? []).length % USER_COLORS.length];
+}
+
 const INTEREST_PRESETS = ["科技", "AI", "程式設計", "遊戲", "動漫", "電影與影集", "音樂", "旅行", "美食", "咖啡", "運動", "健康", "商業與創業", "科學", "攝影", "時尚", "歷史", "心理學"];
 
 /** Decide whether the wizard is needed after the status changed. */
@@ -38,13 +45,16 @@ function startWizard(mode) {
   wiz.creating = mode === "add";
   wiz.mode = mode;
   wiz.chips = new Set();
-  $$("#stTabs button").forEach((b) => (b.hidden = !wiz.flow.includes(b.dataset.step)));
+  if (wiz.creating) $("#stColor").value = freeColor();
+  $$("#stTabs button").forEach((b) => { b.hidden = !wiz.flow.includes(b.dataset.step); b.tabIndex = -1; });
   wizShow();
   if (!dlgStart.open) dlgStart.showModal();
 }
 
-// The wizard can be closed with Esc only when there is a user to fall back to.
-dlgStart.addEventListener("cancel", (e) => { if (!state.status?.user && state.status?.layout !== undefined && wiz.mode !== "first") e.preventDefault(); });
+// The wizard can be left (×, Esc) only when there is a user to return to.
+const canLeave = () => !!state.status?.user && wiz.mode !== "migrate";
+dlgStart.addEventListener("cancel", (e) => { if (!canLeave()) e.preventDefault(); });
+$("#stClose").onclick = () => { if (canLeave()) dlgStart.close(); };
 
 function wizStep() {
   return wiz.flow[wiz.i];
@@ -58,8 +68,14 @@ function wizShow() {
   $("#stPrev").hidden = wiz.i === 0 || step === "done";
   // Skipping is possible where nothing is required.
   $("#stSkip").hidden = !["welcome", "claude", "interests"].includes(step) && !(step === "workspace");
-  $("#stNext").textContent = last ? "開始學習" : step === "migrate" ? "開始轉換" : "下一步";
+  $("#stNext").textContent = last ? "開始學習" : step === "migrate" ? "開始升級" : "下一步";
+  $("#stClose").hidden = !canLeave();
   ({ workspace: loadStWorkspace, user: loadStUser, langs: loadStLangs, claude: loadStClaude, interests: loadStInterests, done: loadStDone, migrate: loadStMigrate }[step] ?? (() => {}))();
+  // The main button takes the focus (not the step tabs), unless a field asks for it.
+  setTimeout(() => {
+    const a = document.activeElement;
+    if (!dlgStart.contains(a) || a === dlgStart || a.tabIndex < 0) $("#stNext").focus();
+  }, 0);
 }
 
 function wizNext() {
@@ -103,16 +119,19 @@ function setStWsMode(m) {
   segment($("#stWsMode"), m, setStWsMode);
   $$("#dlgStart [data-step='workspace'] [data-mode]").forEach((n) => (n.hidden = n.dataset.mode !== m));
 }
-setStWsMode("open");
+setStWsMode("new");
 
 function loadStWorkspace() {
   const s = state.status;
-  $("#stWsNow").textContent = s?.workspace ? (s.demo ? "目前用的是示範工作區。" : `目前的工作區：${s.workspace}`) : "還沒有工作區。";
+  $("#stWsNow").textContent = s?.workspace && !s.demo ? `目前：${s.workspace}` : "";
   stOut("#stWsOut", "");
 }
 
 async function stDoWorkspace() {
   let r;
+  // Nothing typed: stay on this step (the server refuses it as well).
+  const need = { open: "#stOpenPath", new: "#stNewPath", clone: "#stCloneUrl" }[wiz.wsMode];
+  if (need && !$(need).value.trim()) { $(need).focus(); throw new Error("請輸入位置"); }
   if (wiz.wsMode === "open") r = await api("/api/setup/workspace", { path: $("#stOpenPath").value, init: true });
   else if (wiz.wsMode === "new") r = await api("/api/setup/new", { path: $("#stNewPath").value, remote: $("#stNewRemote").value });
   else if (wiz.wsMode === "clone") r = await api("/api/setup/clone", { url: $("#stCloneUrl").value, parent: $("#stCloneParent").value || "~/" });
@@ -142,10 +161,14 @@ function loadStUser() {
   const ul = $("#stPeople");
   ul.innerHTML = "";
   const people = s?.users ?? [];
+  // Adding someone (or a workspace with nobody yet): only the form.
+  if (wiz.mode === "add" || !people.length) wiz.creating = true;
+  $("#stUserNow").textContent = wiz.creating ? (people.length ? "新增使用者" : "建立你的使用者") : "你是誰？";
+  ul.hidden = wiz.creating && (wiz.mode === "add" || !people.length);
   for (const u of people) {
     const li = el("li", "person");
     const b = el("button");
-    const dot = el("span", "big-dot", u.name.slice(0, 1)); dot.style.background = u.color;
+    const dot = el("span", "big-dot", u.name.slice(0, 1).toUpperCase()); dot.style.background = u.color;
     b.append(dot, el("span", "n", u.name));
     if (u.admin) b.append(el("span", "tag", "管理員"));
     b.onclick = async () => {
@@ -162,12 +185,10 @@ function loadStUser() {
   }
   const add = el("li", "person");
   const ab = el("button", "add");
-  ab.append(el("span", "big-dot", "＋"), el("span", "n", "新增使用者"));
-  ab.onclick = () => { wiz.creating = true; showNewUser(); };
+  ab.append(el("span", "big-dot", "＋"), el("span", "n", "新增"));
+  ab.onclick = () => { wiz.creating = true; $("#stColor").value = freeColor(); showNewUser(); ab.setAttribute("aria-pressed", "true"); };
   add.append(ab);
   ul.append(add);
-  $("#stUserNow").textContent = people.length ? "點自己的名字進入，或新增一位使用者。不需要密碼。" : "這個工作區還沒有使用者，先建立你自己。";
-  if (!people.length) wiz.creating = true;
   showNewUser();
   stOut("#stUserOut", "");
 }
@@ -175,7 +196,7 @@ function loadStUser() {
 function showNewUser() {
   $("#stNewUser").hidden = !wiz.creating;
   $("#stNext").hidden = !wiz.creating;
-  if (wiz.creating) $("#stName").focus();
+  if (wiz.creating) setTimeout(() => $("#stName").focus(), 0);
 }
 
 async function stDoUser() {
@@ -211,12 +232,18 @@ async function loadStClaude() {
   ul.innerHTML = "";
   let c;
   try { c = await api("/api/claude?fresh=true"); } catch (e) { ul.append(el("li", null, e.message)); return; }
-  const line = (ok, text) => { const li = el("li"); li.append(el("span", ok ? "ok" : "mid", ok ? "✓" : "•"), el("span", null, text)); ul.append(li); };
+  const line = (ok, text) => {
+    const li = el("li");
+    li.append(el("span", ok === true ? "ok" : ok === false ? "bad" : "mid", ok === true ? "✓" : ok === false ? "•" : "!"), el("span", null, text));
+    ul.append(li);
+  };
   const sub = c.subscription;
   if (!sub.installed) line(false, `尚未安裝 Claude Code（安裝：${c.install}）`);
-  else line(sub.ready, sub.ready ? `已用你的 Claude 帳號登入${sub.account ? `：${sub.account}` : ""}` : "已安裝 Claude Code，尚未登入你的帳號");
-  line(c.api.configured, c.api.configured ? `已設定你的 API key（${c.api.masked}）` : "沒有 API key（可選）");
-  $("#stLogin").hidden = !sub.installed || sub.ready;
+  else if (sub.ready && sub.account) line(true, `已登入：${sub.account}`);
+  else if (sub.ready) line(null, "已登入，但無法確認是哪個帳號；若不是你的帳號，請按「用瀏覽器登入」");
+  else line(false, "尚未登入你的 Claude 帳號");
+  if (c.api.configured) line(true, c.api.source === "env" ? `API key 來自環境變數（${c.api.masked}），不是存給你的 key` : `你的 API key（${c.api.masked}）`);
+  $("#stLogin").hidden = !sub.installed || (sub.ready && !!sub.account);
 }
 $("#stRecheck").onclick = () => loadStClaude();
 $("#stUseKey").onclick = () => { $("#stKeyBox").hidden = false; $("#stKey").focus(); };
@@ -261,8 +288,19 @@ async function stDoInterests() {
 // ── done ───────────────────────────────────────────────
 function loadStDone() {
   const u = state.status?.user;
-  const langs = (u?.languages ?? []).map((l) => `${l === "en" ? "英文" : "日文"} ${u.levels?.[l]?.level ?? ""}`).join("、");
-  $("#stDone").textContent = u
-    ? `${u.name}，你的學習語言：${langs}。前 5 課結束時會問你難度，系統再慢慢調整到剛好。到「今日」開始吧。`
-    : "完成。";
+  const box = $("#stDone");
+  box.innerHTML = "";
+  for (const l of u?.languages ?? []) {
+    const c = el("div", "lang-badge");
+    c.append(el("b", null, l === "en" ? "英文" : "日文"), el("span", null, u.levels?.[l]?.level ?? ""));
+    box.append(c);
+  }
 }
+
+// However the wizard closes (finish, ×, Esc, choosing a person), the rest of
+// the page catches up with the user and workspace it ended on.
+dlgStart.addEventListener("close", async () => {
+  await refreshStatus();
+  greet();
+  render();
+});

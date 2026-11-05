@@ -12,6 +12,7 @@
 <body>
 <div class="app">
   <header class="top">
+    <button class="ico only-narrow-nav" id="actNav" data-icon="menu" aria-label="選單"></button>
     <div class="brand">JE<b>/</b>LEARNER</div>
     <button class="user-chip" id="actUser" aria-haspopup="true" aria-label="切換使用者"><span class="dot" id="userDot"></span><span id="userName">選擇使用者</span><span data-icon="chevron"></span></button>
     <div class="seg lang" id="lang" role="group" aria-label="學習語言">
@@ -20,6 +21,7 @@
     </div>
     <span class="chip warn" id="demoChip" hidden>示範資料・連接私人工作區</span>
     <div class="top-right">
+      <button class="ico only-narrow" id="actAside" data-icon="panel" aria-label="產生教材與匯入"></button>
       <button class="ico" id="actImport" data-icon="upload" aria-label="匯入單字、文法或每週素材"></button>
       <button class="ico" id="actSync" data-icon="cloud" aria-label="同步私人工作區"></button>
       <button class="ico" id="actSettings" data-icon="gear" aria-label="設定"></button>
@@ -103,7 +105,7 @@
     <div class="dlg">
       <div class="dlg-head">
         <h2>開始使用</h2>
-        <div class="tabs steps" id="stTabs">
+        <div class="tabs steps" id="stTabs" aria-hidden="true">
           <button data-step="migrate"><span class="c">1</span>轉換工作區</button>
           <button data-step="welcome"><span class="c">1</span>歡迎</button>
           <button data-step="workspace"><span class="c">2</span>工作區</button>
@@ -113,44 +115,49 @@
           <button data-step="interests"><span class="c">6</span>興趣</button>
           <button data-step="done"><span class="c">✓</span>完成</button>
         </div>
+        <button class="ico close" id="stClose" data-icon="x" aria-label="關閉 Esc" hidden></button>
       </div>
       <div class="wizard">
         <section class="step" data-step="welcome">
           <h3 class="st-title">你的英日語學習秘書</h3>
-          <p class="now">JELearner 會把新聞和你自己的單字、文法整理成每天的課程，陪你對話練習，並記錄進度。你的資料放在你自己的 private repo（私人工作區），本機資料庫隨時可以從那裡重建。</p>
-          <p class="now">接下來幾步：選工作區、選或建立使用者、設定學習語言、連接 Claude、挑幾個有興趣的主題。每一步之後都能在設定裡改。</p>
+          <div class="flow-icons">
+            <div><span data-icon="news"></span><b>新聞與你的資料</b></div><i>→</i>
+            <div><span data-icon="book"></span><b>每日課程</b></div><i>→</i>
+            <div><span data-icon="mail"></span><b>AI 對話</b></div><i>→</i>
+            <div><span data-icon="check"></span><b>積分與升級</b></div>
+          </div>
         </section>
 
         <section class="step" data-step="migrate" hidden>
-          <h3 class="st-title">轉成多使用者結構</h3>
-          <p class="now">這個工作區是第一版的單人結構。JELearner 會把 vocab、grammar、materials、lessons、records 搬到 <code>profiles/〈你〉/</code>，在 Git repository 裡用 <code>git mv</code> 保留歷史，不刪任何檔案。搬完之後可以再加入家人。</p>
+          <div class="st-head"><h3 class="st-title">升級工作區</h3><button class="help" data-tip="這是第一版的單人工作區。vocab、grammar、materials、lessons、records 會搬到 profiles/〈你〉/，在 Git repository 裡用 git mv 保留歷史，不刪任何檔案。搬完之後可以再加入家人。">?</button></div>
           <div class="form"><label><span>你的名字</span><input id="stMigrateName" maxlength="40"></label></div>
           <div class="note" id="stMigrateOut"></div>
         </section>
 
         <section class="step" data-step="workspace" hidden>
+          <div class="st-head"><h3 class="st-title">資料要放在哪裡？</h3><button class="help" data-tip="生字、文法、教材都存在這個資料夾。建議放在你自己的 GitHub private repo，就能在多台電腦同步；留空 repo 則只存在這台電腦。本機資料庫隨時可以從這裡重建。">?</button></div>
           <div class="now" id="stWsNow"></div>
           <div class="seg wide" id="stWsMode">
-            <button data-v="open">開啟資料夾</button>
             <button data-v="new">建立新的</button>
+            <button data-v="open">開啟資料夾</button>
             <button data-v="clone">從 repo 下載</button>
-            <button data-v="demo">先用示範資料</button>
+            <button data-v="demo">先看示範</button>
           </div>
-          <div class="form" data-mode="open"><label><span>資料夾</span><input id="stOpenPath" placeholder="~/JELearner-private"></label></div>
-          <div class="form" data-mode="new" hidden>
-            <label><span>位置</span><input id="stNewPath" placeholder="~/JELearner-private"></label>
-            <label><span>private repo</span><input id="stNewRemote" placeholder="留空＝只存在這台電腦"></label>
+          <div class="form" data-mode="new">
+            <label><span>位置</span><input id="stNewPath" value="~/JELearner-private"></label>
+            <label><span>private repo</span><input id="stNewRemote" placeholder="可留空"></label>
           </div>
+          <div class="form" data-mode="open" hidden><label><span>資料夾</span><input id="stOpenPath" placeholder="~/JELearner-private"></label></div>
           <div class="form" data-mode="clone" hidden>
             <label><span>private repo</span><input id="stCloneUrl" placeholder="https://github.com/you/JELearner-private.git"></label>
             <label><span>放在</span><input id="stCloneParent" placeholder="~/"></label>
           </div>
-          <div class="note" data-mode="demo" hidden>先看看介面與示範資料，之後再到「設定 → 工作區與同步」連接你的私人工作區。</div>
+          <div class="note" data-mode="demo" hidden>之後可在 設定 → 工作區與同步 連接你的工作區</div>
           <div class="note" id="stWsOut"></div>
         </section>
 
         <section class="step" data-step="user" hidden>
-          <p class="now" id="stUserNow">點自己的名字進入，或新增一位使用者。不需要密碼。</p>
+          <div class="st-head"><h3 class="st-title" id="stUserNow">你是誰？</h3><button class="help" data-tip="同一個工作區可以有好幾位使用者（例如家人），選名字即可進入，不需要密碼。每個人有自己的資料庫和自己的 Claude 連線。">?</button></div>
           <ul class="people" id="stPeople"></ul>
           <div class="form new-user" id="stNewUser" hidden>
             <label><span>名字</span><input id="stName" maxlength="40" placeholder="例如：Ellrin"></label>
@@ -160,14 +167,14 @@
         </section>
 
         <section class="step" data-step="langs" hidden>
-          <p class="now">要學哪些語言？兩種都可以勾。程度先自評大級，前幾課結束時會問你難度，再慢慢調整到剛好。</p>
+          <div class="st-head"><h3 class="st-title">你想學什麼？</h3><button class="help" data-tip="兩種都可以勾。程度先自評大級，前 5 課結束時會問你難度，再慢慢調整到剛好。">?</button></div>
           <div class="langs" id="stLangs"></div>
           <div class="form"><label><span>每日目標</span><span class="inline"><input id="stDaily" type="number" min="5" max="240" step="5" value="30"> 分鐘</span></label></div>
           <div class="note" id="stLangsOut"></div>
         </section>
 
         <section class="step" data-step="claude" hidden>
-          <p class="now">產生教材與對話需要 Claude。登入的是<b>你自己</b>的帳號；同一台電腦的其他使用者會各自登入。</p>
+          <div class="st-head"><h3 class="st-title">連接你的 Claude</h3><button class="help" data-tip="產生教材與對話需要 Claude。登入的是你自己的帳號（用你的訂閱額度），或使用你自己的 API key；同一台電腦的其他使用者會各自登入。可以先略過，之後在 設定 → Claude 設定。">?</button></div>
           <ul class="checks" id="stClaude"></ul>
           <div class="actions-row">
             <button class="primary small" id="stLogin">用瀏覽器登入（訂閱）</button>
@@ -178,18 +185,18 @@
             <label><span>API key</span><input type="password" id="stKey" placeholder="sk-ant-…" autocomplete="off"></label>
             <button class="ghost" id="stKeySave">儲存 key</button>
           </div>
-          <div class="note">也可以先略過，之後在「設定 → Claude」設定。</div>
         </section>
 
         <section class="step" data-step="interests" hidden>
-          <p class="now">挑幾個你有興趣的主題（之後課程會依此選題；也會穿插通識主題，練習和國外同學聊天會碰到的話題）。</p>
+          <div class="st-head"><h3 class="st-title">對什麼有興趣？</h3><button class="help" data-tip="課程與對話會依這些主題選題，也會穿插通識主題（和國外同學聊天會碰到的話題）。之後每課結束都可以再調整。">?</button></div>
           <div class="chips" id="stChips"></div>
-          <div class="form"><label><span>自己輸入</span><input id="stKeyword" placeholder="例如：半導體、動漫、咖啡（Enter 加入）"></label></div>
+          <div class="form"><label><span>自己輸入</span><input id="stKeyword" placeholder="Enter 加入"></label></div>
         </section>
 
         <section class="step" data-step="done" hidden>
-          <h3 class="st-title">準備好了</h3>
-          <p class="now" id="stDone"></p>
+          <div class="done-mark" aria-hidden="true"><span data-icon="check"></span></div>
+          <h3 class="st-title center">準備好了</h3>
+          <div class="done-langs" id="stDone"></div>
         </section>
 
         <div class="wz-foot">
@@ -223,8 +230,8 @@
           <div class="now" id="setWsNow"></div>
           <div class="seg-row">
             <div class="seg wide" id="setWsMode">
-              <button data-v="open">開啟資料夾</button>
               <button data-v="new">建立新的</button>
+              <button data-v="open">開啟資料夾</button>
               <button data-v="clone">從 repo 下載</button>
             </div>
             <button class="help" data-tip="生字、文法、每週素材、教材都放在你的私人工作區，建議是你自己的 GitHub private repo（例如 JELearner-private）。每位使用者都指向自己的工作區，資料庫也各自分開。">?</button>
@@ -235,7 +242,7 @@
             <button class="primary small" id="setOpen">開啟</button>
           </div>
           <div class="form" data-mode="new" hidden>
-            <label><span>位置</span><input id="setNewPath" placeholder="~/JELearner-private"></label>
+            <label><span>位置</span><input id="setNewPath" value="~/JELearner-private"></label>
             <label><span>private repo</span><input id="setNewRemote" placeholder="留空＝只存在這台電腦"><span class="inline"><button class="ico" id="setGhNew" data-icon="external" aria-label="到 GitHub 建立空白 private repo"></button></span></label>
             <button class="primary small" id="setNew">建立</button>
           </div>

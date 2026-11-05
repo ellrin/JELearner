@@ -564,18 +564,50 @@ async fn use_workspace(s: &Shared, path: PathBuf, init: bool) -> Result<Value, A
     Ok(out)
 }
 
-fn expand_home(p: &str) -> PathBuf {
-    match p.strip_prefix("~/") {
-        Some(rest) => dirs::home_dir().map(|h| h.join(rest)).unwrap_or_else(|| PathBuf::from(p)),
-        None => PathBuf::from(p),
+/// A folder the user typed for a workspace: `~` expanded, and refused when
+/// empty, relative (it would land wherever the app happens to run), the home
+/// folder itself, or inside the JELearner program folder (the public repo,
+/// where personal files must never go).
+fn user_path(s: &settings::Settings, raw: &str) -> Result<PathBuf, ApiError> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(bad("請輸入資料夾位置"));
     }
+    let home = dirs::home_dir();
+    let path = if raw == "~" {
+        home.clone().ok_or_else(|| bad("找不到使用者資料夾"))?
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        home.clone().ok_or_else(|| bad("找不到使用者資料夾"))?.join(rest)
+    } else {
+        PathBuf::from(raw)
+    };
+    if !path.is_absolute() {
+        return Err(bad("請輸入完整的位置，例如 ~/JELearner-private"));
+    }
+    if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(bad("位置不能包含 ..，請輸入完整的位置"));
+    }
+    if home.as_deref() == Some(path.as_path()) {
+        return Err(bad("請在使用者資料夾裡另建一個資料夾，例如 ~/JELearner-private"));
+    }
+    let program = s.paths.web.parent().map(Path::to_path_buf);
+    if let Some(program) = program
+        && let (Ok(prog), Some(target)) = (program.canonicalize(), existing_ancestor(&path))
+        && target.starts_with(&prog)
+    {
+        return Err(bad("工作區不能放在 JELearner 程式的資料夾裡（那是公開的 repo），請選別的位置"));
+    }
+    Ok(path)
+}
+
+/// The path, or the nearest folder above it that exists, made canonical.
+fn existing_ancestor(path: &Path) -> Option<PathBuf> {
+    path.ancestors().find(|a| a.exists()).and_then(|a| a.canonicalize().ok())
 }
 
 async fn setup_workspace(State(s): State<Shared>, Json(b): Json<WorkspaceBody>) -> R<Value> {
-    if b.path.trim().is_empty() {
-        return Err(bad("請輸入資料夾位置"));
-    }
-    Ok(Json(use_workspace(&s, expand_home(b.path.trim()), b.init).await?))
+    let path = user_path(&*s.settings.read().await, &b.path)?;
+    Ok(Json(use_workspace(&s, path, b.init).await?))
 }
 
 #[derive(Deserialize)]
@@ -587,7 +619,7 @@ struct NewBody {
 /// New workspace from the template; `git init`, and push to the user's own
 /// empty private repo when a remote is given. Users are added next.
 async fn setup_new(State(s): State<Shared>, Json(b): Json<NewBody>) -> R<Value> {
-    let path = expand_home(b.path.trim());
+    let path = user_path(&*s.settings.read().await, &b.path)?;
     if path.exists() && std::fs::read_dir(&path).map(|mut d| d.next().is_some()).unwrap_or(false) {
         return Err(bad("資料夾不是空的；要使用現有資料夾請選「開啟資料夾」"));
     }
@@ -613,7 +645,8 @@ async fn setup_clone(State(s): State<Shared>, Json(b): Json<CloneBody>) -> R<Val
     if name.is_empty() {
         return Err(bad("repo 網址無效"));
     }
-    let target = expand_home(b.parent.trim()).join(&name);
+    let parent = if b.parent.trim().is_empty() { "~" } else { b.parent.trim() };
+    let target = user_path(&*s.settings.read().await, parent)?.join(&name);
     git::clone(url, &target).await.map_err(bad)?;
     Ok(Json(use_workspace(&s, target, true).await?))
 }

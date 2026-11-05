@@ -25,8 +25,23 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-/// Variables that would route Claude Code to API billing or another
-/// provider instead of the subscription.
+/// The only environment variables Claude Code inherits from this app:
+/// what a program needs to find files, the network and the locale. Nothing
+/// that could carry a login, an API key or a provider choice gets through,
+/// whatever this process happens to have in its own environment.
+pub const ALLOW_ENV: &[&str] = &[
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "TMPDIR", "TMP", "TEMP",
+    "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ",
+    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+    // Windows
+    "USERPROFILE", "APPDATA", "LOCALAPPDATA", "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "HOMEDRIVE", "HOMEPATH",
+];
+
+/// Variables that would route Claude Code to API billing, another provider
+/// or someone else's login. Never passed (they are not in [`ALLOW_ENV`]);
+/// listed for the tests and the docs.
 pub const STRIP_ENV: &[&str] = &[
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -74,17 +89,16 @@ pub fn binary(explicit: Option<&Path>) -> Option<PathBuf> {
 
 fn command(bin: &Path, config_dir: Option<&Path>) -> Command {
     let mut c = Command::new(bin);
-    for v in STRIP_ENV {
-        c.env_remove(v);
+    // Start from an empty environment and add back only the allowlist.
+    c.env_clear();
+    for k in ALLOW_ENV {
+        if let Some(v) = std::env::var_os(k) {
+            c.env(k, v);
+        }
     }
-    match config_dir {
-        Some(d) => {
-            let _ = std::fs::create_dir_all(d);
-            c.env("CLAUDE_CONFIG_DIR", d);
-        }
-        None => {
-            c.env_remove("CLAUDE_CONFIG_DIR");
-        }
+    if let Some(d) = config_dir {
+        let _ = std::fs::create_dir_all(d);
+        c.env("CLAUDE_CONFIG_DIR", d);
     }
     c.stdin(Stdio::null()).kill_on_drop(true);
     c
@@ -280,6 +294,7 @@ case "$1" in
 esac
 printf '%s\n' "$@" > "$D/last-args"
 printf '%s' "$CLAUDE_CONFIG_DIR" > "$D/last-config-dir"
+env | cut -d= -f1 | sort > "$D/last-env-names"
 cat > "$D/last-stdin"
 ls -A | wc -l | tr -d ' ' > "$D/cwd-entries"
 if [ -n "$ANTHROPIC_API_KEY$ANTHROPIC_AUTH_TOKEN$ANTHROPIC_BASE_URL$CLAUDE_CODE_USE_BEDROCK$CLAUDE_CODE_OAUTH_TOKEN" ]; then
@@ -385,16 +400,35 @@ mod tests {
     }
 
     #[test]
-    fn billing_variables_are_removed_from_the_child() {
-        let c = command(Path::new("claude"), None);
-        let removed: Vec<String> = c
-            .as_std()
-            .get_envs()
-            .filter(|(_, v)| v.is_none())
-            .map(|(k, _)| k.to_string_lossy().to_string())
-            .collect();
+    fn child_environment_is_only_the_allowlist() {
+        let c = command(Path::new("claude"), Some(Path::new("/tmp/jl-test-claude")));
+        for (k, v) in c.as_std().get_envs() {
+            let k = k.to_string_lossy();
+            assert!(v.is_some());
+            assert!(ALLOW_ENV.contains(&k.as_ref()) || k == "CLAUDE_CONFIG_DIR", "{k} passed through");
+        }
         for v in STRIP_ENV {
-            assert!(removed.contains(&v.to_string()), "{v} not removed");
+            assert!(!ALLOW_ENV.contains(v));
+        }
+    }
+
+    /// Run against the real process environment of this machine: whatever
+    /// CLAUDE_* / ANTHROPIC_* variables it has, the child sees none of them
+    /// except its own sign-in folder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn nothing_from_this_process_leaks_to_claude_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = fake::write(dir.path());
+        let cli = Cli { bin: Some(bin), config_dir: Some(dir.path().join("me")) };
+        fake::sign_in(&dir.path().join("me"), "me@example.com");
+        let p = ClaudeCodeProvider::new(cli, "m".into(), None);
+        let req = CompletionRequest { system: "s".into(), user: "u".into(), max_tokens: 10, json_schema: None };
+        p.complete(&req).await.unwrap();
+        let names = std::fs::read_to_string(dir.path().join("last-env-names")).unwrap();
+        for n in names.lines() {
+            let ok = ALLOW_ENV.contains(&n) || n == "CLAUDE_CONFIG_DIR" || n == "PWD" || n == "SHLVL" || n == "_" || n == "OLDPWD";
+            assert!(ok, "{n} reached Claude Code");
         }
     }
 

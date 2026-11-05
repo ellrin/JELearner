@@ -555,3 +555,30 @@ async fn migrates_a_first_version_workspace() {
     let (code, _) = c.post("/api/workspace/migrate", json!({"name": "Ellrin"})).await;
     assert_eq!(code, StatusCode::BAD_REQUEST, "only once");
 }
+
+/// Workspace locations that would put personal files in the wrong place are
+/// refused, and nothing is created.
+#[tokio::test]
+async fn refuses_unsafe_workspace_locations() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let c = start(Settings::for_tests(Paths::from_repo(), app_dir.path().to_path_buf())).await;
+    let repo = Paths::from_repo().web.parent().unwrap().to_path_buf();
+    let inside = repo.join("my-private-workspace");
+    for (route, body) in [
+        ("/api/setup/new", json!({"path": "", "remote": ""})),
+        ("/api/setup/new", json!({"path": "   ", "remote": ""})),
+        ("/api/setup/new", json!({"path": "relative/folder", "remote": ""})),
+        ("/api/setup/new", json!({"path": "/tmp/../tmp/x", "remote": ""})),
+        ("/api/setup/new", json!({"path": inside, "remote": ""})),
+        ("/api/setup/workspace", json!({"path": "", "init": true})),
+        ("/api/setup/workspace", json!({"path": inside, "init": true})),
+    ] {
+        let (st, e) = c.post(route, body.clone()).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{route} {body}: {e}");
+        assert!(e["error"].is_string());
+    }
+    assert!(!inside.exists(), "nothing created inside the program folder");
+    assert!(!std::path::Path::new("relative").exists());
+    let cfg = std::fs::read_to_string(app_dir.path().join("config.toml")).unwrap_or_default();
+    assert!(!cfg.contains("workspace_path"), "no workspace remembered: {cfg}");
+}
