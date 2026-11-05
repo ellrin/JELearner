@@ -20,6 +20,9 @@ pub struct ImportReport {
     pub materials: usize,
     pub lessons: usize,
     pub restored: usize,
+    pub conversations: usize,
+    /// New lines read from records/points.
+    pub points: usize,
     /// Problems that did not stop the import: `file:line: message`.
     pub warnings: Vec<String>,
 }
@@ -32,6 +35,8 @@ impl ImportReport {
         self.materials += o.materials;
         self.lessons += o.lessons;
         self.restored += o.restored;
+        self.conversations += o.conversations;
+        self.points += o.points;
         self.warnings.extend(o.warnings);
     }
 }
@@ -70,6 +75,29 @@ const GRAMMAR_ALIASES: &[(&str, &[&str])] = &[
     ("level", &["level", "jlpt", "cefr", "程度", "級"]),
     ("tags", &["tags", "tag", "標籤", "タグ"]),
 ];
+
+/// What a dropped file is: `materials` (weekly JSON), `grammar` (a CSV
+/// with a pattern column) or `vocab` (a CSV with a term column). `None` when
+/// it is none of these. Used by drag-and-drop import (`kind=auto`).
+pub fn detect_kind(name: &str, text: &str) -> Option<&'static str> {
+    let t = text.trim_start_matches('\u{feff}').trim_start();
+    let lower = name.to_lowercase();
+    if lower.ends_with(".json") || t.starts_with('{') {
+        return parse_material(t).ok().map(|_| "materials");
+    }
+    let mut rdr = reader(t);
+    let headers = rdr.headers().ok()?.clone();
+    let g = header_map(&headers, GRAMMAR_ALIASES);
+    let w = header_map(&headers, WORD_ALIASES);
+    match (g.contains_key("pattern"), w.contains_key("term")) {
+        (true, false) => Some("grammar"),
+        (false, true) => Some("vocab"),
+        // Both (e.g. `word` and `grammar` columns): the file name decides.
+        (true, true) if lower.contains("grammar") || lower.contains("文法") => Some("grammar"),
+        (true, true) => Some("vocab"),
+        (false, false) => None,
+    }
+}
 
 /// Map canonical field name -> column index, from the header row.
 fn header_map(headers: &csv::StringRecord, aliases: &[(&'static str, &[&str])]) -> HashMap<&'static str, usize> {
@@ -344,7 +372,22 @@ pub async fn sync_workspace(ws: &Workspace, db: &Db) -> ImportReport {
             let origin = ws.relative(&path);
             absorb(&mut rep, import_lesson_file(db, &path, &origin, lang).await, &origin);
         }
+        for path in files_with_ext(&ws.conversations_dir(lang), &["md"]) {
+            let origin = ws.relative(&path);
+            match std::fs::read_to_string(&path) {
+                Ok(text) => match crate::conversation::import_file(db, &text, &origin).await {
+                    Ok(true) => rep.conversations += 1,
+                    Ok(false) => {}
+                    Err(e) => rep.warnings.push(format!("{origin}: {e}")),
+                },
+                Err(e) => rep.warnings.push(format!("{origin}: {e}")),
+            }
+        }
     }
+    // Points: every computer's records, append-only, into the index.
+    let (n, w) = crate::points::sync(ws, db).await;
+    rep.points += n;
+    rep.warnings.extend(w);
     rep
 }
 
@@ -517,6 +560,16 @@ pub async fn restore_records(ws: &Workspace, db: &Db) -> Result<ImportReport, Im
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn detects_dropped_files() {
+        use super::detect_kind;
+        assert_eq!(detect_kind("toeic.csv", "word,meaning\nquarterly,每季的\n"), Some("vocab"));
+        assert_eq!(detect_kind("n3.tsv", "文型\t意味\n〜わけだ\t難怪\n"), Some("grammar"));
+        assert_eq!(detect_kind("w46.json", r#"{"week":"2026-W46","language":"ja","items":[]}"#), Some("materials"));
+        assert_eq!(detect_kind("x.csv", "a,b\n1,2\n"), None);
+        assert_eq!(detect_kind("bad.json", "{nope"), None);
+    }
+
     use super::*;
 
     #[tokio::test]

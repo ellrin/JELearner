@@ -69,13 +69,14 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .route("/api/google/schedule-reviews", post(schedule_reviews))
         .route("/api/google/book-lesson", post(book_lesson))
         .route("/api/open/{page}", post(open_page))
+        .merge(crate::study::routes())
         .fallback_service(ServeDir::new(web))
 }
 
 // ── helpers ─────────────────────────────────────────────
 
 /// The chosen user's workspace, or 503 with the reason there is none.
-async fn ws(s: &Shared) -> Result<RwLockReadGuard<'_, Loaded>, ApiError> {
+pub(crate) async fn ws(s: &Shared) -> Result<RwLockReadGuard<'_, Loaded>, ApiError> {
     let g = s.loaded.read().await;
     if g.is_none() {
         let why = match (s.load_error.read().await.clone(), s.root.read().await.as_ref()) {
@@ -103,14 +104,14 @@ struct LangQuery {
     refresh: Option<bool>,
 }
 
-fn parse_lang(l: &Option<String>) -> Result<Option<Lang>, ApiError> {
+pub(crate) fn parse_lang(l: &Option<String>) -> Result<Option<Lang>, ApiError> {
     match l.as_deref().map(str::trim).filter(|s| !s.is_empty() && *s != "all") {
         None => Ok(None),
         Some(s) => s.parse().map(Some).map_err(bad),
     }
 }
 
-fn need_lang(l: &Option<String>) -> Result<Lang, ApiError> {
+pub(crate) fn need_lang(l: &Option<String>) -> Result<Lang, ApiError> {
     parse_lang(l)?.ok_or_else(|| bad("請指定語言 lang=en 或 ja"))
 }
 
@@ -119,7 +120,7 @@ fn today() -> String {
 }
 
 /// `dir/name.ext`, or `dir/name-2.ext`… if taken. Never overwrites.
-fn free_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+pub(crate) fn free_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     let mut p = dir.join(format!("{stem}.{ext}"));
     let mut n = 2;
     while p.exists() {
@@ -188,6 +189,8 @@ struct UserCard {
     id: String,
     name: String,
     color: String,
+    /// URL of the user's picture on this computer, if any.
+    avatar: Option<String>,
     kind: String,
     admin: bool,
 }
@@ -260,6 +263,7 @@ async fn status(State(s): State<Shared>) -> R<Status> {
         }
     };
     let error = s.load_error.read().await.clone();
+    let st_now = s.settings.read().await.clone();
     let root = s.root.read().await;
     let (workspace, workspace_name, demo, layout, users) = match root.as_ref() {
         Some(r) => (
@@ -273,6 +277,7 @@ async fn status(State(s): State<Shared>) -> R<Status> {
                 .map(|p| UserCard {
                     kind: r.root.meta.members.iter().find(|m| m.id == p.id).map(|m| format!("{:?}", m.kind).to_lowercase()).unwrap_or_else(|| "household".into()),
                     admin: r.root.is_admin(&p.id),
+                    avatar: crate::study::avatar_url(&st_now, &r.root.meta.id, &p.id),
                     id: p.id,
                     name: p.name,
                     color: p.color,
@@ -310,7 +315,9 @@ async fn status(State(s): State<Shared>) -> R<Status> {
         let st = l.db.stats(Some(lang), now - Duration::days(7), now).await?;
         stats.insert(lang.code().into(), serde_json::to_value(st).unwrap_or_default());
     }
-    out.user = Some(user_json(&l.ws));
+    let mut u = user_json(&l.ws);
+    u["avatar"] = json!(crate::study::avatar_url(&st_now, &l.ws.meta.id, &l.ws.profile.id));
+    out.user = Some(u);
     out.admin = admin_of(&l.ws.profile.id);
     out.db = Some(l.db_path.display().to_string());
     out.import = Some(l.import.clone());
@@ -1036,9 +1043,19 @@ async fn review_grade(State(s): State<Shared>, Json(g): Json<Grade>) -> R<Value>
     if !(1..=5).contains(&g.grade) {
         return Err(bad("grade 需為 1–5"));
     }
-    let l = ws(&s).await?;
-    let card = l.db.record_review(g.kind, g.id, g.grade, Utc::now()).await?;
-    Ok(Json(json!(card)))
+    let lang = {
+        let l = ws(&s).await?;
+        l.db.record_review(g.kind, g.id, g.grade, Utc::now()).await?;
+        let table = if g.kind == ItemKind::Word { "words" } else { "grammar" };
+        let lang: Option<String> = sqlx::query_scalar(&format!("SELECT lang FROM {table} WHERE id = ?")).bind(g.id).fetch_optional(l.db.pool()).await?;
+        lang.and_then(|l| l.parse::<Lang>().ok())
+    };
+    // A full round of cards is a unit worth a point.
+    let round = match lang {
+        Some(lang) => crate::study::review_round(&s, lang).await?,
+        None => json!({}),
+    };
+    Ok(Json(round))
 }
 
 async fn mistakes(State(s): State<Shared>, Query(q): Query<LangQuery>) -> R<Value> {
@@ -1086,11 +1103,17 @@ async fn import_file(State(s): State<Shared>, Query(q): Query<ImportQuery>, body
     let raw_name = q.name.clone().unwrap_or_default();
     let stem_src = Path::new(&raw_name).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
     let lang = parse_lang(&q.lang)?;
-    let (path, report) = match q.kind.as_str() {
+    // Drag and drop: find out what the file is.
+    let kind = if q.kind == "auto" {
+        import::detect_kind(&raw_name, &body).ok_or_else(|| bad("看不出這是什麼檔案：單字 CSV 需要 term／word／單字 欄，文法 CSV 需要 pattern／文法 欄，每週素材是 JSON"))?.to_string()
+    } else {
+        q.kind.clone()
+    };
+    let (path, report) = match kind.as_str() {
         "vocab" | "grammar" => {
             let lang = lang.unwrap_or_else(|| import::lang_from_path(Path::new(&raw_name), fallback));
             let ext = if raw_name.to_lowercase().ends_with(".tsv") { "tsv" } else { "csv" };
-            let dir = if q.kind == "vocab" { l.ws.vocab_dir() } else { l.ws.grammar_dir() };
+            let dir = if kind == "vocab" { l.ws.vocab_dir() } else { l.ws.grammar_dir() };
             let stem = format!("{}-{}", slug(if stem_src.is_empty() { "imported" } else { &stem_src }, 40), lang.code());
             let stem = if stem_src.ends_with(&format!("-{}", lang.code())) { slug(&stem_src, 44) } else { stem };
             std::fs::create_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
@@ -1098,14 +1121,14 @@ async fn import_file(State(s): State<Shared>, Query(q): Query<ImportQuery>, body
             let origin = l.ws.relative(&path);
             // Validate before writing, so a wrong file leaves no trace.
             let check = jl_core::db::Db::memory().await?;
-            let r = if q.kind == "vocab" {
+            let r = if kind == "vocab" {
                 import::import_vocab_csv(&check, &body, lang, &origin).await
             } else {
                 import::import_grammar_csv(&check, &body, lang, &origin).await
             };
             r.map_err(|e| bad(e.to_string()))?;
             std::fs::write(&path, &body).map_err(|e| fail(e.to_string()))?;
-            let r = if q.kind == "vocab" {
+            let r = if kind == "vocab" {
                 import::import_vocab_csv(&l.db, &body, lang, &origin).await
             } else {
                 import::import_grammar_csv(&l.db, &body, lang, &origin).await
@@ -1122,9 +1145,9 @@ async fn import_file(State(s): State<Shared>, Query(q): Query<ImportQuery>, body
             let r = import::import_material(&l.db, &body, &l.ws.relative(&path)).await.map_err(|e| bad(e.to_string()))?;
             (path, r)
         }
-        other => return Err(bad(format!("不支援的匯入類型：{other}（vocab、grammar、materials）"))),
+        other => return Err(bad(format!("不支援的匯入類型：{other}（vocab、grammar、materials、auto）"))),
     };
-    Ok(Json(json!({ "file": l.ws.relative(&path), "report": report })))
+    Ok(Json(json!({ "file": l.ws.relative(&path), "kind": kind, "report": report })))
 }
 
 async fn export_records(State(s): State<Shared>) -> R<Value> {

@@ -71,6 +71,34 @@ fn lesson_json() -> Value {
     })
 }
 
+/// A conversation turn: recast the learner's last message, ask again.
+fn turn_reply(b: &Value) -> Value {
+    let msgs = b["messages"].as_array().unwrap();
+    assert_eq!(msgs[0]["role"], "user", "the transcript starts with a user message");
+    for w in msgs.windows(2) {
+        assert_ne!(w[0]["role"], w[1]["role"], "turns alternate");
+    }
+    let last = msgs.last().unwrap()["content"].as_str().unwrap();
+    let ja = b["system"].as_str().unwrap().contains("Japanese student");
+    let opening = msgs.len() == 1;
+    json!({
+        "recast": if opening { String::new() } else { format!("So you mean: {last}") },
+        "question": if ja { "なにが好きですか。" } else { "What else do you enjoy about it?" },
+        "used_targets": [],
+        "starters": if ja { json!(["わたしは〜", "〜が好きです"]) } else { json!([]) },
+    })
+}
+
+fn review_json() -> Value {
+    json!({
+        "fluency": 4, "target_use": 4, "grammar": 5, "overall": "excellent",
+        "summary": "你說了很多完整的句子。",
+        "better": [{"original": "I very like it", "suggestion": "I really like it.", "why": "very 不修飾動詞"}],
+        "suggested_words": [{"term": "enthusiastic", "reading": "/ɪnˌθuːziˈæstɪk/", "meaning": "熱衷的"}],
+        "keywords": ["club", "music"]
+    })
+}
+
 /// The Claude Messages API, checking what a real request must look like.
 fn mock_claude(calls: Arc<Mutex<Vec<Value>>>) -> Router {
     Router::new().route(
@@ -86,7 +114,16 @@ fn mock_claude(calls: Arc<Mutex<Vec<Value>>>) -> Router {
                 assert_eq!(h["anthropic-beta"], "server-side-fallback-2026-07-01");
                 assert!(b.get("temperature").is_none());
                 calls.lock().unwrap().push(b.clone());
-                let text = if b["output_config"]["format"]["type"] == "json_schema" { lesson_json().to_string() } else { "OK".into() };
+                let props = &b["output_config"]["format"]["schema"]["properties"];
+                let text = if props["recast"].is_object() {
+                    turn_reply(&b).to_string()
+                } else if props["fluency"].is_object() {
+                    review_json().to_string()
+                } else if b["output_config"]["format"]["type"] == "json_schema" {
+                    lesson_json().to_string()
+                } else {
+                    "OK".into()
+                };
                 Json(json!({
                     "id": "msg_test", "type": "message", "role": "assistant", "model": b["model"],
                     "content": [{"type": "text", "text": text}],
@@ -581,4 +618,378 @@ async fn refuses_unsafe_workspace_locations() {
     assert!(!std::path::Path::new("relative").exists());
     let cfg = std::fs::read_to_string(app_dir.path().join("config.toml")).unwrap_or_default();
     assert!(!cfg.contains("workspace_path"), "no workspace remembered: {cfg}");
+}
+
+
+async fn put(c: &Client, path: &str, body: Value) -> (StatusCode, Value) {
+    let r = c.http.put(format!("{}{path}", c.base)).json(&body).send().await.unwrap();
+    (StatusCode::from_u16(r.status().as_u16()).unwrap(), r.json().await.unwrap_or(Value::Null))
+}
+
+/// A new workspace with Ellrin (English B1 and Japanese N5) and the mock
+/// Claude API.
+async fn stage_a_setup(app_dir: &Path, ws_path: &Path) -> (Client, Arc<Mutex<Vec<Value>>>) {
+    let calls = Arc::new(Mutex::new(vec![]));
+    let claude = serve(mock_claude(calls.clone())).await;
+    let mut st = settings(app_dir, &claude, "http://127.0.0.1:9");
+    st.google.mode = GoogleMode::Mock;
+    let c = start(st).await;
+    let (code, r) = c.post("/api/setup/workspace", json!({"path": ws_path, "init": true})).await;
+    assert_eq!(code, StatusCode::OK, "{r}");
+    let (code, r) = c.post("/api/users", json!({"name": "Ellrin", "languages": ["en", "ja"], "majors": {"en": "B1", "ja": "N5"}, "interests": ["music"]})).await;
+    assert_eq!(code, StatusCode::OK, "{r}");
+    (c, calls)
+}
+
+fn points_csv(ws_path: &Path) -> String {
+    let dir = ws_path.join("profiles/ellrin/records/points");
+    let mut out = String::new();
+    for e in std::fs::read_dir(&dir).unwrap().flatten() {
+        out.push_str(&std::fs::read_to_string(e.path()).unwrap());
+    }
+    out
+}
+
+/// The typed conversation from start to lock: topic and target words, a
+/// too-short turn refused, the whole transcript sent every turn, the turn
+/// limit, the lock, the evaluation, the point, the Markdown record and the
+/// points CSV.
+#[tokio::test]
+async fn typed_conversation_until_locked() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws_path = ws_dir.path().join("JELearner-private");
+    let (c, calls) = stage_a_setup(app_dir.path(), &ws_path).await;
+    let (code, _) = put(&c, "/api/user", json!({"turns": 5})).await;
+    assert_eq!(code, StatusCode::OK);
+
+    let (code, next) = c.get("/api/conversations/next?lang=en").await;
+    assert_eq!(code, StatusCode::OK, "{next}");
+    assert_eq!(next["turns"], 5);
+    assert_eq!(next["topic"]["kind"], "interest", "the first topic is from the interests (ratio 0.6)");
+    let (_, other) = c.get(&format!("/api/conversations/next?lang=en&skip={}", next["topic"]["id"].as_str().unwrap())).await;
+    assert_ne!(other["topic"]["id"], next["topic"]["id"], "another one");
+
+    let (code, conv) = c.post("/api/conversations", json!({"lang": "en"})).await;
+    assert_eq!(code, StatusCode::OK, "{conv}");
+    let id = conv["id"].as_i64().unwrap();
+    assert_eq!(conv["turns_done"], 0);
+    let targets: Vec<String> = conv["conversation"]["targets"].as_array().unwrap().iter().map(|t| t["term"].as_str().unwrap().to_string()).collect();
+    assert!(!targets.is_empty(), "target words come from the learner's vocabulary");
+    assert_eq!(conv["conversation"]["turns"][0]["role"], "ai", "the AI opens");
+
+    let (code, e) = c.post(&format!("/api/conversations/{id}/turns"), json!({"text": "ok"})).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "one word is not a turn: {e}");
+    let long = "word ".repeat(80);
+    let (code, _) = c.post(&format!("/api/conversations/{id}/turns"), json!({"text": long})).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "typed turns are limited in length");
+
+    let mut last = Value::Null;
+    for i in 1..=5 {
+        let text = if i == 2 { format!("Yesterday I used the word {} in a club meeting.", targets[0]) } else { format!("This is my answer number {i} about music.") };
+        let (code, r) = c.post(&format!("/api/conversations/{id}/turns"), json!({"text": text})).await;
+        assert_eq!(code, StatusCode::OK, "turn {i}: {r}");
+        assert_eq!(r["turns_done"], i);
+        assert_eq!(r["locked"], i == 5);
+        if i == 2 {
+            assert_eq!(r["used_now"], json!([targets[0]]), "the target word lights up");
+        }
+        let ai = r["conversation"]["turns"].as_array().unwrap().last().unwrap().clone();
+        assert!(ai["recast"].as_str().unwrap().contains(&format!("number {i}")) || i == 2, "recast of what was said: {ai}");
+        last = r;
+    }
+    assert_eq!(last["used"], json!([targets[0]]));
+    let (code, e) = c.post(&format!("/api/conversations/{id}/turns"), json!({"text": "One more thing to say here."})).await;
+    assert_eq!(code, StatusCode::CONFLICT, "locked after the last turn: {e}");
+    {
+        let calls = calls.lock().unwrap();
+        let turn_calls: Vec<&Value> = calls.iter().filter(|b| b["output_config"]["format"]["schema"]["properties"]["recast"].is_object()).collect();
+        assert_eq!(turn_calls.len(), 6, "opening + 5 turns");
+        let final_call = turn_calls.last().unwrap();
+        assert_eq!(final_call["messages"].as_array().unwrap().len(), 11, "cue + opening + 4 × (turn, reply) + last turn: the whole transcript");
+        assert!(final_call["system"].as_str().unwrap().contains("last turn"));
+        assert!(final_call["system"].as_str().unwrap().contains(&targets[0]));
+        assert_eq!(final_call["model"], "claude-opus-5-5");
+    }
+
+    let (code, done) = c.post(&format!("/api/conversations/{id}/finish"), json!({})).await;
+    assert_eq!(code, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "done");
+    assert_eq!(done["result"]["passed"], true);
+    assert_eq!(done["result"]["points"], 1.5, "excellent = 1 + 0.5");
+    assert_eq!(done["result"]["review"]["better"][0]["suggestion"], "I really like it.");
+    assert_eq!(done["summary"]["today"], 1.5);
+    let path = ws_path.join(done["path"].as_str().unwrap());
+    assert!(done["path"].as_str().unwrap().starts_with("profiles/ellrin/conversations/en/"));
+    let md = std::fs::read_to_string(&path).unwrap();
+    assert!(md.contains("↺ So you mean: This is my answer number 1"), "{md}");
+    assert!(md.contains("I really like it."));
+    assert!(md.contains("jelearner:conversation"), "data embedded for rebuilding");
+    let csv = points_csv(&ws_path);
+    assert!(csv.starts_with("time,lang,unit,skill,points,score,detail\n"), "{csv}");
+    assert!(csv.contains(",en,conversation,writing,1.5,0.87,conversations/en/"), "{csv}");
+
+    // Finishing again changes nothing.
+    let (code, again) = c.post(&format!("/api/conversations/{id}/finish"), json!({})).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(again["result"]["points"], 1.5);
+    assert_eq!(points_csv(&ws_path).matches(",conversation,").count(), 1);
+
+    // Today: the conversation task is done.
+    let (_, today) = c.get("/api/today?lang=en").await;
+    let task = today["tasks"].as_array().unwrap().iter().find(|t| t["id"] == "conversation").unwrap().clone();
+    assert_eq!(task["done"], true, "{today}");
+    assert_eq!(today["summary"]["streak"], 1);
+
+    // Japanese: low-pressure prompt with sentence starters.
+    let (code, ja) = c.post("/api/conversations", json!({"lang": "ja"})).await;
+    assert_eq!(code, StatusCode::OK, "{ja}");
+    assert_eq!(ja["conversation"]["turns"][0]["starters"], json!(["わたしは〜", "〜が好きです"]));
+    let (code, _) = c.post(&format!("/api/conversations/{}/turns", ja["id"]), json!({"text": "はい"})).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    let (code, r) = c.post(&format!("/api/conversations/{}/turns", ja["id"]), json!({"text": "音楽が好きです、特に jazz"})).await;
+    assert_eq!(code, StatusCode::OK, "{r}");
+
+    // A fresh database rebuilds the conversation from its file.
+    let other = tempfile::tempdir().unwrap();
+    let mut s2 = Settings::for_tests(Paths::from_repo(), other.path().to_path_buf());
+    s2.workspace = Some(ws_path.clone());
+    let c2 = start(s2).await;
+    let (_, list) = c2.get("/api/conversations?lang=en").await;
+    assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
+    assert_eq!(list[0]["status"], "done");
+    let (_, today2) = c2.get("/api/today?lang=en").await;
+    assert_eq!(today2["summary"]["total"], 1.5, "points restored from records/points");
+}
+
+/// Points come back on a fresh machine from records/points; a level step
+/// needs points, balance and recent scores; lessons, reviews and passive
+/// reading earn points; early difficulty feedback moves the difficulty.
+#[tokio::test]
+async fn points_levels_and_difficulty() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws_path = ws_dir.path().join("JELearner-private");
+    let (c, _calls) = stage_a_setup(app_dir.path(), &ws_path).await;
+    // Workspace rules: short rounds for the test.
+    std::fs::write(ws_path.join("progress.toml"), "[points]\nreview_round = 3\npassive_minutes = 2\n").unwrap();
+
+    // Records written on another computer, synced in.
+    let dir = ws_path.join("profiles/ellrin/records/points");
+    std::fs::write(
+        dir.join("2026-11-01.csv"),
+        "time,lang,unit,skill,points,score,detail\n\
+         2026-11-01T09:00:00+08:00,en,conversation,writing,100,0.9,conversations/en/a.md\n\
+         2026-11-01T10:00:00+08:00,en,conversation,speaking,100,0.9,conversations/en/b.md\n\
+         2026-11-01T11:00:00+08:00,en,quiz,reading,100,0.8,lessons/en/a.md\n\
+         2026-11-01T12:00:00+08:00,en,quiz,reading,100,0.8,lessons/en/b.md\n",
+    )
+    .unwrap();
+    let (code, rep) = c.post("/api/workspace/reindex", json!({})).await;
+    assert_eq!(code, StatusCode::OK, "{rep}");
+    assert_eq!(rep["points"], 4);
+    let (_, p) = c.get("/api/progress?lang=en").await;
+    assert_eq!(p["summary"]["level"], "B1-1");
+    assert_eq!(p["assessment"]["step_points"], 375.0);
+    let cond = |p: &Value, id: &str| p["assessment"]["conditions"].as_array().unwrap().iter().find(|c| c["id"] == id).unwrap()["ok"].clone();
+    assert_eq!(cond(&p, "points"), true, "{p}");
+    assert_eq!(cond(&p, "balance"), true);
+    assert_eq!(cond(&p, "recent"), false, "only four scored units");
+    assert_eq!(p["assessment"]["eligible"], false);
+    let (_, a) = c.post("/api/progress/assess", json!({"lang": "en"})).await;
+    assert!(a["level_up"].is_null());
+
+    // A fifth unit (failed, 0 points, still counts as recent performance).
+    std::fs::write(dir.join("2026-11-02.csv"), "time,lang,unit,skill,points,score,detail\n2026-11-02T09:00:00+08:00,en,quiz,reading,0,0.9,lessons/en/c.md\n").unwrap();
+    c.post("/api/workspace/reindex", json!({})).await;
+    let (_, p) = c.get("/api/progress?lang=en").await;
+    assert_eq!(p["assessment"]["eligible"], true, "{p}");
+    assert_eq!(p["skills"]["writing"], 100.0);
+    let (code, a) = c.post("/api/progress/assess", json!({"lang": "en"})).await;
+    assert_eq!(code, StatusCode::OK, "{a}");
+    assert_eq!(a["level_up"], json!({"from": "B1-1", "to": "B1-2"}));
+    assert_eq!(a["assessment"]["points_since"], 0.0, "points count again from the new step");
+    let profile = std::fs::read_to_string(ws_path.join("profiles/ellrin/profile.toml")).unwrap();
+    assert!(profile.contains("level = \"B1-2\"") && profile.contains("level_since"), "{profile}");
+    let (_, st) = c.get("/api/status").await;
+    assert_eq!(st["user"]["levels"]["en"]["level"], "B1-2");
+    assert_eq!(st["user"]["levels"]["en"]["difficulty_label"], "B1-1", "the level does not move the content difficulty");
+
+    // A lesson quiz: all right = 1 + bonus, once per lesson.
+    let (code, lesson) = c.post("/api/lessons", json!({"lang": "en", "title": "Chips", "text": "Several chipmakers announced new factories."})).await;
+    assert_eq!(code, StatusCode::OK, "{lesson}");
+    let lid = lesson["id"].as_i64().unwrap();
+    let answers = json!({"answers": [{"index": 0, "answer": "New factories"}, {"index": 1, "answer": "Prices keep rising.", "correct": true}]});
+    let (code, fin) = c.post(&format!("/api/lessons/{lid}/finish"), answers.clone()).await;
+    assert_eq!(code, StatusCode::OK, "{fin}");
+    assert_eq!(fin["score"], 1.0);
+    assert_eq!(fin["points"], 1.5);
+    assert_eq!(fin["ask_difficulty"], true, "the first lessons ask about difficulty");
+    let (_, again) = c.post(&format!("/api/lessons/{lid}/finish"), answers).await;
+    assert_eq!(again["already"], true);
+    assert_eq!(again["points"], 0.0);
+    // Early feedback: too easy = +15.
+    let (code, fb) = c.post("/api/difficulty/feedback", json!({"lang": "en", "feedback": "too_easy"})).await;
+    assert_eq!(code, StatusCode::OK, "{fb}");
+    assert_eq!(fb["change"]["from"], 200);
+    assert_eq!(fb["change"]["to"], 215);
+    assert_eq!(fb["early_feedback_left"], 4);
+    // A failed quiz on a second lesson: 0 points, may be redone.
+    let (_, l2) = c.post("/api/lessons", json!({"lang": "en", "title": "Chips 2", "text": "More factories."})).await;
+    let (_, fail) = c.post(&format!("/api/lessons/{}/finish", l2["id"]), json!({"answers": [{"index": 0, "answer": "Layoffs"}]})).await;
+    assert_eq!(fail["passed"], false);
+    assert_eq!(fail["points"], 0.0);
+    assert!(points_csv(&ws_path).contains(",en,quiz,reading,0,0,lessons/en/"), "failed attempts are recorded with 0 points");
+
+    // Review: a round of 3 cards is a unit.
+    let (_, due) = c.get("/api/review?lang=en&limit=3").await;
+    let mut last = Value::Null;
+    for d in due.as_array().unwrap() {
+        let (code, r) = c.post("/api/review", json!({"kind": d["item_kind"], "id": d["item_id"], "grade": 4})).await;
+        assert_eq!(code, StatusCode::OK, "{r}");
+        last = r;
+    }
+    assert_eq!(last["award"]["points"], 1.5, "{last}");
+    assert_eq!(last["award"]["cards"], 3);
+
+    // Passive reading: 2 minutes (workspace rule) = 1 point; capped per call.
+    let (_, r) = c.post("/api/passive", json!({"lang": "en", "kind": "reading", "seconds": 60})).await;
+    assert_eq!(r["awarded"], 0);
+    let (_, r) = c.post("/api/passive", json!({"lang": "en", "kind": "reading", "seconds": 9999})).await;
+    assert_eq!(r["awarded"], 1, "{r}");
+    let (code, _) = c.post("/api/passive", json!({"lang": "en", "kind": "manual", "seconds": 60})).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "no manual logging");
+
+    let (_, p) = c.get("/api/progress?lang=en").await;
+    let total = p["summary"]["total_lang"].as_f64().unwrap();
+    assert_eq!(total, 400.0 + 1.5 + 1.5 + 1.0);
+
+    // A fresh machine: same workspace, empty app folder.
+    let other = tempfile::tempdir().unwrap();
+    let mut s2 = Settings::for_tests(Paths::from_repo(), other.path().to_path_buf());
+    s2.workspace = Some(ws_path.clone());
+    let c2 = start(s2).await;
+    let (_, p2) = c2.get("/api/progress?lang=en").await;
+    assert_eq!(p2["summary"]["total_lang"].as_f64().unwrap(), total, "points restored from records/points: {p2}");
+    assert_eq!(p2["summary"]["level"], "B1-2");
+    assert_eq!(p2["skills"]["speaking"], 100.0);
+    assert_eq!(p2["summary"]["difficulty"], "B1-1", "215 is still B1-1");
+    let (_, lessons2) = c2.get("/api/lessons?lang=en").await;
+    let lid2 = lessons2.as_array().unwrap().iter().find(|l| l["path"] == lesson["path"]).unwrap()["id"].as_i64().unwrap();
+    let (_, again) = c2.post(&format!("/api/lessons/{lid2}/finish"), json!({"answers": [{"index": 0, "answer": "New factories"}]})).await;
+    assert_eq!(again["already"], true, "a lesson rewarded on another computer is not rewarded twice");
+
+    // Drag and drop: the file type is detected.
+    let (code, imp) = c.post_text("/api/import?kind=auto&name=n3.csv&lang=ja", "文型,意味\n〜わけだ,難怪\n").await;
+    assert_eq!(code, StatusCode::OK, "{imp}");
+    assert_eq!(imp["kind"], "grammar");
+    let (code, _) = c.post_text("/api/import?kind=auto&name=x.csv", "a,b\n1,2\n").await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+}
+
+/// The user's picture: stored in the app folder (never the workspace),
+/// served back, only images, at most 2 MB.
+#[tokio::test]
+async fn avatar_upload_and_limits() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws_path = ws_dir.path().join("JELearner-private");
+    let (c, _) = stage_a_setup(app_dir.path(), &ws_path).await;
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0];
+    jpeg.extend(std::iter::repeat_n(7u8, 5000));
+    let up = |body: Vec<u8>| {
+        let c = &c;
+        async move {
+            let r = c.http.post(format!("{}/api/user/avatar", c.base)).body(body).send().await.unwrap();
+            (r.status().as_u16(), r.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let (code, r) = up(jpeg.clone()).await;
+    assert_eq!(code, 200, "{r}");
+    let url = r["avatar"].as_str().unwrap().to_string();
+    assert!(url.starts_with("/api/avatars/ellrin?v="));
+    let got = c.http.get(format!("{}{url}", c.base)).send().await.unwrap();
+    assert_eq!(got.headers()["content-type"], "image/jpeg");
+    assert_eq!(got.bytes().await.unwrap().to_vec(), jpeg);
+    let (_, s) = c.get("/api/status").await;
+    let ws_id = s["user"]["avatar"].as_str().map(|_| ()).and(Some(()));
+    assert!(ws_id.is_some(), "status carries the picture");
+    assert!(s["users"][0]["avatar"].is_string(), "user cards too");
+    // Stored next to the databases, not in the workspace repository.
+    let stored: Vec<_> = walk(app_dir.path()).into_iter().filter(|p| p.ends_with("ellrin.jpg")).collect();
+    assert_eq!(stored.len(), 1);
+    assert!(stored[0].to_string_lossy().contains("/avatars/ws-"));
+    assert!(walk(&ws_path).iter().all(|p| !p.to_string_lossy().contains("ellrin.jpg")), "never in the workspace");
+
+    let (code, e) = up(b"not an image at all".to_vec()).await;
+    assert_eq!(code, 400, "{e}");
+    let mut big = vec![0xFF, 0xD8, 0xFF, 0xE0];
+    big.extend(std::iter::repeat_n(1u8, 2 * 1024 * 1024 + 10));
+    let (code, e) = up(big).await;
+    assert_eq!(code, 400, "over 2 MB: {e}");
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    png.extend([0u8; 100]);
+    let (code, _) = up(png).await;
+    assert_eq!(code, 200);
+    let got = c.http.get(format!("{}/api/avatars/ellrin", c.base)).send().await.unwrap();
+    assert_eq!(got.headers()["content-type"], "image/png", "a new picture replaces the old one");
+    let r = c.http.delete(format!("{}/api/user/avatar", c.base)).send().await.unwrap();
+    assert!(r.status().is_success());
+    let got = c.http.get(format!("{}/api/avatars/ellrin", c.base)).send().await.unwrap();
+    assert_eq!(got.status().as_u16(), 404);
+    let got = c.http.get(format!("{}/api/avatars/..%2Fetc", c.base)).send().await.unwrap();
+    assert_eq!(got.status().as_u16(), 404);
+}
+
+fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = vec![];
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk(&p));
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// The Claude subscription (fake Claude Code CLI): one prompt per call, so
+/// the whole transcript is written into the prompt every turn.
+#[cfg(unix)]
+#[tokio::test]
+async fn conversation_through_claude_code_passes_the_transcript() {
+    let cli_dir = tempfile::tempdir().unwrap();
+    let cli = jl_core::claude_code::fake::write(cli_dir.path());
+    let reply = |q: &str| json!({"recast": "So you like jazz.", "question": q, "used_targets": [], "starters": []}).to_string();
+    std::fs::write(cli_dir.path().join("reply.json"), reply("What music do you like?")).unwrap();
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let mut s = Settings::for_tests(Paths::from_repo(), app_dir.path().to_path_buf());
+    s.claude_bin = Some(cli.clone());
+    let c = start(s).await;
+    c.post("/api/setup/workspace", json!({"path": ws_dir.path(), "init": true})).await;
+    let (code, _) = c.post("/api/users", json!({"name": "Ellrin", "languages": ["en"]})).await;
+    assert_eq!(code, StatusCode::OK);
+    c.post("/api/claude-code/login", json!({})).await;
+    for _ in 0..50 {
+        let (_, cl) = c.get("/api/claude?fresh=true").await;
+        if cl["subscription"]["ready"] == true {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let (code, conv) = c.post("/api/conversations", json!({"lang": "en"})).await;
+    assert_eq!(code, StatusCode::OK, "{conv}");
+    assert!(conv["conversation"]["engine"].as_str().unwrap().starts_with("claude-subscription:"));
+    std::fs::write(cli_dir.path().join("reply.json"), reply("Who is your favourite player?")).unwrap();
+    let (code, r) = c.post(&format!("/api/conversations/{}/turns", conv["id"]), json!({"text": "I like jazz a lot, especially live."})).await;
+    assert_eq!(code, StatusCode::OK, "{r}");
+    let stdin = std::fs::read_to_string(cli_dir.path().join("last-stdin")).unwrap();
+    assert!(stdin.contains("<turn role=\"assistant\">\nWhat music do you like?"), "earlier AI turn in the prompt:\n{stdin}");
+    assert!(stdin.contains("<turn role=\"user\">\nI like jazz a lot"), "{stdin}");
+    let args = std::fs::read_to_string(cli_dir.path().join("last-args")).unwrap();
+    assert!(args.contains("recast") && args.contains("--safe-mode"), "turn schema passed: {args}");
 }

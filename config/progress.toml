@@ -1,0 +1,63 @@
+# Points, levels and difficulty rules (docs/plan.md §5.4, §8, §9).
+#
+# The numbers are first estimates from public study-hour data and will be
+# calibrated after real use. A workspace can override any value with a file
+# of the same name at its top level (`progress.toml`); only the keys written
+# there change, everything else comes from here.
+
+[points]
+# A quiz-like unit passes at this score (0–1).
+pass_score = 0.7
+# Bonus for a score at or above this, or an "excellent" conversation.
+bonus_score = 0.95
+# Bonus points (0 turns the bonus off).
+bonus = 0.5
+# Passive listening or reading: this many minutes in the app = 1 point.
+passive_minutes = 50
+# One round of review cards = this many cards.
+review_round = 20
+# A conversation passes when its evaluation (average of fluency, target
+# words and grammar, 0–1) reaches this. Completing every turn with real
+# content is required as well.
+conversation_pass = 0.4
+# Daily goal in points = daily minutes / this (1 active unit ≈ 5–10 min).
+minutes_per_point = 10
+
+[assessment]
+# Condition 2: speaking + writing must be at least this share of the points
+# earned at the current level.
+output_share = 0.3
+# Condition 3: the last `recent_units` scored units average at least
+# `recent_score`.
+recent_units = 5
+recent_score = 0.75
+
+[difficulty]
+# Early feedback after each of the first lessons (profile.toml
+# early_feedback_left): too easy / too hard.
+early_easy = 15
+early_hard = 15
+# Afterwards: average quiz score of the last `window` quizzes since the last
+# change; above `up_above` goes up, below `down_below` goes down, by `step`.
+window = 5
+up_above = 0.9
+down_below = 0.65
+step = 5
+
+# Points per major level ("本級積分"); each step needs an equal share.
+# English: 200–450 hours per level, Japanese for a Chinese speaker with kanji
+# background (plan §9.1, §9.3): about 6 points per hour.
+[levels.en]
+A1 = 1200
+A2 = 1200
+B1 = 1500
+B2 = 1500
+C1 = 1800
+C2 = 2700
+
+[levels.ja]
+N5 = 2100
+N4 = 1200
+N3 = 2100
+N2 = 3450
+N1 = 4050

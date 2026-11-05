@@ -11,9 +11,12 @@
 //! - [`report`] — weekly report, lesson confirmation, review scheduling
 //! - [`level`] — fine-grained levels and difficulty scores
 //! - [`catalog`] — local model catalog (for the Mac)
+//! - [`rules`], [`points`], [`progress`] — points, levels, difficulty (stage A)
+//! - [`topics`], [`conversation`] — topics and the typed AI conversation
 
 pub mod catalog;
 pub mod claude_code;
+pub mod conversation;
 pub mod crawler;
 pub mod db;
 pub mod google;
@@ -22,10 +25,14 @@ pub mod lang;
 pub mod lesson;
 pub mod level;
 pub mod news;
+pub mod points;
+pub mod progress;
 pub mod provider;
 pub mod report;
 pub mod robots;
+pub mod rules;
 pub mod srs;
+pub mod topics;
 pub mod vcs;
 pub mod workspace;
 

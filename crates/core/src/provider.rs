@@ -1,5 +1,11 @@
-//! Language-model providers behind one trait, so lesson generation (and later
-//! conversation and correction) does not care which engine runs it.
+//! Language-model providers behind one trait, so lesson generation and
+//! conversation do not care which engine runs it.
+//!
+//! Two calls: [`LlmProvider::complete`] (one prompt) and
+//! [`LlmProvider::chat`] (a whole multi-turn transcript). Engines with a
+//! native messages API (Claude API, llama-server) send the turns as
+//! messages; the Claude subscription (Claude Code CLI, one prompt per call)
+//! gets the whole transcript written into its prompt every turn.
 //!
 //! - [`ClaudeProvider`]: Anthropic Messages API (the engine until the Mac
 //!   arrives).
@@ -21,6 +27,58 @@ pub struct CompletionRequest {
     pub max_tokens: u32,
     /// When set, the reply must be one JSON object matching this schema.
     pub json_schema: Option<Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatMessage {
+    pub role: Role,
+    pub content: String,
+}
+
+impl ChatMessage {
+    pub fn user(c: impl Into<String>) -> ChatMessage {
+        ChatMessage { role: Role::User, content: c.into() }
+    }
+    pub fn assistant(c: impl Into<String>) -> ChatMessage {
+        ChatMessage { role: Role::Assistant, content: c.into() }
+    }
+}
+
+/// A multi-turn request: the full transcript every time (no server-side
+/// session), so any engine can answer it and the context stays bounded by
+/// the conversation's turn limit.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatRequest {
+    pub system: String,
+    /// Oldest first; starts with a user message and alternates.
+    pub messages: Vec<ChatMessage>,
+    pub max_tokens: u32,
+    pub json_schema: Option<Value>,
+}
+
+impl ChatRequest {
+    /// The transcript as one prompt, for engines that take a single prompt
+    /// (the Claude Code CLI): earlier turns in a `<conversation>` block, then
+    /// the instruction to write the next assistant turn.
+    pub fn flatten(&self) -> CompletionRequest {
+        let mut user = String::from("The conversation so far, oldest first:\n\n<conversation>\n");
+        for m in &self.messages {
+            let role = match m.role {
+                Role::User => "user",
+                Role::Assistant => "assistant",
+            };
+            user.push_str(&format!("<turn role=\"{role}\">\n{}\n</turn>\n", m.content.trim()));
+        }
+        user.push_str("</conversation>\n\nWrite the next assistant turn, following the system prompt.");
+        CompletionRequest { system: self.system.clone(), user, max_tokens: self.max_tokens, json_schema: self.json_schema.clone() }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +103,12 @@ pub trait LlmProvider: Send + Sync {
     /// `claude:claude-opus-5-5`.
     fn id(&self) -> String;
     async fn complete(&self, req: &CompletionRequest) -> Result<String, ProviderError>;
+
+    /// A multi-turn call. The default writes the transcript into one prompt
+    /// ([`ChatRequest::flatten`]); engines with a messages API override it.
+    async fn chat(&self, req: &ChatRequest) -> Result<String, ProviderError> {
+        self.complete(&req.flatten()).await
+    }
 }
 
 // ── Claude ───────────────────────────────────────────────
@@ -77,11 +141,21 @@ impl ClaudeProvider {
 
     /// The request body; public so tests can check its shape.
     pub fn body(&self, req: &CompletionRequest) -> Value {
+        self.chat_body(&ChatRequest {
+            system: req.system.clone(),
+            messages: vec![ChatMessage::user(req.user.clone())],
+            max_tokens: req.max_tokens,
+            json_schema: req.json_schema.clone(),
+        })
+    }
+
+    /// The request body for a whole transcript.
+    pub fn chat_body(&self, req: &ChatRequest) -> Value {
         let mut body = json!({
             "model": self.cfg.model,
             "max_tokens": req.max_tokens,
             "system": req.system,
-            "messages": [{ "role": "user", "content": req.user }],
+            "messages": req.messages,
         });
         let mut output = serde_json::Map::new();
         if let Some(e) = &self.cfg.effort {
@@ -107,13 +181,23 @@ impl LlmProvider for ClaudeProvider {
     }
 
     async fn complete(&self, req: &CompletionRequest) -> Result<String, ProviderError> {
+        self.send(self.body(req)).await
+    }
+
+    async fn chat(&self, req: &ChatRequest) -> Result<String, ProviderError> {
+        self.send(self.chat_body(req)).await
+    }
+}
+
+impl ClaudeProvider {
+    async fn send(&self, body: Value) -> Result<String, ProviderError> {
         let name = "Claude".to_string();
         let mut rb = self
             .http
             .post(format!("{}/v1/messages", self.cfg.base_url.trim_end_matches('/')))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", CLAUDE_API_VERSION)
-            .json(&self.body(req));
+            .json(&body);
         if self.cfg.fallbacks {
             rb = rb.header("anthropic-beta", CLAUDE_FALLBACK_BETA);
         }
@@ -183,14 +267,23 @@ impl LlmProvider for LlamaServerProvider {
     }
 
     async fn complete(&self, req: &CompletionRequest) -> Result<String, ProviderError> {
+        self.chat(&ChatRequest {
+            system: req.system.clone(),
+            messages: vec![ChatMessage::user(req.user.clone())],
+            max_tokens: req.max_tokens,
+            json_schema: req.json_schema.clone(),
+        })
+        .await
+    }
+
+    async fn chat(&self, req: &ChatRequest) -> Result<String, ProviderError> {
         let name = "llama-server".to_string();
+        let mut messages = vec![json!({ "role": "system", "content": req.system })];
+        messages.extend(req.messages.iter().map(|m| json!(m)));
         let mut body = json!({
             "model": self.cfg.model,
             "max_tokens": req.max_tokens,
-            "messages": [
-                { "role": "system", "content": req.system },
-                { "role": "user", "content": req.user },
-            ],
+            "messages": messages,
         });
         if let Some(schema) = &req.json_schema {
             body["response_format"] = json!({ "type": "json_schema", "json_schema": { "name": "reply", "schema": schema } });
@@ -224,11 +317,21 @@ impl LlmProvider for LlamaServerProvider {
 pub struct MockProvider {
     replies: Mutex<Vec<String>>,
     pub seen: Mutex<Vec<CompletionRequest>>,
+    pub seen_chats: Mutex<Vec<ChatRequest>>,
 }
 
 impl MockProvider {
     pub fn new(replies: Vec<String>) -> MockProvider {
-        MockProvider { replies: Mutex::new(replies), seen: Mutex::new(vec![]) }
+        MockProvider { replies: Mutex::new(replies), seen: Mutex::new(vec![]), seen_chats: Mutex::new(vec![]) }
+    }
+
+    fn next(&self) -> Result<String, ProviderError> {
+        let mut r = self.replies.lock().unwrap();
+        match r.len() {
+            0 => Err(ProviderError::NotConfigured("mock 沒有回覆".into())),
+            1 => Ok(r[0].clone()),
+            _ => Ok(r.remove(0)),
+        }
     }
 }
 
@@ -240,12 +343,12 @@ impl LlmProvider for MockProvider {
 
     async fn complete(&self, req: &CompletionRequest) -> Result<String, ProviderError> {
         self.seen.lock().unwrap().push(req.clone());
-        let mut r = self.replies.lock().unwrap();
-        match r.len() {
-            0 => Err(ProviderError::NotConfigured("mock 沒有回覆".into())),
-            1 => Ok(r[0].clone()),
-            _ => Ok(r.remove(0)),
-        }
+        self.next()
+    }
+
+    async fn chat(&self, req: &ChatRequest) -> Result<String, ProviderError> {
+        self.seen_chats.lock().unwrap().push(req.clone());
+        self.next()
     }
 }
 
@@ -300,6 +403,24 @@ mod tests {
         let mut r = req();
         r.system = "refuse".into();
         assert!(matches!(p.complete(&r).await, Err(ProviderError::Refused(_, w)) if w == "nope"));
+    }
+
+    #[test]
+    fn chat_body_sends_every_turn_and_flatten_keeps_them() {
+        let req = ChatRequest {
+            system: "s".into(),
+            messages: vec![ChatMessage::user("start"), ChatMessage::assistant("Hi! What do you do?"), ChatMessage::user("I study design.")],
+            max_tokens: 100,
+            json_schema: Some(json!({"type":"object"})),
+        };
+        let b = claude("http://x".into()).chat_body(&req);
+        assert_eq!(b["messages"].as_array().unwrap().len(), 3);
+        assert_eq!(b["messages"][1]["role"], "assistant");
+        assert_eq!(b["output_config"]["format"]["type"], "json_schema");
+        let flat = req.flatten();
+        assert!(flat.user.contains("<turn role=\"assistant\">\nHi! What do you do?"));
+        assert!(flat.user.trim_end().ends_with("following the system prompt."));
+        assert!(flat.user.find("start").unwrap() < flat.user.find("I study design.").unwrap(), "oldest first");
     }
 
     #[tokio::test]

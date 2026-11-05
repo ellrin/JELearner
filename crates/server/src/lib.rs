@@ -14,6 +14,7 @@ pub mod api;
 pub mod git;
 pub mod secrets;
 pub mod settings;
+pub mod study;
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};

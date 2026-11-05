@@ -114,6 +114,92 @@ CREATE TABLE materials (
 );
 CREATE INDEX progress_due ON progress (due_at);
 CREATE INDEX mistakes_open ON mistakes (lang, resolved_at);
+"#, r#"
+-- Stage A (docs/plan.md §17): points, units, conversations, word usage,
+-- topic stats, difficulty changes, passive time.
+CREATE TABLE points (
+    id      INTEGER PRIMARY KEY,
+    at      TEXT NOT NULL,            -- UTC, for comparisons
+    time    TEXT NOT NULL,            -- as written in records/points (with offset)
+    day     TEXT NOT NULL,            -- local date of `time`
+    lang    TEXT NOT NULL,
+    unit    TEXT NOT NULL,
+    skill   TEXT NOT NULL,
+    points  REAL NOT NULL,
+    score   REAL,
+    detail  TEXT NOT NULL DEFAULT '',
+    UNIQUE (time, lang, unit, skill, detail)
+);
+CREATE INDEX points_lang_at ON points (lang, at);
+CREATE TABLE units (
+    id         INTEGER PRIMARY KEY,
+    lang       TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    skill      TEXT NOT NULL,
+    ref        TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    ended_at   TEXT NOT NULL,
+    passed     INTEGER NOT NULL,
+    score      REAL,
+    duration_s INTEGER,
+    points     REAL NOT NULL DEFAULT 0,
+    UNIQUE (ended_at, lang, kind, ref)
+);
+CREATE INDEX units_lang_end ON units (lang, ended_at);
+CREATE TABLE conversations (
+    id          INTEGER PRIMARY KEY,
+    lang        TEXT NOT NULL,
+    topic_id    TEXT NOT NULL DEFAULT '',
+    topic       TEXT NOT NULL DEFAULT '',
+    topic_kind  TEXT NOT NULL DEFAULT 'general',
+    status      TEXT NOT NULL DEFAULT 'active',
+    turns_done  INTEGER NOT NULL DEFAULT 0,
+    turns_limit INTEGER NOT NULL,
+    score       REAL,
+    passed      INTEGER,
+    points      REAL,
+    path        TEXT NOT NULL DEFAULT '',
+    data        TEXT NOT NULL,
+    started_at  TEXT NOT NULL,
+    ended_at    TEXT
+);
+CREATE TABLE word_usage (
+    lang         TEXT NOT NULL,
+    term         TEXT NOT NULL,
+    used         INTEGER NOT NULL DEFAULT 0,
+    targeted     INTEGER NOT NULL DEFAULT 0,
+    last_used_at TEXT,
+    PRIMARY KEY (lang, term)
+);
+CREATE TABLE topic_stats (
+    lang      TEXT NOT NULL,
+    topic_id  TEXT NOT NULL,
+    topic     TEXT NOT NULL DEFAULT '',
+    kind      TEXT NOT NULL DEFAULT 'general',
+    count     INTEGER NOT NULL DEFAULT 0,
+    score_sum REAL NOT NULL DEFAULT 0,
+    scored    INTEGER NOT NULL DEFAULT 0,
+    last_at   TEXT,
+    PRIMARY KEY (lang, topic_id)
+);
+CREATE TABLE difficulty_log (
+    id         INTEGER PRIMARY KEY,
+    lang       TEXT NOT NULL,
+    from_score INTEGER NOT NULL,
+    to_score   INTEGER NOT NULL,
+    reason     TEXT NOT NULL,
+    at         TEXT NOT NULL
+);
+CREATE TABLE listening_time (
+    id      INTEGER PRIMARY KEY,
+    lang    TEXT NOT NULL,
+    kind    TEXT NOT NULL,
+    seconds INTEGER NOT NULL,
+    at      TEXT NOT NULL
+);
+ALTER TABLE lessons ADD COLUMN topic TEXT NOT NULL DEFAULT '';
+ALTER TABLE lessons ADD COLUMN difficulty INTEGER;
+ALTER TABLE lessons ADD COLUMN recipe TEXT NOT NULL DEFAULT '';
 "#];
 
 #[derive(Clone)]

@@ -1,0 +1,70 @@
+---
+title: "{{ c.topic.name }}"
+language: {{ lang }}
+level: {{ c.level }}
+topic: "{{ c.topic.id }}"
+date: {{ date }}
+turns: {{ turns_done }}/{{ c.turns_limit }}
+engine: {{ c.engine }}
+---
+
+# {{ c.topic.name }}
+
+{{ language_label }}對話・{{ c.level }}・{{ date }}{% if score_pct is not none %}・評估 {{ score_pct }}%{% endif %}{% if c.points %}・+{{ c.points }} 分{% endif %}
+
+
+{% if c.targets %}
+目標字：{% for t in c.targets %}{{ t.term }}{% if t.term in used %} ✓{% endif %}{% if not loop.last %}、{% endif %}{% endfor %}
+
+{% endif %}
+
+## 對話
+
+{% for t in c.turns %}
+{% if t.role == "ai" %}
+{% if t.recast %}
+> ↺ {{ t.recast }}
+
+{% endif %}
+**AI**：{{ t.text }}
+
+{% else %}
+**我**：{{ t.text }}
+
+{% endif %}
+{% endfor %}
+{% if c.review %}
+## 回饋
+
+{{ c.review.summary }}
+
+流暢度 {{ c.review.fluency }}/5・目標字 {{ c.review.target_use }}/5・文法 {{ c.review.grammar }}/5
+
+{% if c.review.better %}
+### 可以說得更好
+
+{% for b in c.review.better %}
+- {{ b.original }} → **{{ b.suggestion }}**{% if b.why %}（{{ b.why }}）{% endif %}
+
+{% endfor %}
+{% endif %}
+{% if used or unused %}
+### 目標字
+
+用到：{{ used | join("、") if used else "—" }}
+
+沒用到：{{ unused | join("、") if unused else "—" }}
+
+{% endif %}
+{% if c.review.suggested_words %}
+### 建議加入生字
+
+{% for w in c.review.suggested_words %}
+- {{ w.term }}{% if w.reading %}（{{ w.reading }}）{% endif %}：{{ w.meaning }}
+{% endfor %}
+
+{% endif %}
+{% if c.review.keywords %}
+關鍵字：{{ c.review.keywords | join("、") }}
+{% endif %}
+{% endif %}

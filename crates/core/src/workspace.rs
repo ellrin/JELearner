@@ -85,6 +85,10 @@ pub struct LangProfile {
     /// How many more lessons ask "too easy / right / too hard".
     #[serde(default = "five")]
     pub early_feedback_left: u32,
+    /// When the current level was reached (RFC 3339); points since then
+    /// count towards the next step. `None` = since the beginning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_since: Option<String>,
 }
 
 fn five() -> u32 {
@@ -95,7 +99,7 @@ impl LangProfile {
     /// Start from a self-assessed major level (`B1`, `N5`).
     pub fn starting_at(lang: Lang, major: &str) -> LangProfile {
         let start = level::major_start(lang, major).unwrap_or(0);
-        LangProfile { level: level::from_score(lang, start).label, difficulty: start, early_feedback_left: 5 }
+        LangProfile { level: level::from_score(lang, start).label, difficulty: start, early_feedback_left: 5, level_since: None }
     }
 }
 
@@ -561,6 +565,15 @@ impl Workspace {
     }
     pub fn topics_file(&self) -> PathBuf {
         self.root.join("topics.toml")
+    }
+    pub fn points_dir(&self) -> PathBuf {
+        self.records_dir().join("points")
+    }
+    /// A workspace path relative to this user's profile folder, as written
+    /// in records/points (`lessons/en/…`, `conversations/ja/…`).
+    pub fn profile_relative(&self, path: &Path) -> String {
+        let full = if path.is_absolute() { path.to_path_buf() } else { self.root.join(path) };
+        full.strip_prefix(self.profile_dir()).unwrap_or(&full).to_string_lossy().replace('\\', "/")
     }
 
     /// Workspace-relative path for display and for the database.
