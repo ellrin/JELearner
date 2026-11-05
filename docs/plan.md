@@ -76,10 +76,10 @@ name = "Ellrin"
 kind = "owner"              # owner | household
 
 [[member]]
-id = "daidai"
-name = "daidai"
+id = "member-2"
+name = "第二位使用者"
 kind = "household"
-devices = ["daidai-macbook"]   # 已核准的 deploy key 名稱（第 16.2 節）
+devices = ["member-2-laptop"]   # 已核准的 deploy key 名稱（第 16.2 節）
 ```
 
 ### 2.2 從第一版結構搬家

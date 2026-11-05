@@ -64,6 +64,8 @@ scripts/dev.sh --mock                        # both of the above together
 
 - Never commit keys, tokens, personal data, real user paths or the user's e-mail.
   `.gitignore` and `scripts/pre-commit` (gitleaks) back this up.
+- Examples, tests and docs use neutral placeholder names (e.g. "Second User",
+  `member-2`, "第二位使用者"); never invent names that look like real people.
 - Workspace files are the source of truth for things the user writes (vocab, grammar,
   materials, lessons); the database can always be rebuilt from them. Never overwrite a
   user's file: new files get a free name (`free_path`), template copies use

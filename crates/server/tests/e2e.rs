@@ -459,17 +459,17 @@ async fn subscription_engine_through_claude_code() {
     let ellrin_dir = std::fs::read_to_string(cli_dir.path().join("last-config-dir")).unwrap();
     assert!(ellrin_dir.ends_with("/ellrin"), "Claude Code ran with Ellrin's own sign-in folder: {ellrin_dir}");
 
-    // A second user on the same computer does not get Ellrin's Claude.
-    let (st, r) = c.post("/api/users", json!({"name": "daidai", "languages": ["ja"], "majors": {"ja": "N5"}})).await;
+    // A second user on the same computer does not get the first user's Claude.
+    let (st, r) = c.post("/api/users", json!({"name": "Second User", "languages": ["ja"], "majors": {"ja": "N5"}})).await;
     assert_eq!(st, StatusCode::OK, "{r}");
-    assert_eq!(r["user"]["id"], "daidai");
+    assert_eq!(r["user"]["id"], "second-user");
     let (_, cl) = c.get("/api/claude?fresh=true").await;
-    assert_eq!(cl["subscription"]["ready"], false, "daidai is not signed in by Ellrin's login: {cl}");
+    assert_eq!(cl["subscription"]["ready"], false, "the second user is not signed in by the first user's login: {cl}");
     assert!(cl["active"].is_null());
     let (st, _) = c.post("/api/lessons", json!({"lang": "ja", "text": "テスト"})).await;
     assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "no fallback to someone else's Claude");
     let (_, words) = c.get("/api/words?lang=en&q=accel").await;
-    assert!(words.as_array().unwrap().is_empty(), "daidai's database is her own");
+    assert!(words.as_array().unwrap().is_empty(), "the second user has their own database");
     let (_, st2) = c.get("/api/status").await;
     assert_eq!(st2["users"].as_array().unwrap().len(), 2);
     assert_eq!(st2["admin"], false, "only the first user is admin");
