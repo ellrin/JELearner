@@ -124,6 +124,7 @@ pub fn split(words: &[TargetWord], grammar: &[TargetGrammar], size: &ContentSize
             review: std::mem::take(&mut since.0),
             grammar: std::mem::take(&mut since.1),
             units,
+            series: 1,
             ..Default::default()
         });
     };
@@ -158,6 +159,7 @@ pub fn split(words: &[TargetWord], grammar: &[TargetGrammar], size: &ContentSize
             review,
             grammar: gs,
             units,
+            series: 1,
             ..Default::default()
         });
     }

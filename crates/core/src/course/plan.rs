@@ -19,14 +19,7 @@ use crate::workspace::Workspace;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-/// A news article (or other real text) for a lesson to be based on.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SourceText {
-    pub title: String,
-    pub url: String,
-    pub source: String,
-    pub text: String,
-}
+pub use super::model::SourceText;
 
 /// What is known when the lesson is opened.
 #[derive(Debug, Clone, Default)]
@@ -35,6 +28,8 @@ pub struct LessonContext {
     pub recent_accuracy: Option<f32>,
     /// A real article containing the lesson's words, when one was found
     /// (see [`pick_article`]); otherwise the model writes a short text.
+    /// The lesson's own [`LessonPlan::article`] (a text the learner gave)
+    /// wins over this; see [`needs_search`].
     pub article: Option<SourceText>,
 }
 
@@ -175,6 +170,13 @@ pub fn pick_article(candidates: &[SourceText], terms: &[String], lang: Lang) -> 
         .map(|(i, _)| i)
 }
 
+/// Should the server look for a news article before opening this lesson?
+/// Not when the learner gave the lesson's text, and not for review or
+/// conversation lessons.
+pub fn needs_search(plan: &LessonPlan) -> bool {
+    plan.article.is_none() && matches!(plan.role, LessonRole::Regular | LessonRole::Background | LessonRole::Article)
+}
+
 // ── Request ──────────────────────────────────────────────
 
 fn units_json(units: &[UnitPlan]) -> Vec<Value> {
@@ -188,7 +190,7 @@ pub fn build_request(t: &CourseTemplates, course: &Course, plan: &LessonPlan, le
     let questions = plan.units.iter().find(|u| matches!(u.kind, UnitKind::Reading | UnitKind::Quiz)).map(|u| u.items).unwrap_or(0);
     let output: Vec<&UnitPlan> = plan.units.iter().filter(|u| u.kind.is_output()).collect();
     let turns = plan.units.iter().find(|u| u.kind == UnitKind::Conversation).map(|u| u.items).unwrap_or(0);
-    let article = match &ctx.article {
+    let article = match plan.article.as_ref().or(ctx.article.as_ref()) {
         Some(a) => {
             let n = a.text.chars().count();
             if a.text.trim().is_empty() {
@@ -330,7 +332,7 @@ pub async fn generate(
     let missing = missing_words(&cl.text, &terms, learner.lang);
     let level = learner.level().label;
     let meta = MarkdownMeta { lang: learner.lang, level: level.clone(), date: date.to_string(), engine: provider.id() };
-    let md = render_markdown(t, &cl, plan, course, &meta, ctx.article.as_ref())?;
+    let md = render_markdown(t, &cl, plan, course, &meta, plan.article.as_ref().or(ctx.article.as_ref()))?;
     let markdown = lesson::embed_data(&md, &cl);
     Ok(Generated { lesson: cl, markdown, missing, level })
 }
@@ -348,8 +350,8 @@ pub struct Opened {
 }
 
 /// Open a lesson of a saved course: generate it on first open (saving the
-/// Markdown under a free name and marking the outline `generated`), or read
-/// the existing file.
+/// Markdown under a free name and recording `generated` in the progress
+/// file; the outline file is not touched), or read the existing file.
 #[allow(clippy::too_many_arguments)]
 pub async fn open_lesson(
     provider: &dyn LlmProvider,
@@ -377,7 +379,7 @@ pub async fn open_lesson(
         p.file = Some(file.clone());
         p.generated = Some(date.to_string());
     }
-    store::save(ws, &course)?;
+    store::save_progress(ws, &course)?;
     Ok(Opened { course, file, markdown: g.markdown.clone(), generated: Some(g) })
 }
 

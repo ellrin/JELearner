@@ -1,9 +1,11 @@
 //! End to end through the core with the mock provider: create a topic
-//! course outline, save it, open lesson 2 (generate from its plan), check
-//! the target words are in the content and the outline is updated.
+//! course outline from keywords and a page the learner gave, save it, open
+//! lesson 2 (generated from its plan, based on that page), check the target
+//! words are in the content, the progress is recorded and the outline file
+//! is left as it was.
 
 use jl_core::course::outline::{create_topic_course, recurrence, TopicRequest, MIN_RECURRENCE};
-use jl_core::course::plan::{open_lesson, LessonContext, SourceText};
+use jl_core::course::plan::{needs_search, open_lesson, LessonContext, SourceText};
 use jl_core::course::{store, topics, CourseTemplates, Learner, LessonRole, LessonStatus};
 use jl_core::lang::Lang;
 use jl_core::lesson;
@@ -76,26 +78,32 @@ async fn topic_course_outline_then_lesson_two() {
 
     // 1. Create: only the outline.
     let interests = topics::parse_interests("keyword,lang,weight,updated_at\nsemiconductor,,1,\n");
-    let req = TopicRequest { keywords: vec!["AI chips".into()], ..Default::default() };
+    let page = SourceText { title: "New fab".into(), url: "https://example.com/fab".into(), source: "Example".into(), text: "A new fab got a subsidy.".into() };
+    let req = TopicRequest { keywords: vec!["AI chips".into()], sources: vec![page.clone()], ..Default::default() };
     let mut course = create_topic_course(&p, &templates, &learner, &req, &interests, "2026-11-05").await.unwrap();
     assert_eq!(course.lessons.len(), 5);
     assert!(course.lessons.iter().all(|l| l.status == LessonStatus::Planned && l.file.is_none()));
     assert_eq!(course.lessons[4].role, LessonRole::Review);
     assert!(course.lessons[4].words.is_empty());
-    for (term, intro, count) in recurrence(&course.lessons) {
-        assert!(count >= MIN_RECURRENCE.min(5 - intro as usize + 1), "{term}");
+    assert!(course.lessons[3].words.is_empty(), "lesson 4 introduces no new words (battery dropped)");
+    for (term, _, count) in recurrence(&course.lessons) {
+        assert!(count >= MIN_RECURRENCE, "{term}");
     }
+    assert_eq!(course.lessons[1].article.as_ref(), Some(&page), "the learner's page is lesson 2's text");
     let id = store::save_new(&ws, &mut course).unwrap();
     assert_eq!(id, "2026-11-05-ai-chips-this-week");
     assert!(ws.profile_dir().join("recipes/2026-11-05-ai-chips-this-week.toml").exists());
     assert_eq!(p.seen.lock().unwrap().len(), 1, "no lesson content yet");
+    let outline_file = ws.profile_dir().join("recipes/2026-11-05-ai-chips-this-week.toml");
+    let outline_text = std::fs::read_to_string(&outline_file).unwrap();
 
     // 2. Open lesson 2: generated from its plan.
     let plan = course.lesson(2).unwrap().clone();
     let targets: Vec<String> = plan.words.iter().map(|w| w.term.clone()).collect();
     assert_eq!(targets, vec!["subsidy", "yield", "capacity"]);
     assert!(plan.review.contains(&"semiconductor".to_string()), "lesson-1 words come back: {:?}", plan.review);
-    let ctx = LessonContext { recent_accuracy: Some(0.8), article: Some(SourceText { title: "New fab".into(), url: "https://example.com/fab".into(), source: "Example".into(), text: "A new fab got a subsidy.".into() }) };
+    assert!(!needs_search(&plan), "no news search for a lesson with the learner's page");
+    let ctx = LessonContext { recent_accuracy: Some(0.8), article: None };
     let opened = open_lesson(&p, &templates, &ws, &id, 2, &learner, &ctx, "2026-11-06").await.unwrap();
     let g = opened.generated.as_ref().expect("generated now");
     assert!(g.missing.is_empty(), "missing in text: {:?}", g.missing);
@@ -106,7 +114,8 @@ async fn topic_course_outline_then_lesson_two() {
         assert!(seen.user.contains(t.as_str()), "{t} in the prompt");
     }
     assert!(seen.user.contains("so ... that ..."));
-    assert!(seen.user.contains("A new fab got a subsidy."), "the article is sent");
+    assert!(seen.user.contains("A new fab got a subsidy."), "the learner's page is sent");
+    assert!(seen.system.contains("Weave the new and review"));
     assert!(seen.system.contains("80 %"));
     assert!(seen.json_schema.as_ref().unwrap()["properties"]["text"].is_object());
 
@@ -126,7 +135,10 @@ async fn topic_course_outline_then_lesson_two() {
     assert!(opened.file.starts_with("profiles/ellrin/lessons/en/2026-11-06-ai-chips-this-week-02"));
     assert!(dir.path().join(&opened.file).exists());
 
-    // The outline file is updated; opening again reads the file, no new call.
+    // Progress is recorded in its own file; the outline file is untouched.
+    assert_eq!(std::fs::read_to_string(&outline_file).unwrap(), outline_text);
+    assert!(ws.profile_dir().join("recipes/2026-11-05-ai-chips-this-week.progress.toml").exists());
+    // Opening again reads the lesson file, no new call.
     let saved = store::load(&ws, &id).unwrap();
     let l2 = saved.lesson(2).unwrap();
     assert_eq!(l2.status, LessonStatus::Generated);
@@ -144,7 +156,8 @@ async fn topic_course_outline_then_lesson_two() {
     for u in 0..n {
         points += store::mark_unit(&mut c, 2, u, true, Some(0.9), "2026-11-06").unwrap().points;
     }
-    store::save(&ws, &c).unwrap();
+    store::save_progress(&ws, &c).unwrap();
+    assert_eq!(std::fs::read_to_string(&outline_file).unwrap(), outline_text);
     assert_eq!(points, n as f32);
     assert_eq!(store::load(&ws, &id).unwrap().lesson(2).unwrap().status, LessonStatus::Done);
     let (list, _) = store::list(&ws);

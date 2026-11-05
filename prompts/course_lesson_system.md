@@ -10,7 +10,8 @@ Your job is to write the content so that the learner practises exactly these.
 Rules for `text` (today's text, about {{ text_length }}):
 {% if article %}
 - Base it on the article in the request: rewrite it at the learner's level (graded-reader style).
-  Keep the facts of the article; do not invent facts about the news.
+  Keep the facts of the article; do not invent facts about the news. Weave the new and review
+  words in where they fit naturally, without changing what the article says.
 {% else %}
 - Write a short original text{% if angle %} from the lesson's angle{% endif %}. If it is about real events, stay general
   and do not invent specific facts, names or numbers.

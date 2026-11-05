@@ -14,7 +14,7 @@ The learner's interests (for the personal angle): {{ interests | join(", ") }}
 Source page: {{ url }}
 {% endif %}
 Level: {{ level }}
-New words per lesson: {{ topic_words_min }}–{{ topic_words_max }}; grammar per lesson: {{ grammar_min }}–{{ grammar_max }}
+New words per lesson (lessons 1–{{ word_lessons }} only): {{ topic_words_min }}–{{ topic_words_max }}; grammar per lesson: {{ grammar_min }}–{{ grammar_max }}
 Each text will be about {{ text_length }}.
 {% if previous_words %}
 
@@ -25,12 +25,12 @@ them new again (they will be reviewed): {{ previous_words | join(", ") }}
 
 Words the learner already knows (do not make them new): {{ known_words | join(", ") }}
 {% endif %}
-{% if source_text %}
+{% for src in sources %}
 
-<source>
-{{ source_text }}
+<source lesson="{{ loop.index + 1 }}"{% if src.title %} title="{{ src.title }}"{% endif %}{% if src.url %} url="{{ src.url }}"{% endif %}>
+{{ src.text }}
 </source>
-{% endif %}
+{% endfor %}
 {% else %}
 Course: {{ name }} ({{ language }}, level {{ level }}, {{ lessons }} lessons)
 

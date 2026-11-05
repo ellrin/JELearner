@@ -1,19 +1,30 @@
-//! Course outlines as files in the user's workspace:
-//! `profiles/<id>/recipes/<course-id>.toml` (TOML, like the recipes of
-//! docs/plan.md §13, which a course file extends with its outline).
+//! Courses as files in the user's workspace, two per course:
 //!
-//! New files always get a free name; an existing file is only rewritten by
-//! [`save`] for the course it holds (status updates). The database can be
-//! rebuilt from these files and the lesson files they point to.
+//! - `profiles/<id>/recipes/<course-id>.toml` — the **outline** (TOML, like
+//!   the recipes of docs/plan.md §13, which a course file extends with its
+//!   lessons). Written once when the course is created; after that it is
+//!   the user's file: the app never rewrites it, so hand edits and comments
+//!   survive. Extending a topic course only appends new `[[lesson]]` tables
+//!   at the end ([`append_lessons`]).
+//! - `profiles/<id>/recipes/<course-id>.progress.toml` — the **progress**
+//!   (course status, lesson status, lesson file, units passed), written by
+//!   the app ([`save_progress`]).
+//!
+//! New files always get a free name. Older outline files that still carry
+//! progress fields load fine: those values are used until a progress file
+//! exists, which then takes precedence. The database can be rebuilt from
+//! these files and the lesson files they point to.
 
 use super::model::*;
 use super::CourseError;
-use crate::workspace::Workspace;
 use crate::workspace::slug;
+use crate::workspace::Workspace;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 pub const EXT: &str = "toml";
+/// Suffix of the progress file: `<course-id>.progress.toml`.
+pub const PROGRESS_SUFFIX: &str = ".progress.toml";
 
 /// `profiles/<id>/recipes/`
 pub fn recipes_dir(ws: &Workspace) -> PathBuf {
@@ -31,62 +42,125 @@ pub fn free_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     p
 }
 
-/// Course ids are file stems: letters (also CJK), digits, `-`, `_`.
+/// Course ids are file stems: letters (also CJK), digits, `-`, `_` (no
+/// dots, so a progress file is never taken for a course).
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.chars().count() <= 80 && !id.starts_with(['-', '.']) && id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
 }
 
-fn path_of(ws: &Workspace, id: &str) -> Result<PathBuf, CourseError> {
+/// The outline file of a course.
+pub fn outline_path(ws: &Workspace, id: &str) -> Result<PathBuf, CourseError> {
     if !valid_id(id) {
         return Err(CourseError::NotFound(id.to_string()));
     }
     Ok(recipes_dir(ws).join(format!("{id}.{EXT}")))
 }
 
-fn to_toml(course: &Course) -> Result<String, CourseError> {
-    let body = toml::to_string_pretty(course).map_err(|e| CourseError::Format(course.id.clone(), e.to_string()))?;
-    Ok(format!(
-        "# JELearner course outline (docs/courses.md). The app updates `status`, `file`,\n\
-         # `generated`, `done` and `units_done`; titles, words and grammar may be edited by hand.\n\n{body}"
-    ))
+/// The progress file of a course.
+pub fn progress_path(ws: &Workspace, id: &str) -> Result<PathBuf, CourseError> {
+    if !valid_id(id) {
+        return Err(CourseError::NotFound(id.to_string()));
+    }
+    Ok(recipes_dir(ws).join(format!("{id}{PROGRESS_SUFFIX}")))
 }
+
+fn ser<T: Serialize>(value: &T, origin: &str) -> Result<String, CourseError> {
+    toml::to_string_pretty(value).map_err(|e| CourseError::Format(origin.to_string(), e.to_string()))
+}
+
+const OUTLINE_HEADER: &str = "# JELearner course outline (docs/courses.md). This file is yours: edit titles,\n\
+                              # words, grammar or units freely. The app keeps progress in\n\
+                              # <this name>.progress.toml and never rewrites this file.\n\n";
 
 pub fn parse(text: &str, origin: &str) -> Result<Course, CourseError> {
     toml::from_str(text).map_err(|e| CourseError::Format(origin.to_string(), e.to_string()))
 }
 
+fn write_new(path: &Path, text: &str) -> Result<(), CourseError> {
+    // create_new: a file appearing between the check and the write is not overwritten.
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    f.write_all(text.as_bytes())?;
+    Ok(())
+}
+
 /// Save a new course under a free name: `<date>-<slug of name>.toml`
-/// (`-2`, `-3`… when taken). Sets and returns the course id.
+/// (`-2`, `-3`… when taken), plus its progress file. Sets and returns the
+/// course id.
 pub fn save_new(ws: &Workspace, course: &mut Course) -> Result<String, CourseError> {
     let dir = recipes_dir(ws);
     std::fs::create_dir_all(&dir)?;
     let stem = format!("{}-{}", course.created, slug(&course.name, 40));
-    let stem = if valid_id(&stem) { stem } else { format!("course-{}", course.created) };
-    let path = free_path(&dir, &stem, EXT);
-    course.id = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or(stem);
-    // create_new: a file appearing between the check and the write is not overwritten.
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
-    f.write_all(to_toml(course)?.as_bytes())?;
-    Ok(course.id.clone())
+    let base = if valid_id(&stem) { stem } else { format!("course-{}", course.created) };
+    let mut id = base.clone();
+    let mut n = 2;
+    // Free for both files (a left-over progress file is not adopted).
+    while dir.join(format!("{id}.{EXT}")).exists() || dir.join(format!("{id}{PROGRESS_SUFFIX}")).exists() {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+    course.id = id.clone();
+    let outline = course.outline_only();
+    write_new(&outline_path(ws, &id)?, &format!("{OUTLINE_HEADER}{}", ser(&outline, &id)?))?;
+    save_progress(ws, course)?;
+    Ok(id)
 }
 
-/// Rewrite the file of a saved course (after a status change).
-pub fn save(ws: &Workspace, course: &Course) -> Result<(), CourseError> {
-    let path = path_of(ws, &course.id)?;
-    if !path.exists() {
+/// Write the progress file of a saved course (the outline is not touched).
+pub fn save_progress(ws: &Workspace, course: &Course) -> Result<(), CourseError> {
+    if !outline_path(ws, &course.id)?.exists() {
         return Err(CourseError::NotFound(course.id.clone()));
     }
-    std::fs::write(&path, to_toml(course)?)?;
+    let header = "# JELearner course progress, written by the app. The outline is in the file\n\
+                  # of the same name without `.progress`.\n\n";
+    std::fs::write(progress_path(ws, &course.id)?, format!("{header}{}", ser(&course.progress(), &course.id)?))?;
     Ok(())
 }
 
+#[derive(Serialize)]
+struct LessonsOnly {
+    #[serde(rename = "lesson")]
+    lessons: Vec<LessonPlan>,
+}
+
+/// Append lessons (numbers `from` and up, e.g. after
+/// [`super::outline::extend_topic_course`]) to the outline file as new
+/// `[[lesson]]` tables at its end, leaving everything already there as it
+/// is; then save the progress.
+pub fn append_lessons(ws: &Workspace, course: &Course, from: u32, date: &str) -> Result<usize, CourseError> {
+    let path = outline_path(ws, &course.id)?;
+    if !path.exists() {
+        return Err(CourseError::NotFound(course.id.clone()));
+    }
+    let new: Vec<LessonPlan> = course.outline_only().lessons.into_iter().filter(|l| l.number >= from).collect();
+    let n = new.len();
+    if n > 0 {
+        let body = ser(&LessonsOnly { lessons: new }, &course.id)?;
+        let series = course.series.max(1);
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path)?;
+        f.write_all(format!("\n# Series {series}, added {date}\n\n{body}").as_bytes())?;
+    }
+    save_progress(ws, course)?;
+    Ok(n)
+}
+
+/// Read a course: its outline with its progress put over it.
 pub fn load(ws: &Workspace, id: &str) -> Result<Course, CourseError> {
-    let path = path_of(ws, id)?;
+    let path = outline_path(ws, id)?;
     let text = std::fs::read_to_string(&path).map_err(|_| CourseError::NotFound(id.to_string()))?;
     let mut c = parse(&text, &ws.relative(&path))?;
     // The file name is the identity.
     c.id = id.to_string();
+    for l in c.lessons.iter_mut() {
+        l.series = l.series.max(1);
+    }
+    c.series = c.lessons.iter().map(|l| l.series).chain([c.series]).max().unwrap_or(1).max(1);
+    let ppath = progress_path(ws, id)?;
+    if let Ok(ptext) = std::fs::read_to_string(&ppath) {
+        let p: Progress = toml::from_str(&ptext).map_err(|e| CourseError::Format(ws.relative(&ppath), e.to_string()))?;
+        c.apply_progress(&p);
+    }
     Ok(c)
 }
 
@@ -169,7 +243,7 @@ pub struct UnitResult {
 /// Record a unit attempt. A passed unit is marked done (once; doing it again
 /// is worth no new point) and the lesson is done when all its units are; the
 /// course is finished when every lesson is done. A failed attempt changes
-/// nothing and is worth 0. The caller saves the course.
+/// nothing and is worth 0. The caller saves with [`save_progress`].
 pub fn mark_unit(course: &mut Course, number: u32, unit: u32, passed: bool, score: Option<f32>, date: &str) -> Result<UnitResult, CourseError> {
     let lang = course.lang;
     let id = course.id.clone();
@@ -224,26 +298,104 @@ mod tests {
         let mut c = course();
         let id = save_new(&ws, &mut c).unwrap();
         assert_eq!(id, "2026-11-05-toeic-單字");
-        let text = std::fs::read_to_string(recipes_dir(&ws).join(format!("{id}.toml"))).unwrap();
+        let outline = recipes_dir(&ws).join(format!("{id}.toml"));
+        let text = std::fs::read_to_string(&outline).unwrap();
         assert!(text.contains("kind = \"fixed\"") && text.contains("[[lesson]]") && text.contains("[[lesson.unit]]"), "{text}");
+        assert!(!text.contains("status") && !text.contains("units_done"), "no progress in the outline:\n{text}");
+        assert!(recipes_dir(&ws).join(format!("{id}.progress.toml")).exists());
         assert_eq!(load(&ws, &id).unwrap(), c);
         // Same name again: a free name, the first file untouched.
         let mut c2 = course();
         assert_eq!(save_new(&ws, &mut c2).unwrap(), format!("{id}-2"));
-        assert_eq!(std::fs::read_to_string(recipes_dir(&ws).join(format!("{id}.toml"))).unwrap(), text);
-        // A plain recipe and a broken file are skipped, not fatal.
+        assert_eq!(std::fs::read_to_string(&outline).unwrap(), text);
+        // A left-over progress file is not adopted by a new course.
+        std::fs::write(recipes_dir(&ws).join("2026-11-05-toeic-單字-3.progress.toml"), "").unwrap();
+        assert_eq!(save_new(&ws, &mut course()).unwrap(), format!("{id}-4"));
+        // A plain recipe and a broken file are skipped, not fatal; progress files are not courses.
         std::fs::write(recipes_dir(&ws).join("interest.toml"), "kind = \"topic\"\nname = \"AI\"\nlang = \"en\"\nid = \"x\"\n").unwrap();
         std::fs::write(recipes_dir(&ws).join("broken.toml"), "kind = [").unwrap();
         let (list, skipped) = list(&ws);
-        assert_eq!(list.len(), 2);
+        assert_eq!(list.len(), 3);
         assert_eq!(list[0].lessons, 3);
         assert_eq!(list[0].next, Some(1));
-        assert_eq!(skipped.len(), 2);
+        assert_eq!(skipped.len(), 2, "{skipped:?}");
         assert!(load(&ws, "../profile").is_err());
-        // Hand-edited files with only some fields still load.
+        // Hand-written files with only some fields still load.
         std::fs::write(recipes_dir(&ws).join("mini.toml"), "kind = \"topic\"\nname = \"Mini\"\nlang = \"ja\"\nid = \"\"\n[[lesson]]\nnumber = 1\n").unwrap();
         let m = load(&ws, "mini").unwrap();
-        assert_eq!((m.id.as_str(), m.daily_minutes, m.lessons[0].status), ("mini", 30, LessonStatus::Planned));
+        assert_eq!((m.id.as_str(), m.daily_minutes, m.lessons[0].status, m.series), ("mini", 30, LessonStatus::Planned, 1));
+    }
+
+    #[test]
+    fn hand_edits_survive_progress_updates() {
+        let (_d, ws) = workspace();
+        let mut c = course();
+        let id = save_new(&ws, &mut c).unwrap();
+        let outline = outline_path(&ws, &id).unwrap();
+        // The learner edits the outline: a comment and a new title.
+        let edited = std::fs::read_to_string(&outline)
+            .unwrap()
+            .replacen("title = \"第 1 課：w0、w1、w2\"", "# my own note\ntitle = \"Office words\"", 1);
+        assert!(edited.contains("Office words"));
+        std::fs::write(&outline, &edited).unwrap();
+
+        let mut c = load(&ws, &id).unwrap();
+        assert_eq!(c.lessons[0].title, "Office words");
+        c.lesson_mut(1).unwrap().file = Some("profiles/ellrin/lessons/en/x.md".into());
+        c.lesson_mut(1).unwrap().status = LessonStatus::Generated;
+        mark_unit(&mut c, 1, 0, true, None, "2026-11-05").unwrap();
+        save_progress(&ws, &c).unwrap();
+        assert_eq!(std::fs::read_to_string(&outline).unwrap(), edited, "the outline is never rewritten");
+
+        let back = load(&ws, &id).unwrap();
+        assert_eq!(back.lessons[0].title, "Office words");
+        assert_eq!(back.lessons[0].status, LessonStatus::Generated);
+        assert_eq!(back.lessons[0].units_done, vec![0]);
+        assert_eq!(back.lessons[0].file.as_deref(), Some("profiles/ellrin/lessons/en/x.md"));
+        assert_eq!(back.lessons[1].status, LessonStatus::Planned);
+        let p = std::fs::read_to_string(progress_path(&ws, &id).unwrap()).unwrap();
+        assert!(p.contains("units_done = [0]") && !p.contains("w0"), "{p}");
+    }
+
+    #[test]
+    fn older_outline_with_progress_fields_still_loads() {
+        let (_d, ws) = workspace();
+        std::fs::create_dir_all(recipes_dir(&ws)).unwrap();
+        let old = "id = \"old\"\nkind = \"fixed\"\nname = \"Old\"\nlang = \"en\"\nstatus = \"active\"\n\n[[lesson]]\nnumber = 1\nstatus = \"generated\"\nfile = \"a.md\"\nunits_done = [0]\n\n[[lesson]]\nnumber = 2\n";
+        std::fs::write(recipes_dir(&ws).join("old.toml"), old).unwrap();
+        let mut c = load(&ws, "old").unwrap();
+        assert_eq!((c.lessons[0].status, c.lessons[0].file.as_deref()), (LessonStatus::Generated, Some("a.md")));
+        // From the first update on, progress lives in its own file; the old file stays as it is.
+        c.lesson_mut(2).unwrap().status = LessonStatus::Generated;
+        save_progress(&ws, &c).unwrap();
+        assert_eq!(std::fs::read_to_string(recipes_dir(&ws).join("old.toml")).unwrap(), old);
+        let back = load(&ws, "old").unwrap();
+        assert_eq!(back.lessons[1].status, LessonStatus::Generated);
+        assert_eq!(back.lessons[0].units_done, vec![0]);
+    }
+
+    #[test]
+    fn appended_lessons_keep_the_rest() {
+        let (_d, ws) = workspace();
+        let mut c = course();
+        let id = save_new(&ws, &mut c).unwrap();
+        let outline = outline_path(&ws, &id).unwrap();
+        let edited = format!("{}\n# a note at the end\n", std::fs::read_to_string(&outline).unwrap());
+        std::fs::write(&outline, &edited).unwrap();
+        let mut c = load(&ws, &id).unwrap();
+        let mut extra = c.lessons[0].clone();
+        extra.number = 4;
+        extra.series = 2;
+        extra.title = "Series two".into();
+        c.lessons.push(extra);
+        c.series = 2;
+        assert_eq!(append_lessons(&ws, &c, 4, "2026-11-12").unwrap(), 1);
+        let text = std::fs::read_to_string(&outline).unwrap();
+        assert!(text.starts_with(&edited), "earlier text untouched");
+        assert!(text.contains("# Series 2, added 2026-11-12"));
+        let back = load(&ws, &id).unwrap();
+        assert_eq!(back.lessons.len(), 4);
+        assert_eq!((back.lessons[3].title.as_str(), back.lessons[3].series, back.series), ("Series two", 2, 2));
     }
 
     #[test]
@@ -271,7 +423,7 @@ mod tests {
         }
         assert!(last.unwrap().course_finished);
         assert_eq!(c.status, CourseStatus::Finished);
-        save(&ws, &c).unwrap();
+        save_progress(&ws, &c).unwrap();
         assert_eq!(load(&ws, &c.id).unwrap().status, CourseStatus::Finished);
     }
 }

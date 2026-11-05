@@ -73,6 +73,15 @@ impl Learner {
         crate::level::from_score(self.lang, self.difficulty)
     }
 
+    /// Minutes of one lesson (a daily goal above 60 minutes is two lessons).
+    pub fn lesson_minutes(&self) -> u32 {
+        sizing::daily_sessions(self.daily_minutes)[0]
+    }
+
+    pub fn lessons_per_day(&self) -> usize {
+        sizing::daily_sessions(self.daily_minutes).len()
+    }
+
     pub fn size(&self) -> sizing::ContentSize {
         sizing::content_size(self.lang, self.difficulty)
     }

@@ -1,9 +1,13 @@
 //! The course data model: Course → Lesson (one sitting) → Unit (one
 //! exercise that is completed and passed = 1 point). See docs/courses.md.
 //!
-//! Stored as TOML in `profiles/<id>/recipes/<course-id>.toml` (see
-//! [`super::store`]); every field has a serde default so that hand-edited or
-//! older files keep loading.
+//! Stored as TOML (see [`super::store`]): the outline in
+//! `profiles/<id>/recipes/<course-id>.toml` (written once, then the user's to
+//! edit) and the progress in `<course-id>.progress.toml` (written by the
+//! app). Every field has a serde default so that hand-edited or older files
+//! keep loading. Progress fields are left out of the outline file because
+//! they are skipped when at their default (planned / active / empty), and
+//! [`Course::outline_only`] resets them before the outline is written.
 
 use crate::lang::Lang;
 use serde::{Deserialize, Serialize};
@@ -191,6 +195,31 @@ pub struct TargetGrammar {
     pub meaning: String,
 }
 
+/// A real text a lesson is based on: a news article found when the lesson is
+/// opened, or a page / photo text the learner gave for a topic course.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SourceText {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+fn is_planned(s: &LessonStatus) -> bool {
+    *s == LessonStatus::Planned
+}
+fn is_active(s: &CourseStatus) -> bool {
+    *s == CourseStatus::Active
+}
+/// 0 (a `Default` lesson) counts as the first series too.
+fn is_one(n: &u32) -> bool {
+    *n <= 1
+}
+
 /// One lesson of the outline. Made when the course is created; the content
 /// is generated when the learner opens it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -212,8 +241,13 @@ pub struct LessonPlan {
     pub search: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub conversation_topic: String,
-    #[serde(default)]
-    pub status: LessonStatus,
+    /// Which series of a topic course this lesson belongs to (1 = the first).
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub series: u32,
+    /// The text this lesson is based on, when the learner gave one (topic
+    /// courses: the URL article or photo text becomes lesson 2's source).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub article: Option<SourceText>,
     /// Expected minutes (sum of the units).
     #[serde(default)]
     pub minutes: u32,
@@ -227,6 +261,9 @@ pub struct LessonPlan {
     pub grammar: Vec<TargetGrammar>,
     #[serde(default, rename = "unit", skip_serializing_if = "Vec::is_empty")]
     pub units: Vec<UnitPlan>,
+    // ── Progress (stored in the progress file) ──
+    #[serde(default, skip_serializing_if = "is_planned")]
+    pub status: LessonStatus,
     /// Workspace-relative path of the generated lesson file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
@@ -266,9 +303,11 @@ pub struct Course {
     /// `YYYY-MM-DD`.
     #[serde(default)]
     pub created: String,
-    #[serde(default)]
+    /// Progress (stored in the progress file).
+    #[serde(default, skip_serializing_if = "is_active")]
     pub status: CourseStatus,
-    /// Daily goal the unit plans were sized for.
+    /// The learner's daily goal when the course was made; each lesson is
+    /// sized for one sitting of it (see [`super::sizing::daily_sessions`]).
     #[serde(default = "thirty")]
     pub daily_minutes: u32,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -290,8 +329,9 @@ pub struct Course {
     /// Fixed courses: a review lesson at every n-th position (0 = never).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub review_every: u32,
-    /// Topic courses: how many series of lessons (1 + extensions).
-    #[serde(default = "one")]
+    /// Topic courses: how many series of lessons (1 + extensions); also
+    /// derived from the lessons' `series` when loading.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
     pub series: u32,
     /// Engine that wrote the outline.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -310,7 +350,85 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+/// Progress of one lesson (`<course-id>.progress.toml`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct LessonProgress {
+    pub number: u32,
+    #[serde(default)]
+    pub status: LessonStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub units_done: Vec<u32>,
+}
+
+/// The progress file: everything the app changes while the course is used.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Progress {
+    #[serde(default)]
+    pub course: String,
+    #[serde(default)]
+    pub status: CourseStatus,
+    #[serde(default, rename = "lesson")]
+    pub lessons: Vec<LessonProgress>,
+}
+
 impl Course {
+    /// The progress part, for the progress file. Lessons still planned and
+    /// untouched are left out.
+    pub fn progress(&self) -> Progress {
+        Progress {
+            course: self.id.clone(),
+            status: self.status,
+            lessons: self
+                .lessons
+                .iter()
+                .filter(|l| l.status != LessonStatus::Planned || l.file.is_some() || !l.units_done.is_empty())
+                .map(|l| LessonProgress {
+                    number: l.number,
+                    status: l.status,
+                    file: l.file.clone(),
+                    generated: l.generated.clone(),
+                    done: l.done.clone(),
+                    units_done: l.units_done.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Put a progress file's values over the outline. Entries for lessons
+    /// that are no longer in the outline are ignored.
+    pub fn apply_progress(&mut self, p: &Progress) {
+        self.status = p.status;
+        for lp in &p.lessons {
+            if let Some(l) = self.lesson_mut(lp.number) {
+                l.status = lp.status;
+                l.file = lp.file.clone();
+                l.generated = lp.generated.clone();
+                l.done = lp.done.clone();
+                l.units_done = lp.units_done.clone();
+            }
+        }
+    }
+
+    /// A copy without progress, for writing the outline file.
+    pub fn outline_only(&self) -> Course {
+        let mut c = self.clone();
+        c.status = CourseStatus::Active;
+        for l in c.lessons.iter_mut() {
+            l.status = LessonStatus::Planned;
+            l.file = None;
+            l.generated = None;
+            l.done = None;
+            l.units_done.clear();
+        }
+        c
+    }
+
     pub fn lesson(&self, number: u32) -> Option<&LessonPlan> {
         self.lessons.iter().find(|l| l.number == number)
     }

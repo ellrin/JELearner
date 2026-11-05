@@ -14,10 +14,19 @@ Shape of the series:
 - Lessons 2 to {{ lessons - 1 }}: one text each, from a different angle{% if angles %} (in order: {{ angles | join(", ") }}){% endif %}.
   Give each lesson `search` keywords in {{ language }} that would find a real news article for that angle.
 {% endif %}
+{% if word_lessons < lessons - 1 %}
+- Lesson {{ lessons - 1 }} introduces no new words: it reuses and deepens the words of lessons 1 to {{ word_lessons }}
+  from its own angle.
+{% endif %}
 - Lesson {{ lessons }}: review of the series' words and a conversation on the topic. Give it no new words.
+{% if sources %}
+- The learner gave {{ sources | length }} text(s) of their own (in the request). They are the texts of lesson 2{% if sources | length > 1 %}
+  and the following article lessons, in order{% endif %}; plan those lessons around them and take their new words from them.
+  The remaining article lessons look for other angles.
+{% endif %}
 
 Rules:
-- New words: {{ topic_words_min }} to {{ topic_words_max }} per lesson (lessons 1 to {{ lessons - 1 }}), words or set
+- New words: {{ topic_words_min }} to {{ topic_words_max }} per lesson, only in lessons 1 to {{ word_lessons }}; words or set
   phrases really used when talking about this topic, at or slightly above the learner's level.
   A word is new in one lesson only. Skip proper nouns and the words the learner already knows (listed in the request).
   {% if lang == "ja" %}Give the reading in hiragana for every term.{% else %}Give the reading as IPA.{% endif %}

@@ -76,6 +76,26 @@ impl ContentSize {
 pub const MIN_MINUTES: u32 = 10;
 pub const MAX_MINUTES: u32 = 120;
 
+/// Longest single lesson. A daily goal above it becomes two lessons a day.
+pub const MAX_LESSON_MINUTES: u32 = 60;
+
+/// Lessons per day and the minutes of each, for a daily goal.
+///
+/// Up to 60 minutes: one lesson. Above: two lessons of (nearly) equal
+/// length, the first one a minute longer when the goal is odd, e.g. 90 →
+/// 45 + 45, 61 → 31 + 30. An even split keeps both lessons at 30 minutes or
+/// more, so both get the full unit plan (review, reading, output,
+/// conversation) instead of a 60-minute lesson plus a stub. The goal is
+/// capped at 120 minutes (two 60-minute lessons).
+pub fn daily_sessions(daily_minutes: u32) -> Vec<u32> {
+    let goal = daily_minutes.clamp(MIN_MINUTES, MAX_MINUTES);
+    if goal <= MAX_LESSON_MINUTES {
+        vec![goal]
+    } else {
+        vec![goal.div_ceil(2), goal / 2]
+    }
+}
+
 /// The parts of a lesson in the order they are done. `Output` and `Output2`
 /// become concrete exercise types by lesson number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,6 +306,28 @@ mod tests {
         // Beyond every cap the lesson stays at 60 minutes.
         assert_eq!(total_minutes(&unit_plan(LessonRole::Regular, 120, 1)), 60);
         assert_eq!(total_minutes(&unit_plan(LessonRole::Regular, 3, 1)), MIN_MINUTES);
+    }
+
+    #[test]
+    fn two_lessons_a_day_above_sixty_minutes() {
+        assert_eq!(daily_sessions(30), vec![30]);
+        assert_eq!(daily_sessions(60), vec![60]);
+        assert_eq!(daily_sessions(61), vec![31, 30]);
+        assert_eq!(daily_sessions(90), vec![45, 45]);
+        assert_eq!(daily_sessions(95), vec![48, 47]);
+        assert_eq!(daily_sessions(120), vec![60, 60]);
+        assert_eq!(daily_sessions(200), vec![60, 60]);
+        assert_eq!(daily_sessions(5), vec![MIN_MINUTES]);
+        for goal in 61..=120 {
+            let s = daily_sessions(goal);
+            assert_eq!(s.iter().sum::<u32>(), goal);
+            for m in s {
+                let units = unit_plan(LessonRole::Article, m, 1);
+                assert!((30..=MAX_LESSON_MINUTES).contains(&m));
+                assert_eq!(total_minutes(&units), m, "each lesson fills its sitting");
+                assert!(units.iter().any(|u| u.kind == UnitKind::Conversation) && units.iter().any(|u| u.kind.is_output()));
+            }
+        }
     }
 
     #[test]
