@@ -460,9 +460,9 @@ async fn subscription_engine_through_claude_code() {
     assert!(ellrin_dir.ends_with("/ellrin"), "Claude Code ran with Ellrin's own sign-in folder: {ellrin_dir}");
 
     // A second user on the same computer does not get the first user's Claude.
-    let (st, r) = c.post("/api/users", json!({"name": "Second User", "languages": ["ja"], "majors": {"ja": "N5"}})).await;
+    let (st, r) = c.post("/api/users", json!({"name": "daidai", "languages": ["ja"], "majors": {"ja": "N5"}})).await;
     assert_eq!(st, StatusCode::OK, "{r}");
-    assert_eq!(r["user"]["id"], "second-user");
+    assert_eq!(r["user"]["id"], "daidai");
     let (_, cl) = c.get("/api/claude?fresh=true").await;
     assert_eq!(cl["subscription"]["ready"], false, "the second user is not signed in by the first user's login: {cl}");
     assert!(cl["active"].is_null());

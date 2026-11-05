@@ -660,9 +660,9 @@ mod tests {
         assert_eq!(root.layout(), Layout::V2);
 
         let a = root.create_profile(tpl.path(), Profile::new("", "Ellrin")).unwrap();
-        let b = root.create_profile(tpl.path(), Profile::new("", "第二位")).unwrap();
+        let b = root.create_profile(tpl.path(), Profile::new("", "daidai")).unwrap();
         assert_eq!(a.profile.id, "ellrin");
-        assert!(b.profile.id.starts_with("user-"), "{}", b.profile.id);
+        assert_eq!(b.profile.id, "daidai");
         assert!(a.vocab_dir().join("my-words-en.csv").exists());
         assert_ne!(a.vocab_dir(), b.vocab_dir());
         assert_eq!(root.meta.admins, vec!["ellrin".to_string()]);
@@ -719,7 +719,7 @@ mod tests {
     fn profile_ids() {
         assert_eq!(profile_id("Ellrin Chung", &[]), "ellrin-chung");
         assert_eq!(profile_id("ellrin", &["ellrin".into()]), "ellrin-2");
-        assert!(profile_id("第二位", &[]).starts_with("user-"));
+        assert!(profile_id("測試", &[]).starts_with("user-"));
     }
 
     #[test]

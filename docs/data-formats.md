@@ -101,8 +101,8 @@ name = "Ellrin"
 kind = "owner"            # owner | household
 
 [[member]]
-id = "member-2"
-name = "第二位使用者"
+id = "daidai"
+name = "daidai"
 kind = "household"
 ```
 
