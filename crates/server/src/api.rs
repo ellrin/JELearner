@@ -366,6 +366,8 @@ struct UserBody {
     turns: Option<u32>,
     interest_ratio: Option<f32>,
     interests: Option<Vec<String>>,
+    /// UI colour theme id (one of `workspace::THEMES`).
+    theme: Option<String>,
 }
 
 /// Apply a settings change to a profile; validates everything first.
@@ -439,6 +441,12 @@ fn apply_user(p: &mut Profile, b: &UserBody) -> Result<(), ApiError> {
             return Err(bad("興趣比例需在 0–1 之間"));
         }
         p.conversation.interest_ratio = r;
+    }
+    if let Some(t) = &b.theme {
+        if !jl_core::workspace::THEMES.contains(&t.as_str()) {
+            return Err(bad("未知的主題"));
+        }
+        p.theme = Some(t.clone());
     }
     Ok(())
 }

@@ -1,0 +1,256 @@
+/* JELearner colour themes. Loaded after styles.css and overrides its palette.
+   Each theme is intrinsically dark (賽博龐克 cyberpunk) or light (馬卡龍 macaron);
+   the old separate light/dark mode is gone. Rules (docs/design.md「主題」):
+   no background, panel, surface or paper is pure black or white; text on bg
+   and panel ≥ 7:1, muted ≥ 4.5:1 on panel, faint ≥ 3:1, accent-ink on
+   accent ≥ 4.5:1, accent on panel ≥ 3:1, paper-ink on paper ≥ 7:1.
+   The theme ids are also listed in crates/core/src/workspace.rs (THEMES)
+   and web/app.js (THEMES); a core test checks they match this file.
+   With no or an unknown data-theme the default (peach) applies. */
+
+/* ── 賽博龐克 · cyberpunk (dark) ───────────────────── */
+/* 霓虹夜市 */
+:root[data-theme="neon"] {
+  color-scheme: dark;
+  --bg: #161731; --panel: #1e1f40; --surface: #282a52; --surface-hover: #323563;
+  --line: #33365e; --line-strong: #4b4f86;
+  --text: #f1efff; --muted: #b9b5e4; --faint: #8580b8;
+  --accent: #ff3fb4; --accent-ink: #1a0716; --accent-soft: #ff3fb42e;
+  --dot: #2de2e61a; --paper: #f3f0fa; --paper-ink: #1d1838;
+  --ok: #3ee8b5; --warn: #ffd23f; --err: #ff6b86;
+}
+/* 酸性螢光 */
+:root[data-theme="acid"] {
+  color-scheme: dark;
+  --bg: #1b1c1e; --panel: #232528; --surface: #2c2f33; --surface-hover: #363a3f;
+  --line: #35393e; --line-strong: #4c5258;
+  --text: #eef3ea; --muted: #adb8a7; --faint: #7d8874;
+  --accent: #b6ff3b; --accent-ink: #141c05; --accent-soft: #b6ff3b26;
+  --dot: #b6ff3b12; --paper: #20251f; --paper-ink: #e4f2dc;
+  --ok: #3ddc97; --warn: #ffb238; --err: #ff6363;
+}
+/* 落日合成 */
+:root[data-theme="synthwave"] {
+  color-scheme: dark;
+  --bg: #1e1329; --panel: #28193a; --surface: #33204a; --surface-hover: #3e275a;
+  --line: #3c2953; --line-strong: #593d79;
+  --text: #fff0f5; --muted: #d6b8da; --faint: #a083ab;
+  --accent: #ff8a3d; --accent-ink: #220c02; --accent-soft: #ff8a3d2e;
+  --dot: #ff4fa016; --paper: #fff1e4; --paper-ink: #2a1530;
+  --ok: #4be0b0; --warn: #ffd166; --err: #ff5d80;
+}
+/* 電光藍 */
+:root[data-theme="voltage"] {
+  color-scheme: dark;
+  --bg: #121d33; --panel: #18264a; --surface: #213359; --surface-hover: #2a3f6a;
+  --line: #273b64; --line-strong: #3b5689;
+  --text: #eaf2ff; --muted: #adc1e3; --faint: #7690ba;
+  --accent: #4d94ff; --accent-ink: #06101f; --accent-soft: #4d94ff30;
+  --dot: #4d94ff16; --paper: #edf2fa; --paper-ink: #0f1c33;
+  --ok: #34d399; --warn: #fbbf24; --err: #ff7070;
+}
+/* 熱粉梅 */
+:root[data-theme="plum"] {
+  color-scheme: dark;
+  --bg: #24131f; --panel: #2e182a; --surface: #3b1f36; --surface-hover: #482643;
+  --line: #462741; --line-strong: #663c5e;
+  --text: #ffeef8; --muted: #ddb4cd; --faint: #a77e99;
+  --accent: #ff4f9a; --accent-ink: #22020f; --accent-soft: #ff4f9a2e;
+  --dot: #ff4f9a14; --paper: #faeef3; --paper-ink: #2d1328;
+  --ok: #5ee6a8; --warn: #ffc857; --err: #ff8a5c;
+}
+/* 琥珀終端 */
+:root[data-theme="amber"] {
+  color-scheme: dark;
+  --bg: #1c1a16; --panel: #24221c; --surface: #2e2b23; --surface-hover: #38342b;
+  --line: #37332b; --line-strong: #4f493d;
+  --text: #ffdfae; --muted: #ccab7c; --faint: #937b58;
+  --accent: #ffb000; --accent-ink: #1f1400; --accent-soft: #ffb00026;
+  --dot: #ffb00010; --paper: #25221b; --paper-ink: #ffe4b8;
+  --ok: #9be564; --warn: #ff9f1c; --err: #ff6a55;
+}
+/* 冰晶藍 */
+:root[data-theme="ice"] {
+  color-scheme: dark;
+  --bg: #172028; --panel: #1e2832; --surface: #27333e; --surface-hover: #303e4b;
+  --line: #2f3c48; --line-strong: #475a6b;
+  --text: #e8f7fb; --muted: #a9c5cf; --faint: #738f9b;
+  --accent: #5ce1ff; --accent-ink: #03161d; --accent-soft: #5ce1ff24;
+  --dot: #5ce1ff12; --paper: #edf5f7; --paper-ink: #142028;
+  --ok: #4ade80; --warn: #fcd34d; --err: #fb7185;
+}
+/* 紫外線 */
+:root[data-theme="ultraviolet"] {
+  color-scheme: dark;
+  --bg: #1b1530; --panel: #231b40; --surface: #2d2352; --surface-hover: #382c64;
+  --line: #352b5d; --line-strong: #504289;
+  --text: #f3eeff; --muted: #c3b6ef; --faint: #8d80c3;
+  --accent: #ae7aff; --accent-ink: #12062a; --accent-soft: #ae7aff30;
+  --dot: #c8ff3a10; --paper: #231c3e; --paper-ink: #ece6ff;
+  --ok: #c8ff3a; --warn: #ffcf5c; --err: #ff6b9a;
+}
+/* 毒性黃 */
+:root[data-theme="toxic"] {
+  color-scheme: dark;
+  --bg: #1c1d15; --panel: #25261c; --surface: #2f3124; --surface-hover: #3a3c2d;
+  --line: #37392b; --line-strong: #51533e;
+  --text: #f7f6e0; --muted: #c6c49e; --faint: #8e8c6c;
+  --accent: #f5e100; --accent-ink: #1a1800; --accent-soft: #f5e10026;
+  --dot: #f5e1000e; --paper: #f6f4de; --paper-ink: #1e1d10;
+  --ok: #6ee36e; --warn: #ff9b2f; --err: #ff5c5c;
+}
+/* 紅色警戒 */
+:root[data-theme="redalert"] {
+  color-scheme: dark;
+  --bg: #1d1517; --panel: #271b1e; --surface: #322327; --surface-hover: #3d2b30;
+  --line: #3b2a2e; --line-strong: #583d43;
+  --text: #fdeeee; --muted: #d8b3b7; --faint: #a07e82;
+  --accent: #ff4752; --accent-ink: #1a0204; --accent-soft: #ff47522e;
+  --dot: #ff475212; --paper: #f7eded; --paper-ink: #2a1518;
+  --ok: #3ddc84; --warn: #ffc233; --err: #ff8f7a;
+}
+
+/* ── 馬卡龍 · macaron (light) ──────────────────────── */
+/* 草莓 */
+:root[data-theme="strawberry"] {
+  color-scheme: light;
+  --bg: #f9e4ea; --panel: #fbeef2; --surface: #f5d9e1; --surface-hover: #efcad5;
+  --line: #ebcad4; --line-strong: #d9a2b4;
+  --text: #3a1622; --muted: #763c50; --faint: #96616f;
+  --accent: #c8254f; --accent-ink: #fff3f6; --accent-soft: #c8254f1f;
+  --dot: #c8254f14; --paper: #fdf2ed; --paper-ink: #2b1219;
+  --ok: #23784a; --warn: #8f5a00; --err: #b8261f;
+}
+/* 開心果 */
+:root[data-theme="pistachio"] {
+  color-scheme: light;
+  --bg: #eaf0db; --panel: #f2f6e8; --surface: #e1eacf; --surface-hover: #d6e2bf;
+  --line: #d4dfc0; --line-strong: #b2c597;
+  --text: #22301a; --muted: #4c603d; --faint: #6b7c5c;
+  --accent: #4a7718; --accent-ink: #f6faec; --accent-soft: #4a77181f;
+  --dot: #4a771814; --paper: #f7f6e9; --paper-ink: #1e2a14;
+  --ok: #2b7547; --warn: #875e00; --err: #b23636;
+}
+/* 薰衣草 */
+:root[data-theme="lavender"] {
+  color-scheme: light;
+  --bg: #ebe7f6; --panel: #f3f0fa; --surface: #e2dcf2; --surface-hover: #d7cfed;
+  --line: #d8d1eb; --line-strong: #b7abdb;
+  --text: #2a2145; --muted: #574a82; --faint: #786c9f;
+  --accent: #6f4fd0; --accent-ink: #faf8ff; --accent-soft: #6f4fd01f;
+  --dot: #6f4fd014; --paper: #f6f3f9; --paper-ink: #231c3a;
+  --ok: #2a7655; --warn: #835c00; --err: #b8344f;
+}
+/* 檸檬塔 */
+:root[data-theme="lemon"] {
+  color-scheme: light;
+  --bg: #faf2d2; --panel: #fcf6e0; --surface: #f4e9bd; --surface-hover: #ede0a8;
+  --line: #eadeab; --line-strong: #d3c27a;
+  --text: #33290a; --muted: #665619; --faint: #847640;
+  --accent: #b86f00; --accent-ink: #1c1200; --accent-soft: #e0b4002e;
+  --dot: #d9b30018; --paper: #fdf7e6; --paper-ink: #2a220a;
+  --ok: #2e7340; --warn: #9a4f00; --err: #b3332b;
+}
+/* 蜜桃 */
+:root,
+:root[data-theme="peach"] {
+  color-scheme: light;
+  --bg: #fae7da; --panel: #fcf0e7; --surface: #f6dccb; --surface-hover: #f0cfb9;
+  --line: #eed0bd; --line-strong: #ddac90;
+  --text: #3b2015; --muted: #744532; --faint: #946854;
+  --accent: #d85a34; --accent-ink: #250b02; --accent-soft: #d85a3424;
+  --dot: #d85a3414; --paper: #fdf3eb; --paper-ink: #2e1a12;
+  --ok: #287446; --warn: #8a5800; --err: #b8352a;
+}
+/* 薄荷 */
+:root[data-theme="mint"] {
+  color-scheme: light;
+  --bg: #e2f3eb; --panel: #edf7f2; --surface: #d5ede1; --surface-hover: #c5e5d5;
+  --line: #c7e3d5; --line-strong: #9eccb5;
+  --text: #12352a; --muted: #3a6253; --faint: #5b8272;
+  --accent: #0b7a5d; --accent-ink: #effbf6; --accent-soft: #0b7a5d1f;
+  --dot: #0b7a5d14; --paper: #f2f8f2; --paper-ink: #14291f;
+  --ok: #2a7336; --warn: #865f00; --err: #b83a44;
+}
+/* 藍莓 */
+:root[data-theme="blueberry"] {
+  color-scheme: light;
+  --bg: #e3e8f6; --panel: #edf0f9; --surface: #d8dff2; --surface-hover: #cad3ed;
+  --line: #ccd4eb; --line-strong: #a6b3db;
+  --text: #1b2348; --muted: #444f7c; --faint: #64709a;
+  --accent: #3a4bb0; --accent-ink: #f2f4fd; --accent-soft: #3a4bb01f;
+  --dot: #6b4fa014; --paper: #f4f5fa; --paper-ink: #1a2040;
+  --ok: #287447; --warn: #835c00; --err: #b83246;
+}
+/* 櫻花 */
+:root[data-theme="sakura"] {
+  color-scheme: light;
+  --bg: #f5eaee; --panel: #f9f2f4; --surface: #eedfe5; --surface-hover: #e6d1d9;
+  --line: #e5d3da; --line-strong: #cdb0bb;
+  --text: #3d2a30; --muted: #6a545b; --faint: #87727a;
+  --accent: #d05a88; --accent-ink: #26070f; --accent-soft: #d05a881f;
+  --dot: #7fa65a1a; --paper: #fbf4f2; --paper-ink: #2f2025;
+  --ok: #2f7340; --warn: #8a5a00; --err: #b3303a;
+}
+/* 焦糖布丁 */
+:root[data-theme="caramel"] {
+  color-scheme: light;
+  --bg: #f2e5d3; --panel: #f7ede0; --surface: #eadac3; --surface-hover: #e1cdb1;
+  --line: #e1d0b8; --line-strong: #c7aa87;
+  --text: #3a2614; --muted: #6a4c31; --faint: #876b50;
+  --accent: #955222; --accent-ink: #fff6ea; --accent-soft: #9552221f;
+  --dot: #95522214; --paper: #f9f1e3; --paper-ink: #2e1e10;
+  --ok: #2f6f3e; --warn: #8a5400; --err: #b0352a;
+}
+/* 芋泥奶茶 */
+:root[data-theme="taro"] {
+  color-scheme: light;
+  --bg: #ebe0ec; --panel: #f3ebf3; --surface: #e2d4e4; --surface-hover: #d7c5da;
+  --line: #d9c9db; --line-strong: #bca4c1;
+  --text: #33233a; --muted: #604d68; --faint: #7e6c86;
+  --accent: #934a8c; --accent-ink: #fdf4fb; --accent-soft: #934a8c22;
+  --dot: #b0906414; --paper: #f8f1ea; --paper-ink: #2c1f2e;
+  --ok: #2b7148; --warn: #855800; --err: #b1304a;
+}
+
+/* ── Paper: derived from --paper / --paper-ink so every theme's sheet
+   (light or dark) keeps its own tint. Colours only; sizes stay in styles.css. */
+:root {
+  --paper-ink2: color-mix(in srgb, var(--paper-ink) 84%, var(--paper));
+  --paper-muted: color-mix(in srgb, var(--paper-ink) 70%, var(--paper));
+  --paper-faint: color-mix(in srgb, var(--paper-ink) 64%, var(--paper));
+  --paper-line: color-mix(in srgb, var(--paper-ink) 13%, var(--paper));
+  --paper-line-strong: color-mix(in srgb, var(--paper-ink) 22%, var(--paper));
+  --paper-soft: color-mix(in srgb, var(--paper-ink) 4%, var(--paper));
+  --paper-soft2: color-mix(in srgb, var(--paper-ink) 7%, var(--paper));
+  --paper-link: color-mix(in srgb, var(--accent) 40%, var(--paper-ink));
+}
+.paper .meta, .paper table.vocab th, .paper table.vocab td.reading, .paper .gram h3 .m { color: var(--paper-muted); }
+.paper .meta a { color: var(--paper-link); }
+.paper h2, .paper table.vocab td, .paper .q { border-color: var(--paper-line); }
+.paper table.vocab th { border-color: var(--paper-line-strong); }
+.paper h2 .c, .paper .ex .tr { color: var(--paper-faint); }
+.paper .summary, .paper pre.md { background: var(--paper-soft); color: var(--paper-ink); }
+.paper table.vocab .ex, .paper .q .fb { color: var(--paper-ink2); }
+.paper .q .opt { background: var(--paper-soft); border-color: var(--paper-line); }
+.paper .q .opt.right { background: color-mix(in srgb, var(--ok) 14%, var(--paper)); }
+.paper .q .opt.wrong { background: color-mix(in srgb, var(--err) 12%, var(--paper)); }
+.paper .q textarea { background: var(--paper-soft); border-color: var(--paper-line-strong); }
+.paper .q .ghost { background: var(--paper-soft2); color: var(--paper-ink); border-color: var(--paper-line-strong); }
+:root.dim-paper[data-theme] { --paper: color-mix(in srgb, var(--paper) 88%, var(--paper-ink)); }
+
+/* ── Theme picker (settings → 外觀) ─────────────────── */
+.theme-group + .theme-group { margin-top: 16px; }
+.theme-group h4 { margin: 0 0 8px; font: 500 11px var(--mono); color: var(--muted); letter-spacing: .04em; }
+.theme-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.theme-card {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 5px; min-width: 0;
+  border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--muted);
+}
+.theme-card:hover { border-color: var(--line-strong); color: var(--text); }
+.theme-card[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); color: var(--text); font-weight: 600; }
+.theme-card .sw { display: flex; height: 26px; border-radius: 3px; overflow: hidden; box-shadow: inset 0 0 0 1px #8882; }
+.theme-card .sw i { flex: 1; }
+.theme-card .sw i:first-child { flex: 1.6; }
+.theme-card .nm { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) { .theme-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

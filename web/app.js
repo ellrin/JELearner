@@ -79,17 +79,82 @@ async function busy(btn, fn) {
 }
 
 // ── theme ──────────────────────────────────────────────
-function applyTheme() {
-  const t = store.get("jl.theme", "orange");
-  const sys = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  const m = store.get("jl.mode", sys);
-  document.documentElement.dataset.theme = t;
-  document.documentElement.dataset.mode = m;
-  $$(".theme[data-theme]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.theme === t)));
-  $$("#lookMode button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === m)));
+// Ten cyberpunk (dark) and ten macaron (light) palettes in themes.css; each
+// theme is dark or light by itself. The same ids are in core's THEMES list.
+const THEMES = [
+  { id: "neon", name: "霓虹夜市", dark: true, sw: ["#161731", "#ff3fb4", "#2de2e6"] },
+  { id: "acid", name: "酸性螢光", dark: true, sw: ["#1b1c1e", "#b6ff3b", "#3a3e43"] },
+  { id: "synthwave", name: "落日合成", dark: true, sw: ["#1e1329", "#ff8a3d", "#ff4fa0", "#9b5cff"] },
+  { id: "voltage", name: "電光藍", dark: true, sw: ["#121d33", "#4d94ff", "#e9f1ff"] },
+  { id: "plum", name: "熱粉梅", dark: true, sw: ["#24131f", "#ff4f9a", "#ffc2dc"] },
+  { id: "amber", name: "琥珀終端", dark: true, sw: ["#1c1a16", "#ffb000", "#ffdca8"] },
+  { id: "ice", name: "冰晶藍", dark: true, sw: ["#172028", "#5ce1ff", "#e8f7fb"] },
+  { id: "ultraviolet", name: "紫外線", dark: true, sw: ["#1b1530", "#ae7aff", "#c8ff3a"] },
+  { id: "toxic", name: "毒性黃", dark: true, sw: ["#1c1d15", "#f5e100", "#3d3f2e"] },
+  { id: "redalert", name: "紅色警戒", dark: true, sw: ["#1d1517", "#ff4752", "#fdeeee"] },
+  { id: "strawberry", name: "草莓", dark: false, sw: ["#f9e4ea", "#c8254f", "#f5b8c8"] },
+  { id: "pistachio", name: "開心果", dark: false, sw: ["#eaf0db", "#4a7718", "#b9d88a", "#c9a27a"] },
+  { id: "lavender", name: "薰衣草", dark: false, sw: ["#ebe7f6", "#6f4fd0", "#c9bdf0"] },
+  { id: "lemon", name: "檸檬塔", dark: false, sw: ["#faf2d2", "#b86f00", "#f5d64a"] },
+  { id: "peach", name: "蜜桃", dark: false, sw: ["#fae7da", "#d85a34", "#f8c3a6"] },
+  { id: "mint", name: "薄荷", dark: false, sw: ["#e2f3eb", "#0b7a5d", "#a8e0c8"] },
+  { id: "blueberry", name: "藍莓", dark: false, sw: ["#e3e8f6", "#3a4bb0", "#6b4fa0", "#f3ead8"] },
+  { id: "sakura", name: "櫻花", dark: false, sw: ["#f5eaee", "#d05a88", "#9bbf7a", "#6f5960"] },
+  { id: "caramel", name: "焦糖布丁", dark: false, sw: ["#f2e5d3", "#955222", "#e8c48f"] },
+  { id: "taro", name: "芋泥奶茶", dark: false, sw: ["#ebe0ec", "#934a8c", "#d9c3a5"] },
+];
+const DEFAULT_THEME = "peach";
+const themeOf = (id) => THEMES.find((t) => t.id === id);
+
+// The browser's choice; old orange/night/terminal + light/dark values map to
+// the nearest new theme once.
+function savedTheme() {
+  let t = store.get("jl.theme", null);
+  if (themeOf(t)) return t;
+  if (t === "orange" || t === "night" || t === "terminal") {
+    const light = store.get("jl.mode", matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") === "light";
+    t = { orange: light ? "peach" : "amber", night: light ? "lavender" : "neon", terminal: light ? "mint" : "acid" }[t];
+    store.set("jl.theme", t);
+    try { localStorage.removeItem("jl.mode"); } catch {}
+    return t;
+  }
+  return DEFAULT_THEME;
 }
-$$(".theme[data-theme]").forEach((b) => (b.onclick = () => { store.set("jl.theme", b.dataset.theme); applyTheme(); }));
-$$("#lookMode button").forEach((b) => (b.onclick = () => { store.set("jl.mode", b.dataset.v); applyTheme(); }));
+// The user's own theme (saved in their profile) wins over the browser's.
+const currentTheme = () => (themeOf(state.status?.user?.theme) ? state.status.user.theme : savedTheme());
+
+function showTheme(id) {
+  const t = themeOf(id) ?? themeOf(DEFAULT_THEME);
+  document.documentElement.dataset.theme = t.id;
+  document.documentElement.dataset.mode = t.dark ? "dark" : "light";
+}
+function applyTheme() {
+  const t = currentTheme();
+  showTheme(t);
+  $$(".theme-card").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.theme === t)));
+}
+async function chooseTheme(id) {
+  store.set("jl.theme", id);
+  const u = state.status?.user;
+  if (u) {
+    u.theme = id;
+    try { await api("/api/user", { theme: id }, "PUT"); } catch (e) { flash(e.message, true); }
+  }
+  applyTheme();
+}
+// Settings → 外觀: a swatch card per theme; hover or focus previews it.
+for (const t of THEMES) {
+  const b = el("button", "theme-card");
+  b.dataset.theme = t.id;
+  b.setAttribute("aria-label", t.name);
+  const sw = el("span", "sw");
+  for (const c of t.sw) { const i = el("i"); i.style.background = c; sw.append(i); }
+  b.append(sw, el("span", "nm", t.name));
+  b.onmouseenter = b.onfocus = () => showTheme(t.id);
+  b.onmouseleave = b.onblur = () => showTheme(currentTheme());
+  b.onclick = () => chooseTheme(t.id);
+  $(t.dark ? "#themesDark" : "#themesLight").append(b);
+}
 
 // ── help tips & collapsible blocks ─────────────────────
 (() => {
@@ -223,6 +288,7 @@ function applyUser() {
   if (!langs.includes(state.lang)) { state.lang = langs[0]; store.set("jl.lang", state.lang); }
   $$("#lang button").forEach((b) => { b.hidden = !langs.includes(b.dataset.v); b.setAttribute("aria-pressed", String(b.dataset.v === state.lang)); });
   $("#lang").hidden = langs.length < 2;
+  applyTheme();
 }
 
 const userMenu = $("#userMenu");
