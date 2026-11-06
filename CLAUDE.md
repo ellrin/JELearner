@@ -19,7 +19,8 @@ scripts/dev.sh --mock                        # both of the above together
 - `crates/core` (`jl-core`): workspace, SQLite (`db.rs`), import, robots/crawler/news,
   `provider.rs` (LlmProvider trait: Claude API, llama-server, mock), `claude_code.rs`
   (Claude subscription through Claude Code), `lesson.rs`,
-  `google.rs` (Mailer / Calendar traits: REST + in-memory), `report.rs`, `catalog.rs`.
+  `google.rs` (Mailer / Calendar traits: REST + in-memory), `report.rs`, `catalog.rs`,
+  `speech.rs` (SpeechProvider placeholder; browser speech lives in `web/speech.js`).
 - `crates/server` (`jl-server`): axum on 127.0.0.1, `api.rs` handlers, `settings.rs`,
   `secrets.rs`, `git.rs`. Handlers are plain async fns over `Shared` so they can become
   Tauri commands later.
