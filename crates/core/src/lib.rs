@@ -15,6 +15,7 @@
 //! - [`rules`], [`points`], [`progress`] — points, levels, difficulty (stage A)
 //! - [`topics`], [`conversation`] — topics and the typed AI conversation
 //! - [`notebook`] — the review notebook: one page per lesson / conversation
+//! - [`speech`] — speech engine trait (browser speech now; native / Whisper / Kokoro later)
 
 pub mod catalog;
 pub mod claude_code;
@@ -35,6 +36,7 @@ pub mod provider;
 pub mod report;
 pub mod robots;
 pub mod rules;
+pub mod speech;
 pub mod srs;
 pub mod topics;
 pub mod vcs;

@@ -527,6 +527,8 @@ function infoButton(lines) {
 async function render() {
   const gen = ++renderGen;
   markNav();
+  Speech.stop();
+  Speech.stopListening();
   const body = el("div", "page-body");
   try {
     await ({ today: renderToday, courses: renderCourses, conversation: renderConversation, news: renderNews, lessons: renderLessons, words: renderWords, grammar: renderGrammar,
@@ -536,6 +538,7 @@ async function render() {
   }
   if (gen !== renderGen) return;
   $("#page").replaceChildren(body);
+  Speech.refreshButtons(body);
   $("#pageArea").scrollTop = 0;
 }
 
@@ -685,6 +688,10 @@ function lessonPaper(paper, lesson, row, { quiz, parts, highlight } = {}) {
     for (const para of lesson.text.split(/\n{2,}|\n/).filter((x) => x.trim())) {
       const pEl = elr("p", null, para, lang);
       if (highlight?.length) markWords(pEl, highlight, lang);
+      // Read aloud; shadowing when recognition is on (speech.js).
+      const tools = el("span", "say-tools");
+      tools.append(Speech.speakerButton(para, lang), Speech.shadowButton(para, lang, pEl));
+      pEl.append(tools);
       tx.append(pEl);
     }
     paper.append(tx);
@@ -699,10 +706,12 @@ function lessonPaper(paper, lesson, row, { quiz, parts, highlight } = {}) {
       const term = el("td", "term");
       term.textContent = plainRuby(v.term);
       if (lang === "ja") term.lang = "ja";
+      term.append(Speech.speakerButton(v.term, lang));
       tr.append(term, el("td", "reading", v.reading));
       const td = el("td");
       td.append(el("div", null, `${v.part_of_speech ? `〔${v.part_of_speech}〕` : ""}${v.meaning}`));
       const ex = elr("div", "ex", v.example, lang);
+      if (v.example) ex.append(Speech.speakerButton(v.example, lang));
       ex.append(el("div", "tr", v.example_translation));
       td.append(ex);
       tr.append(td);
@@ -719,6 +728,7 @@ function lessonPaper(paper, lesson, row, { quiz, parts, highlight } = {}) {
       h.append(el("span", "m", g.meaning));
       d.append(h, el("p", null, g.explanation));
       const ex = elr("p", "ex", g.example, lang);
+      if (g.example) ex.append(Speech.speakerButton(g.example, lang));
       ex.append(el("div", "tr", g.example_translation));
       d.append(ex);
       paper.append(d);
@@ -817,7 +827,9 @@ async function renderWords(page) {
   for (const w of list) {
     const tr = el("tr");
     const ja = w.lang === "ja" ? " ja" : "";
-    tr.append(el("td", `term${ja}`, w.term), el("td", "mono", w.reading), el("td", null, w.meaning), el("td", ja.trim(), w.example),
+    const term = el("td", `term${ja}`, w.term);
+    term.append(Speech.speakerButton(w.term, w.lang));
+    tr.append(term, el("td", "mono", w.reading), el("td", null, w.meaning), el("td", ja.trim(), w.example),
       el("td", "mono", w.reps ? `${fmtDue(w.due_at)}・${w.reps} 次` : fmtDue(w.due_at)), el("td", "src", w.source));
     const td = el("td");
     td.append(delButton(async () => {
@@ -1121,14 +1133,15 @@ $("#demoChip").onclick = () => openSettings(0);
 $(".close", dlg).onclick = () => dlg.close();
 
 function openSettings(step) {
-  showStep(step);
   dlg.showModal();
+  showStep(step);
 }
 
 function showStep(step) {
   $$("#setTabs button").forEach((b) => b.setAttribute("aria-selected", String(Number(b.dataset.step) === step)));
+  $(`#setTabs button[data-step="${step}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   $$(".wizard .step", dlg).forEach((s) => (s.hidden = Number(s.dataset.step) !== step));
-  [loadWorkspaceStep, loadUserStep, loadLangsStep, loadClaudeStep, loadModelsStep, () => renderMail($("#setMail")).catch((e) => ($("#setMail").textContent = e.message)), () => {}][step]();
+  [loadWorkspaceStep, loadUserStep, loadLangsStep, loadClaudeStep, loadModelsStep, () => renderMail($("#setMail")).catch((e) => ($("#setMail").textContent = e.message)), () => {}, () => renderSpeechSettings($("#setSpeech"))][step]();
 }
 $$("#setTabs button").forEach((b) => (b.onclick = () => showStep(Number(b.dataset.step))));
 

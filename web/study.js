@@ -679,6 +679,7 @@ function bubble(turn, ja) {
     b.append(r);
   }
   b.append(document.createTextNode(turn.text));
+  if (turn.role === "ai") b.append(Speech.speakerButton([turn.recast, turn.text].filter(Boolean).join(" "), ja ? "ja" : "en"));
   if (turn.role === "me" && turn.used?.length) b.append(el("span", "used", `✓ ${turn.used.join("、")}`));
   return b;
 }
@@ -722,7 +723,11 @@ function composer(v, tr, ja) {
   send.append(icon("send"));
   send.disabled = true;
   const wrap = el("div", "box");
-  wrap.append(ta, timer, send);
+  // Speak instead of typing (recognition on): the text box fills, send stays manual.
+  let before = "";
+  const mic = Speech.micButton(ja ? "ja" : "en", (t) => { ta.value = `${before}${before && !ja ? " " : ""}${t}`.slice(0, v.max_chars); onInput(); });
+  mic.addEventListener("click", () => { if (!mic.classList.contains("listening")) before = ta.value.trim(); }, true);
+  wrap.append(ta, timer, mic, send);
   const hint = el("div", "c-hint");
   box.append(wrap, el("div", "actions-row"), hint);
   $(".actions-row", box).append(count);
@@ -762,6 +767,9 @@ function composer(v, tr, ja) {
       const r = await api(`/api/conversations/${v.id}/turns?user=${encodeURIComponent(state.status?.user?.id ?? "")}`, { text });
       state.conv = r;
       drawConv($("#page"), r.used.filter((u) => !usedBefore.includes(u)));
+      // Auto-read the AI's answer (Settings → 語音).
+      const ai = [...r.conversation.turns].reverse().find((t) => t.role === "ai");
+      if (ai && Speech.prefs().autoRead) Speech.speak([ai.recast, ai.text].filter(Boolean).join(" "), ja ? "ja" : "en", $$(".bubble.from-ai .spk").pop());
       if (r.locked) finishConversation();
     } catch (e) {
       mine.remove(); typing.remove();

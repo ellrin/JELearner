@@ -505,10 +505,16 @@ function stepReview(box, o, u) {
     const it = cards[i];
     const fc = el("div", "flash-card");
     fc.append(el("div", "kind", it.item_kind === "grammar" ? "文法" : "單字"));
-    fc.append(elr("div", `front${lang === "ja" ? " ja" : ""}`, it.front, lang));
+    const front = elr("div", `front${lang === "ja" ? " ja" : ""}`, it.front, lang);
+    front.append(Speech.speakerButton(it.front, lang));
+    fc.append(front);
     fc.append(el("div", "reading", shown ? it.reading : ""));
     fc.append(el("div", "back", shown ? it.back : ""));
-    if (shown && it.example) fc.append(elr("div", "example", it.example, lang));
+    if (shown && it.example) {
+      const ex = elr("div", "example", it.example, lang);
+      ex.append(Speech.speakerButton(it.example, lang));
+      fc.append(ex);
+    }
     const g = el("div", "grades");
     if (!shown) {
       const b = el("button", "primary", "顯示答案");
@@ -777,7 +783,11 @@ async function renderNotebookPage(page) {
       const h = elr("h3", null, g.pattern, lang); h.append(el("span", "m", g.meaning));
       box.append(h);
       if (g.explanation) box.append(el("p", null, g.explanation));
-      if (g.example) box.append(elr("p", "ex", g.example, lang));
+      if (g.example) {
+        const ex = elr("p", "ex", g.example, lang);
+        ex.append(Speech.speakerButton(g.example, lang));
+        box.append(ex);
+      }
       sheet.append(box);
     }
   }
