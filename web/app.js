@@ -1139,9 +1139,32 @@ function openSettings(step) {
   showStep(step);
 }
 
+/**
+ * Dialog tabs that scroll on narrow screens (title and × stay put): bring
+ * the selected tab into view and fade the edge where more tabs are hidden.
+ */
+function tabsInView(box) {
+  const sel = $('button[aria-selected="true"]', box);
+  if (sel) {
+    const l = sel.offsetLeft - box.offsetLeft, r = l + sel.offsetWidth;
+    if (l < box.scrollLeft) box.scrollLeft = l - 12;
+    else if (r > box.scrollLeft + box.clientWidth) box.scrollLeft = r - box.clientWidth + 12;
+  }
+  tabsFade(box);
+}
+function tabsFade(box) {
+  box.classList.toggle("more-r", box.scrollLeft + box.clientWidth < box.scrollWidth - 2);
+  box.classList.toggle("more-l", box.scrollLeft > 2);
+}
+for (const id of ["#setTabs", "#stTabs"]) {
+  const box = $(id);
+  box.addEventListener("scroll", () => tabsFade(box), { passive: true });
+  addEventListener("resize", () => tabsFade(box));
+}
+
 function showStep(step) {
   $$("#setTabs button").forEach((b) => b.setAttribute("aria-selected", String(Number(b.dataset.step) === step)));
-  $(`#setTabs button[data-step="${step}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  tabsInView($("#setTabs"));
   $$(".wizard .step", dlg).forEach((s) => (s.hidden = Number(s.dataset.step) !== step));
   [loadWorkspaceStep, loadUserStep, loadLangsStep, loadClaudeStep, loadModelsStep, () => renderMail($("#setMail")).catch((e) => ($("#setMail").textContent = e.message)), () => {}, () => renderSpeechSettings($("#setSpeech"))][step]();
 }

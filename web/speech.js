@@ -176,7 +176,13 @@ const Speech = (() => {
     }
     return ok;
   }
-  const normWord = (w) => w.toLowerCase().replace(/[’']/g, "").replace(PUNCT, "");
+  // Number words 0–20 count the same as digits (recognition often writes "3" for "three").
+  const NUMS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+  const normWord = (w) => {
+    const x = w.toLowerCase().replace(/[’']/g, "").replace(PUNCT, "");
+    const n = NUMS.indexOf(x);
+    return n >= 0 ? String(n) : x;
+  };
   /**
    * Compare what was said with the target sentence. Returns display tokens
    * `{ text, ok }` (`ok` null for punctuation) and a 0–100 score.
@@ -211,10 +217,26 @@ const Speech = (() => {
     const score = core.length ? Math.round((flags.filter(Boolean).length / core.length) * 100) : 0;
     return { tokens, score };
   }
+  // A period after these (or after a single capital letter, as in "J. Smith") does not end a sentence.
+  const ABBR = /(?:^|[\s("“'‘])(?:[Mm]rs?|[Mm]s|[Dd]r|[Ss]t|vs|etc|e\.g|i\.e|U\.S|[A-Z])\.$/u;
+  function splitEnglish(t) {
+    const out = [];
+    const re = /[.!?…]+["'”’)\]]*\s+(?=\S)/gu;
+    let start = 0, m;
+    while ((m = re.exec(t))) {
+      const mark = m[0].trimEnd();
+      const piece = t.slice(start, m.index + mark.length);
+      if (mark === "." && ABBR.test(piece)) continue;
+      out.push(piece);
+      start = m.index + m[0].length;
+    }
+    out.push(t.slice(start));
+    return out;
+  }
   /** Sentences of a paragraph. */
   function sentences(text, lang) {
     const t = String(text ?? "").trim();
-    const parts = lang === "ja" ? t.split(/(?<=[。！？!?])/u) : t.split(/(?<=[.!?…])\s+(?=\S)/u);
+    const parts = lang === "ja" ? t.split(/(?<=[。！？!?])/u) : splitEnglish(t);
     return parts.map((s) => s.trim()).filter((s) => plainRuby(s).replace(PUNCT, "").length > 0);
   }
 
@@ -226,12 +248,15 @@ const Speech = (() => {
     const list = sentences(text, lang);
     const box = el("div", "shadow");
     let i = 0;
+    const last = () => i === list.length - 1;
+    const goTo = (k) => { i = k; stopListening(); stop(); draw(); };
+    const closePanel = () => { stopListening(); stop(); box.remove(); };
     const draw = () => {
       box.innerHTML = "";
       const s = list[i];
       const head = el("div", "sh-head");
       head.append(el("span", "n", `${i + 1} / ${list.length}`));
-      const close = iconButton("x", "關閉跟讀", () => { stopListening(); stop(); box.remove(); });
+      const close = iconButton("x", "關閉跟讀", closePanel);
       head.append(el("span", "grow"), close);
       const target = elr("div", "sh-target", s, lang);
       const out = el("div", "sh-out");
@@ -266,13 +291,28 @@ const Speech = (() => {
           diff.append(span);
           if (lang !== "ja" && k < r.tokens.length - 1) diff.append(document.createTextNode(" "));
         });
-        const pctEl = el("b", `sh-pct${r.score >= 80 ? " good" : ""}`, `${r.score}%`);
+        const good = r.score >= 80;
+        const pctEl = el("b", `sh-pct${good ? " good" : ""}`, `${r.score}%`);
+        if (good) { const ck = el("span", "sh-ok"); ck.append(icon("check")); pctEl.prepend(ck); }
         out.append(pctEl, diff);
+        // Next step: 下一句 is the main button once it is good; the last
+        // sentence offers the whole paragraph again or closing.
+        const acts = el("div", "sh-acts");
+        if (!last()) {
+          if (good) acts.append(primaryButton("下一句", () => goTo(i + 1), true));
+        } else {
+          const again = ghostButton("speaker", "再聽整段", () => speak(text, lang));
+          if (good) { again.className = "primary small"; again.textContent = "再聽整段"; }
+          acts.append(again, ghostButton("x", "關閉", closePanel));
+        }
+        if (acts.childElementCount) out.append(acts);
       };
       row.append(listenBtn, say);
       if (list.length > 1) {
-        const prev = iconButton("back", "上一句", () => { i = (i - 1 + list.length) % list.length; stopListening(); draw(); });
-        const next = iconButton("arrow", "下一句", () => { i = (i + 1) % list.length; stopListening(); draw(); });
+        const prev = iconButton("back", "上一句", () => goTo(i - 1));
+        const next = iconButton("arrow", "下一句", () => goTo(i + 1));
+        prev.disabled = i === 0;
+        next.disabled = last();
         row.append(el("span", "grow"), prev, next);
       }
       box.append(head, target, row, heard, out);

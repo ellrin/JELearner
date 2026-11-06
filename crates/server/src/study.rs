@@ -221,12 +221,34 @@ async fn today(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value> {
     let db = &l.db;
     let stats = db.stats(Some(lang), day_start(local_today()), Utc::now()).await?;
     let plan = crate::courses::today_lessons(&l, lang).await?;
+    // A review step without a lesson yet is done as a quick review (no
+    // Claude needed): points come per full round of cards, so the step is
+    // done once nothing is due and there were reviews today; its points are
+    // the rounds actually awarded today. `round` is this round's progress.
+    let round = review_round_progress(db, lang, r.points.review_round.max(1)).await?;
+    let reviewed_today = !reviews_since(db, lang, Some(day_start(local_today()))).await?.is_empty();
+    let review_pts: Option<f64> = sqlx::query_scalar("SELECT SUM(points) FROM points WHERE lang = ? AND unit = 'review' AND at >= ?")
+        .bind(lang.code())
+        .bind(day_start(local_today()))
+        .fetch_one(db.pool())
+        .await?;
+    let quick_done = stats.due == 0 && reviewed_today;
+    let quick_review = |kind: &Value, done: &Value, points: &Value, lesson_id: &Value| -> (Value, Value) {
+        if kind == "review" && !lesson_id.is_i64() && *done != true && quick_done {
+            (json!(true), review_pts.filter(|p| *p > 0.0).map(|p| json!(p)).unwrap_or(Value::Null))
+        } else {
+            (done.clone(), points.clone())
+        }
+    };
+    let round_of = |kind: &Value| if kind == "review" { round.clone() } else { Value::Null };
     let mut tasks = vec![];
     for les in plan["lessons"].as_array().into_iter().flatten() {
         let generated = les["lesson_id"].is_i64();
         for u in les["units"].as_array().into_iter().flatten() {
+            let (done, pts) = quick_review(&u["kind"], &u["done"], &u["points"], &les["lesson_id"]);
             tasks.push(json!({
-                "id": "unit", "kind": u["kind"], "unit": u["index"], "minutes": u["minutes"], "items": u["items"], "done": u["done"], "points": u["points"],
+                "id": "unit", "kind": u["kind"], "unit": u["index"], "minutes": u["minutes"], "items": u["items"], "done": done, "points": pts,
+                "round": round_of(&u["kind"]),
                 "course": les["course"], "number": les["number"], "lesson_title": les["title"], "lesson_id": les["lesson_id"],
                 // Review cards come from the database: never need Claude.
                 "needs_engine": u["kind"] != "review" && (!generated || u["kind"] == "conversation"),
@@ -236,8 +258,10 @@ async fn today(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value> {
     }
     if let Some(units) = plan["daily"]["units"].as_array() {
         for u in units {
+            let (done, pts) = quick_review(&u["kind"], &json!(false), &Value::Null, &Value::Null);
             tasks.push(json!({
-                "id": "unit", "daily": true, "kind": u["kind"], "unit": u["index"], "minutes": u["minutes"], "items": u["items"], "done": false,
+                "id": "unit", "daily": true, "kind": u["kind"], "unit": u["index"], "minutes": u["minutes"], "items": u["items"], "done": done, "points": pts,
+                "round": round_of(&u["kind"]),
                 "lesson_title": plan["daily"]["topic"]["name"], "needs_engine": u["kind"] != "review",
                 "due": if u["kind"] == "review" { json!(stats.due) } else { Value::Null },
             }));
@@ -395,14 +419,28 @@ async fn reviews_since(db: &Db, lang: Lang, since: Option<DateTime<Utc>>) -> Res
     .await?)
 }
 
+/// Grades of the review round in progress (since the last awarded round).
+async fn round_grades(db: &Db, lang: Lang) -> Result<Vec<i64>, ApiError> {
+    let last: Option<DateTime<Utc>> =
+        sqlx::query_scalar("SELECT MAX(at) FROM points WHERE lang = ? AND unit = 'review'").bind(lang.code()).fetch_one(db.pool()).await?;
+    // A point's time is kept to the second: the cards of the awarded round
+    // were all graded before the end of that second.
+    let last = last.map(|t| t + chrono::Duration::seconds(1) - chrono::Duration::microseconds(1));
+    reviews_since(db, lang, last).await
+}
+
+/// This round's progress: `{ done, size }` (cards graded towards the next point).
+async fn review_round_progress(db: &Db, lang: Lang, size: i64) -> Result<Value, ApiError> {
+    let done = round_grades(db, lang).await?.len() as i64;
+    Ok(json!({ "done": done.min(size), "size": size }))
+}
+
 /// After a review: a full round of cards is a unit (1 point, + bonus at
 /// 95% remembered). Called by the review handler.
 pub async fn review_round(s: &Shared, lang: Lang) -> Result<Value, ApiError> {
     let r = rules(s).await;
     let l = ws(s).await?;
-    let last: Option<DateTime<Utc>> =
-        sqlx::query_scalar("SELECT MAX(at) FROM points WHERE lang = ? AND unit = 'review'").bind(lang.code()).fetch_one(l.db.pool()).await?;
-    let grades = reviews_since(&l.db, lang, last).await?;
+    let grades = round_grades(&l.db, lang).await?;
     let size = r.points.review_round.max(1);
     let done = grades.len() as i64;
     if done < size {

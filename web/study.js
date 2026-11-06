@@ -112,6 +112,21 @@ function starRow(m, compact = false) {
   return box;
 }
 
+/**
+ * A near goal from the recent pace and the star size: the stars this week
+ * at the recent pace, the weeks to the next star (up to 4), or else the
+ * points this week that reach the next star within a month.
+ */
+function nearStarGoal(m) {
+  const pace = m.pace_per_week ?? 0, next = m.to_next_milestone;
+  if (next == null || pace <= 0) return "";
+  if (pace >= next) return `這週再拿 ${1 + Math.floor((pace - next) / (m.milestone_points || pace))} 顆星`;
+  const weeks = Math.ceil(next / pace);
+  if (weeks <= 4) return `照最近的速度，約 ${weeks} 週拿下一顆星`;
+  // Very slow lately: a weekly goal that reaches the next star in a month.
+  return `這週拿 ${fmtPts(Math.ceil(next / 4))} 分，一個月內拿下一顆星`;
+}
+
 /** The star a new summary reached over the previous one (same language and step), or 0. */
 function starGain(prev, sum) {
   if (!prev?.milestones || !sum?.milestones || prev.lang !== sum.lang || prev.level !== sum.level) return 0;
@@ -261,10 +276,11 @@ function taskName(task) {
 async function nextTodayStep() {
   try {
     const t = await fetchToday(true);
-    // A review step whose lesson does not exist yet and has no due cards
-    // left was just done as a quick review: the step after it is next.
-    const open = (x) => x.done !== true && !(x.kind === "review" && x.lesson_id == null && !x.due);
-    const task = t.tasks.find(open) ?? null;
+    // The server decides what is done and next (a quick review step is done
+    // once nothing is due and there were reviews today), like renderToday.
+    const task = t.next != null ? t.tasks[t.next] : null;
+    // Like the today card: a step that needs Claude asks to connect it first.
+    if (task?.needs_engine && !state.status?.engine_ready) return { label: "連接 Claude", primary: true, onclick: () => openSettings(3) };
     if (task) return { label: `下一步：${taskName(task)}`, primary: true, onclick: () => (task.id === "mistakes" ? go("mistakes") : openStep(task)) };
   } catch { /* fall back to the today page */ }
   return { label: "回到今日", primary: true, onclick: () => go("today") };
@@ -431,17 +447,17 @@ const unitTitle = (k, lang = state.lang) => (k === "translation" ? (lang === "ja
 /** Open a step of a course lesson (creating today's daily lesson first if needed). */
 async function openStep(task) {
   if (task.kind === "review" && task.lesson_id == null && !state.status?.engine_ready) {
-    go("courses", { quickReview: true, fromToday: true, inDaily: true });
+    go("courses", { quickReview: true, fromToday: true, inDaily: true, courseCreate: null });
     return;
   }
   if (task.daily) {
     try {
       const d = await api("/api/daily", { lang: state.lang });
-      go("courses", { course: d.id, courseLesson: d.next ?? 1, step: task.unit, fromToday: true });
+      go("courses", { course: d.id, courseLesson: d.next ?? 1, step: task.unit, fromToday: true, courseCreate: null });
     } catch (e) { flash(e.message, true); }
     return;
   }
-  go("courses", { course: task.course, courseLesson: task.number, step: task.unit, fromToday: true });
+  go("courses", { course: task.course, courseLesson: task.number, step: task.unit, fromToday: true, courseCreate: null });
 }
 
 function taskCard(task, isNext, engineReady) {
@@ -453,11 +469,18 @@ function taskCard(task, isNext, engineReady) {
   if (task.id === "unit") {
     ic.append(icon(UNIT_ICON[task.kind] ?? "book"));
     title = unitTitle(task.kind);
-    if (task.kind === "review") sub = task.due ? `${task.due} 張到期` : "";
-    else if (task.kind === "conversation") sub = `${task.items} 回合`;
+    // A review step without a lesson and without Claude is a quick review:
+    // its point comes per full round of cards (progress.toml review_round).
+    const quick = task.kind === "review" && task.lesson_id == null && !engineReady;
+    if (task.kind === "review") {
+      const parts = [];
+      if (task.due) parts.push(`${task.due} 張到期`);
+      if (quick && task.round) parts.push(`本輪 ${task.round.done} / ${task.round.size} 張`);
+      sub = parts.join("・");
+    } else if (task.kind === "conversation") sub = `${task.items} 回合`;
     else sub = `${task.items} 題`;
     // Each step passed = 1 point (more with a high score).
-    reward = `+1・約 ${task.minutes} 分鐘`;
+    reward = quick && task.round ? `滿 ${task.round.size} 張 +1・約 ${task.minutes} 分鐘` : `+1・約 ${task.minutes} 分鐘`;
     action = () => openStep(task);
     if (task.unit > 0 && !task.done) label = "繼續";
   } else {
@@ -934,11 +957,19 @@ async function renderProgress(page) {
   const m = sum.milestones;
   if (a.next && m) {
     const ms = el("div", "milestones");
-    ms.append(starRow(m));
+    const stars = el("div", "ms-stars");
+    stars.append(starRow(m));
+    ms.append(stars);
     const lines = el("div", "ms-lines");
     if (m.to_next_milestone != null) lines.append(el("span", null, `再 ${fmtPts(m.to_next_milestone)} 分拿下一顆星`));
     if (m.weeks_to_next_step == null) lines.append(el("span", "muted", "多學幾天就能估算"));
-    else if (m.weeks_to_next_step > 0) lines.append(el("span", "muted", `照最近的速度，約 ${m.weeks_to_next_step} 週升到 ${a.next}`));
+    else if (m.weeks_to_next_step > 12) {
+      // A long way off: a near goal instead (plan §9.1), the long estimate behind ?.
+      lines.append(el("span", "muted", nearStarGoal(m)));
+      const help = el("button", "help", "?");
+      help.dataset.tip = `照最近的速度（每週約 ${fmtPts(m.pace_per_week)} 分），約 ${m.weeks_to_next_step} 週升到 ${a.next}。`;
+      stars.append(help);
+    } else if (m.weeks_to_next_step > 0) lines.append(el("span", "muted", `照最近的速度，約 ${m.weeks_to_next_step} 週升到 ${a.next}`));
     ms.append(lines);
     right.append(ms);
   }

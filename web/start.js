@@ -49,6 +49,7 @@ function startWizard(mode) {
   $$("#stTabs button").forEach((b) => { b.hidden = !wiz.flow.includes(b.dataset.step); b.tabIndex = -1; });
   wizShow();
   if (!dlgStart.open) dlgStart.showModal();
+  tabsInView($("#stTabs"));
 }
 
 // The wizard can be left (×, Esc) only when there is a user to return to.
@@ -64,6 +65,7 @@ function wizShow() {
   const step = wizStep();
   $$("#dlgStart .wizard .step").forEach((n) => (n.hidden = n.dataset.step !== step));
   $$("#stTabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.step === step)));
+  tabsInView($("#stTabs"));
   const last = wiz.i === wiz.flow.length - 1;
   $("#stPrev").hidden = wiz.i === 0 || step === "done";
   // Skipping is possible where nothing is required.

@@ -147,6 +147,7 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
   border: 1px solid var(--line-strong); background: none; color: var(--muted); font: 600 11.5px/16px var(--mono);
 }
 .help:hover { color: var(--accent-text); border-color: var(--accent-text); }
+.ms-stars { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .tip {
   position: fixed; z-index: 50; max-width: 260px; padding: 8px 10px;
   background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r);
@@ -1072,6 +1073,14 @@ ruby rt { font-size: .5em; font-weight: 400; letter-spacing: 0; }
 .imp-types a { color: var(--accent-text); }
 @media (max-width: 760px) {
   .done-next { grid-template-columns: 1fr; }
+  /* Lesson words as blocks: term, reading and speaker on one line, the
+     meaning and example full width below. */
+  .paper table.vocab, .paper table.vocab tbody { display: block; }
+  .paper table.vocab thead { display: none; }
+  .paper table.vocab tr { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; padding: 8px 0; border-bottom: 1px solid #ecebe7; }
+  .paper table.vocab td { display: block; border: 0; padding: 0; }
+  .paper table.vocab td.term { white-space: normal; }
+  .paper table.vocab td:last-child { flex: 1 1 100%; margin-top: 4px; min-width: 0; overflow-wrap: anywhere; }
   .flash-card .grades button { min-width: 0; flex: 1 1 40%; }
 }
 
@@ -1088,7 +1097,7 @@ ruby rt { font-size: .5em; font-weight: 400; letter-spacing: 0; }
 .paper .say-tools .ico { opacity: .7; }
 .paper p:hover > .say-tools .ico { opacity: 1; }
 .bubble .ico.spk { margin: -2px -6px -2px 4px; }
-.composer .ico.mic-btn { width: 36px; height: 36px; margin: 0; align-self: center; }
+.composer .ico.mic-btn { width: 36px; height: 36px; margin: 0; align-self: center; border-radius: 50%; }
 .composer .ico.mic-btn svg { width: 20px; height: 20px; }
 .ico.mic-btn.listening { color: var(--accent-ink); background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 6px var(--accent-soft); } }
@@ -1108,6 +1117,12 @@ ruby rt { font-size: .5em; font-weight: 400; letter-spacing: 0; }
 .shadow .sh-out:empty { display: none; }
 .shadow .sh-pct { font: 800 24px/1 var(--sans); color: var(--accent-text); }
 .shadow .sh-pct.good { color: var(--accent-3-text, var(--accent-text)); }
+.shadow .sh-pct { display: inline-flex; align-items: center; gap: 6px; }
+.shadow .sh-ok { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid currentColor; }
+.shadow .sh-ok svg { width: 15px; height: 15px; }
+@media (prefers-reduced-motion: no-preference) { .shadow .sh-ok { animation: pop .32s cubic-bezier(.3, 1.6, .5, 1); } }
+.shadow .sh-acts { display: flex; gap: 8px; flex-wrap: wrap; flex: 1 1 100%; }
+.shadow .ico:disabled { opacity: .35; cursor: default; }
 .shadow .sh-diff { font-size: 16px; line-height: 1.7; min-width: 0; overflow-wrap: anywhere; }
 .shadow .sh-diff .hit { color: var(--text); background: color-mix(in srgb, var(--accent-3) 30%, transparent); border-radius: 3px; }
 .shadow .sh-diff .miss { color: var(--muted); text-decoration: underline wavy var(--accent-text); text-underline-offset: 4px; }
@@ -1115,7 +1130,13 @@ ruby rt { font-size: .5em; font-weight: 400; letter-spacing: 0; }
 .speech-form select { min-width: 0; }
 /* Eight settings tabs: a wider dialog; the head scrolls when it still does not fit. */
 #dlgSettings { width: min(990px, calc(100vw - 32px)); }
-#dlgSettings .dlg-head { overflow-x: auto; scrollbar-width: none; }
+/* Narrow screens: the title and × stay put, only the tabs scroll (edge fades hint at more). */
+#dlgSettings .dlg-head, #dlgStart .dlg-head { overflow: hidden; }
+#setTabs, #stTabs { flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+#setTabs::-webkit-scrollbar, #stTabs::-webkit-scrollbar { display: none; }
+#setTabs.more-r, #stTabs.more-r { mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+#setTabs.more-l, #stTabs.more-l { mask-image: linear-gradient(to right, transparent, #000 32px); }
+#setTabs.more-l.more-r, #stTabs.more-l.more-r { mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
 /* On the paper sheet the colours come from --paper / --paper-ink (both themes). */
 .paper .ico.spk, .paper .ico.mic-btn { color: color-mix(in srgb, var(--paper-ink) 55%, var(--paper)); }
 .paper .ico.spk:hover, .paper .ico.mic-btn:hover, .paper .ico.spk.speaking { color: var(--paper-ink); background: color-mix(in srgb, var(--paper-ink) 8%, var(--paper)); }

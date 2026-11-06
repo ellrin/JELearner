@@ -669,6 +669,61 @@ async fn started_daily_lesson_stays_on_today() {
     assert_eq!(today["next"], 1);
 }
 
+/// The daily lesson's review step before the lesson exists is a quick
+/// review: it shows this round's progress, is done once nothing is due and
+/// there were reviews today, and its points are the rounds actually awarded
+/// (no point for fewer cards than a round). `next` moves past it.
+#[tokio::test]
+async fn quick_review_step_done_by_round_rules() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws_path = ws_dir.path().join("JELearner-private");
+    let (c, _calls) = setup(app_dir.path(), &ws_path).await;
+    std::fs::write(ws_path.join("progress.toml"), "[points]\nreview_round = 500\n").unwrap();
+    let review_task = |t: &Value| t["tasks"].as_array().unwrap().iter().find(|x| x["kind"] == "review").unwrap().clone();
+
+    let (_, today) = c.get("/api/today?lang=en").await;
+    let rv = review_task(&today);
+    assert_eq!(rv["done"], false, "{rv}");
+    assert_eq!(rv["round"], json!({ "done": 0, "size": 500 }));
+    assert_eq!(today["next"], 0);
+    let (_, due) = c.get("/api/review?lang=en&limit=100").await;
+    let due = due.as_array().unwrap().clone();
+    assert!(due.len() >= 2, "the starter workspace has due cards");
+
+    // Two cards: still due cards left, the step stays next.
+    for d in &due[..2] {
+        let (code, r) = c.post("/api/review", json!({ "kind": d["item_kind"], "id": d["item_id"], "grade": 4 })).await;
+        assert_eq!(code, StatusCode::OK, "{r}");
+        assert!(r.get("award").is_none(), "{r}");
+    }
+    let (_, today) = c.get("/api/today?lang=en").await;
+    let rv = review_task(&today);
+    assert_eq!(rv["done"], false);
+    assert_eq!(rv["round"]["done"], 2);
+    assert_eq!(today["next"], 0);
+
+    // All due cards graded, fewer than a round: done, without points.
+    for d in &due[2..] {
+        c.post("/api/review", json!({ "kind": d["item_kind"], "id": d["item_id"], "grade": 4 })).await;
+    }
+    let (_, today) = c.get("/api/today?lang=en").await;
+    assert_eq!(today["due"], 0, "{today}");
+    let rv = review_task(&today);
+    assert_eq!(rv["done"], true, "{rv}");
+    assert!(rv["points"].is_null(), "no round finished, no point: {rv}");
+    assert_eq!(today["next"], 1);
+
+    // A round finished: the step carries the points actually awarded.
+    std::fs::write(ws_path.join("progress.toml"), "[points]\nreview_round = 1\n").unwrap();
+    let (_, r) = c.post("/api/review", json!({ "kind": due[0]["item_kind"], "id": due[0]["item_id"], "grade": 4 })).await;
+    let pts = r["award"]["points"].as_f64().expect("a round awarded");
+    let (_, today) = c.get("/api/today?lang=en").await;
+    let rv = review_task(&today);
+    assert_eq!(rv["points"].as_f64(), Some(pts), "{rv}");
+    assert_eq!(rv["round"], json!({ "done": 0, "size": 1 }));
+}
+
 /// News pages that robots.txt does not allow are marked, not offered.
 #[tokio::test]
 async fn news_blocked_by_robots_is_marked() {

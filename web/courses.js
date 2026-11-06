@@ -437,19 +437,26 @@ async function renderQuickReview(page) {
   const due = await api(`/api/review?lang=${state.lang}&limit=${REVIEW_LIMIT}`);
   const box = el("div", "step-box");
   page.append(box);
-  if (!due.length) { box.append(quickReviewDone(0, null)); return; }
+  if (!due.length) { box.append(quickReviewDone(0, null, null)); return; }
   stepReview(box, { course: { lang: state.lang }, review_cards: due, standalone: true }, { index: 0, kind: "review" });
 }
 
-/** The end of a quick review: the cards done (points when a full round was reached) and today's next step. */
-function quickReviewDone(cards, award) {
+/**
+ * The end of a quick review: the cards done, the points when a full round
+ * was reached, otherwise how many cards are left to the next point (`round`
+ * from /api/review), and today's next step.
+ */
+function quickReviewDone(cards, award, round) {
   const card = el("div", "step-done");
   const m = el("span", "mark");
   m.append(icon("check"));
   const pts = award?.points ?? 0;
   card.append(m, el("b", null, cards ? "複習完成" : "沒有到期的卡片"));
   if (pts > 0) card.append(el("div", "plus", `+${fmtPts(pts)}`));
-  else if (cards) card.append(el("div", "sub", `${cards} 張`));
+  else if (cards) {
+    const left = round ? round.size - round.done : 0;
+    card.append(el("div", "sub", left > 0 ? `${cards} 張・再 ${left} 張拿 1 分` : `${cards} 張`));
+  }
   const row = el("div", "actions-row");
   const main = primaryButton("回到今日", () => go("today"), true);
   nextTodayStep().then((st) => { main.textContent = st.label; main.onclick = st.onclick; });
@@ -543,7 +550,7 @@ function stepReview(box, o, u) {
   box.append(bar);
   const stage = el("div", "card");
   box.append(stage);
-  let i = 0, shown = false, good = 0, award = null;
+  let i = 0, shown = false, good = 0, award = null, round = null;
   const draw = () => {
     stage.innerHTML = "";
     $(".c", head).textContent = `${Math.min(i + 1, cards.length)} / ${cards.length}`;
@@ -552,7 +559,7 @@ function stepReview(box, o, u) {
       stage.remove();
       if (o.standalone) {
         // Points come from full review rounds (A stage rules).
-        box.append(quickReviewDone(cards.length, award));
+        box.append(quickReviewDone(cards.length, award, award ? null : round));
         refreshStatus().then(greet);
         return;
       }
@@ -601,6 +608,7 @@ function stepReview(box, o, u) {
       if (it.item_id != null) {
         const r = await api("/api/review", { kind: it.item_kind, id: it.item_id, grade, in_course: !o.standalone });
         if (r?.award) award = r.award;
+        if (r?.round) round = r.round;
       }
     } catch (e) { flash(e.message, true); busyRate = false; return; }
     busyRate = false;

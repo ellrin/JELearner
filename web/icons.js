@@ -79,6 +79,8 @@ function paintIcons(root = document) {
     if (!b || b.dataset.menu || b.contains(e.relatedTarget)) return;
     hide();
     timer = setTimeout(() => {
+      // The button may be gone (a card graded with the keyboard).
+      if (!b.isConnected) return;
       hint = document.createElement("div");
       hint.className = "hint";
       hint.textContent = b.getAttribute("aria-label");
@@ -95,6 +97,7 @@ function paintIcons(root = document) {
     if (b && !b.contains(e.relatedTarget)) hide();
   });
   document.addEventListener("mousedown", hide);
+  document.addEventListener("keydown", hide);
 })();
 
 /** An icon-only button with a hover label. */
