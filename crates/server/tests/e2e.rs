@@ -358,6 +358,13 @@ async fn full_text_pipeline_offline() {
     assert_eq!(st, StatusCode::METHOD_NOT_ALLOWED);
     let r = c.http.put(format!("{}/api/user", c.base)).json(&json!({"report_email": "me@example.com"})).send().await.unwrap();
     assert!(r.status().is_success());
+    // The UI theme follows the user; only known ids are accepted.
+    let r = c.http.put(format!("{}/api/user", c.base)).json(&json!({"theme": "sakuramatcha"})).send().await.unwrap();
+    assert!(r.status().is_success());
+    assert_eq!(c.get("/api/status").await.1["user"]["theme"], "sakuramatcha");
+    assert!(std::fs::read_to_string(ws_path.join("profiles/ellrin/profile.toml")).unwrap().contains("theme = \"sakuramatcha\""));
+    let r = c.http.put(format!("{}/api/user", c.base)).json(&json!({"theme": "orange"})).send().await.unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
     let (st, rep) = c.post("/api/google/weekly-report", json!({})).await;
     assert_eq!(st, StatusCode::OK, "{rep}");
     assert!(rep["email"]["body"].as_str().unwrap().contains("Ellrin"));

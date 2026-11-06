@@ -81,17 +81,90 @@ async function busy(btn, fn) {
 }
 
 // ── theme ──────────────────────────────────────────────
-function applyTheme() {
-  const t = store.get("jl.theme", "orange");
-  const sys = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  const m = store.get("jl.mode", sys);
-  document.documentElement.dataset.theme = t;
-  document.documentElement.dataset.mode = m;
-  $$(".theme[data-theme]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.theme === t)));
-  $$("#lookMode button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === m)));
+// Twenty palettes in themes.css: ten dark and ten light, each with five
+// single-hue themes and five combinations of three accents. Each theme is
+// dark or light by itself. The same ids are in core's THEMES list.
+const THEMES = [
+  { id: "hacker", name: "駭客終端", dark: true, multi: false, sw: ["#121712", "#16c94d", "#39ff6a", "#a8ffbc"] },
+  { id: "amber", name: "琥珀終端", dark: true, multi: false, sw: ["#1c1a16", "#ff8a1f", "#ffb000", "#ffd98a"] },
+  { id: "ice", name: "冰晶藍", dark: true, multi: false, sw: ["#172028", "#2fb2e6", "#5ce1ff", "#b8f2ff"] },
+  { id: "ultraviolet", name: "紫外線", dark: true, multi: false, sw: ["#1b1530", "#8c5cff", "#ae7aff", "#dcc8ff"] },
+  { id: "redalert", name: "紅色警戒", dark: true, multi: false, sw: ["#1d1517", "#e8323f", "#ff4752", "#ffa3a8"] },
+  { id: "neon", name: "霓虹夜市", dark: true, multi: true, sw: ["#161731", "#ff3fb4", "#2de2e6", "#ffd23f"] },
+  { id: "shibuya", name: "澀谷雨夜", dark: true, multi: true, sw: ["#151c26", "#ff5fa2", "#4fd8ff", "#a98cff"] },
+  { id: "hongkong", name: "香港霓虹", dark: true, multi: true, sw: ["#122220", "#ff5147", "#2ee6a6", "#ffc845"] },
+  { id: "synthwave", name: "落日合成", dark: true, multi: true, sw: ["#1e1329", "#ff8a3d", "#ff4fa0", "#b691ff"] },
+  { id: "aurora", name: "極光", dark: true, multi: true, sw: ["#121b2a", "#4cf5a8", "#46c8ff", "#d58cff"] },
+  { id: "lavender", name: "薰衣草", dark: false, multi: false, sw: ["#ebe7f6", "#b7abdb", "#6f4fd0", "#5232ad"] },
+  { id: "lemon", name: "檸檬塔", dark: false, multi: false, sw: ["#faf2d2", "#d3c27a", "#b86f00", "#8f5a00"] },
+  { id: "mint", name: "薄荷", dark: false, multi: false, sw: ["#e2f3eb", "#9eccb5", "#0b7a5d", "#08604a"] },
+  { id: "blueberry", name: "藍莓", dark: false, multi: false, sw: ["#e3e8f6", "#a6b3db", "#3a4bb0", "#2a3888"] },
+  { id: "strawberry", name: "草莓", dark: false, multi: false, sw: ["#f9e4ea", "#d9a2b4", "#c8254f", "#9c1a3c"] },
+  { id: "giftbox", name: "甜點禮盒", dark: false, multi: true, sw: ["#f8efe4", "#c2366b", "#0f7d62", "#966500"] },
+  { id: "peachlavender", name: "蜜桃薰衣草", dark: false, multi: true, sw: ["#fae7da", "#d85a34", "#7556c9", "#b8487c"] },
+  { id: "sakuramatcha", name: "櫻花抹茶", dark: false, multi: true, sw: ["#f5eaee", "#d05a88", "#557619", "#8c4f42"] },
+  { id: "blueberrylemon", name: "藍莓檸檬", dark: false, multi: true, sw: ["#e6ebf7", "#3a4bb0", "#926400", "#8048a8"] },
+  { id: "caramelpistachio", name: "焦糖開心果", dark: false, multi: true, sw: ["#f2e7d6", "#955222", "#4c7a1a", "#a8475a"] },
+];
+const DEFAULT_THEME = "giftbox";
+// Ids from earlier versions → the nearest current theme.
+const OLD_THEMES = { acid: "hacker", voltage: "ice", plum: "neon", toxic: "amber", pistachio: "mint", peach: "peachlavender", sakura: "sakuramatcha", caramel: "caramelpistachio", taro: "lavender" };
+const themeOf = (id) => THEMES.find((t) => t.id === id);
+
+// The browser's choice; ids from earlier versions (and the first version's
+// orange/night/terminal + light/dark) map to the nearest theme once.
+function savedTheme() {
+  let t = store.get("jl.theme", null);
+  if (themeOf(t)) return t;
+  if (OLD_THEMES[t]) { store.set("jl.theme", OLD_THEMES[t]); return OLD_THEMES[t]; }
+  if (t === "orange" || t === "night" || t === "terminal") {
+    const light = store.get("jl.mode", matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark") === "light";
+    t = { orange: light ? "peachlavender" : "amber", night: light ? "lavender" : "neon", terminal: light ? "mint" : "hacker" }[t];
+    store.set("jl.theme", t);
+    try { localStorage.removeItem("jl.mode"); } catch {}
+    return t;
+  }
+  return DEFAULT_THEME;
 }
-$$(".theme[data-theme]").forEach((b) => (b.onclick = () => { store.set("jl.theme", b.dataset.theme); applyTheme(); }));
-$$("#lookMode button").forEach((b) => (b.onclick = () => { store.set("jl.mode", b.dataset.v); applyTheme(); }));
+// The user's own theme (saved in their profile) wins over the browser's.
+const currentTheme = () => {
+  const u = state.status?.user?.theme;
+  return themeOf(u) ? u : themeOf(OLD_THEMES[u]) ? OLD_THEMES[u] : savedTheme();
+};
+
+function showTheme(id) {
+  const t = themeOf(id) ?? themeOf(DEFAULT_THEME);
+  document.documentElement.dataset.theme = t.id;
+  document.documentElement.dataset.mode = t.dark ? "dark" : "light";
+}
+function applyTheme() {
+  const t = currentTheme();
+  showTheme(t);
+  $$(".theme-card").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.theme === t)));
+}
+async function chooseTheme(id) {
+  store.set("jl.theme", id);
+  const u = state.status?.user;
+  if (u) {
+    u.theme = id;
+    try { await api("/api/user", { theme: id }, "PUT"); } catch (e) { flash(e.message, true); }
+  }
+  applyTheme();
+}
+// Settings → 外觀: a swatch card per theme (dark row, then light row; single
+// hue first, then combinations); hover or focus previews it.
+for (const t of THEMES) {
+  const b = el("button", "theme-card");
+  b.dataset.theme = t.id;
+  b.setAttribute("aria-label", t.name);
+  const sw = el("span", "sw");
+  for (const c of t.sw) { const i = el("i"); i.style.background = c; sw.append(i); }
+  b.append(sw, el("span", "nm", t.name));
+  b.onmouseenter = b.onfocus = () => showTheme(t.id);
+  b.onmouseleave = b.onblur = () => showTheme(currentTheme());
+  b.onclick = () => chooseTheme(t.id);
+  $(t.dark ? "#themesDark" : "#themesLight").append(b);
+}
 
 // ── help tips & collapsible blocks ─────────────────────
 (() => {
@@ -226,6 +299,7 @@ function applyUser() {
   if (!langs.includes(state.lang)) { state.lang = langs[0]; store.set("jl.lang", state.lang); }
   $$("#lang button").forEach((b) => { b.hidden = !langs.includes(b.dataset.v); b.setAttribute("aria-pressed", String(b.dataset.v === state.lang)); });
   $("#lang").hidden = langs.length < 2;
+  applyTheme();
 }
 
 const userMenu = $("#userMenu");
