@@ -5,6 +5,11 @@
 
 use serde::Serialize;
 
+/// Longest gap between two reviews. Without a cap the interval keeps
+/// multiplying, and after enough "很熟" grades the due date leaves the
+/// four-digit-year range that the database compares as text.
+pub const MAX_INTERVAL_DAYS: i64 = 3650;
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Card {
     pub ease: f64,
@@ -30,7 +35,8 @@ pub fn review(card: Card, grade: u8) -> Card {
         1 => 1,
         2 => 3,
         _ => ((card.interval_days.max(1) as f64) * ease).round() as i64,
-    };
+    }
+    .min(MAX_INTERVAL_DAYS);
     Card { ease, interval_days, reps, lapses: card.lapses }
 }
 
@@ -51,5 +57,14 @@ mod tests {
         let lapsed = review(c, 1);
         assert_eq!((lapsed.interval_days, lapsed.reps, lapsed.lapses), (1, 0, 1));
         assert!(lapsed.ease >= 1.3 && lapsed.ease < c.ease);
+    }
+
+    #[test]
+    fn intervals_stop_at_the_cap() {
+        let mut c = Card::default();
+        for _ in 0..40 {
+            c = review(c, 5);
+        }
+        assert_eq!(c.interval_days, MAX_INTERVAL_DAYS);
     }
 }
