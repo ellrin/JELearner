@@ -190,16 +190,20 @@
 
         <section class="step" data-step="claude" hidden>
           <div class="st-head"><h3 class="st-title">連接你的 Claude</h3><button class="help" data-tip="產生教材與對話需要 Claude。登入的是你自己的帳號（用你的訂閱額度），或使用你自己的 API key；同一台電腦的其他使用者會各自登入。可以先略過，之後在 設定 → Claude 設定。">?</button></div>
-          <ul class="checks" id="stClaude"></ul>
-          <div class="actions-row">
-            <button class="primary small" id="stLogin">用瀏覽器登入（訂閱）</button>
-            <button class="ghost" id="stUseKey">改用 API key</button>
-            <button class="ghost" id="stRecheck">重新檢查</button>
-          </div>
-          <div class="form" id="stKeyBox" hidden>
-            <label><span>API key</span><input type="password" id="stKey" placeholder="sk-ant-…" autocomplete="off"></label>
-            <button class="ghost" id="stKeySave">儲存 key</button>
-          </div>
+          <div class="ready-mark" id="stReady" hidden><span data-icon="check"></span><b>可以使用了</b><span class="note" id="stReadyVia"></span></div>
+          <details class="other-way" id="stOther">
+            <summary>換一種方式</summary>
+            <ul class="checks" id="stClaude"></ul>
+            <div class="actions-row">
+              <button class="primary small" id="stLogin">用瀏覽器登入（訂閱）</button>
+              <button class="ghost" id="stUseKey">改用 API key</button>
+              <button class="ghost" id="stRecheck">重新檢查</button>
+            </div>
+            <div class="form" id="stKeyBox" hidden>
+              <label><span>API key</span><input type="password" id="stKey" placeholder="sk-ant-…" autocomplete="off"></label>
+              <button class="ghost" id="stKeySave">儲存 key</button>
+            </div>
+          </details>
         </section>
 
         <section class="step" data-step="interests" hidden>
@@ -212,6 +216,10 @@
           <div class="done-mark" aria-hidden="true"><span data-icon="check"></span></div>
           <h3 class="st-title center">準備好了</h3>
           <div class="done-langs" id="stDone"></div>
+          <div class="done-next">
+            <button class="next-card" id="stDoneAvatar"><span class="nc-ic" data-icon="camera"></span><b>放上你的頭像</b></button>
+            <button class="next-card" id="stDoneImport"><span class="nc-ic" data-icon="upload"></span><b>拖放單字表或素材</b></button>
+          </div>
         </section>
 
         <div class="wz-foot">
@@ -230,12 +238,20 @@
     <div class="dlg">
       <div class="dlg-head">
         <h2>匯入</h2>
-        <button class="help" data-tip="單字 CSV（term／word／單字 欄）、文法 CSV（pattern／文法 欄）、每週素材 JSON。可以一次放好幾個檔案；沒有語言欄的 CSV 用目前選的語言。">?</button>
+        <button class="help" data-tip="單字 CSV（term／word／單字 欄）、文法 CSV（pattern／文法 欄）、每週素材 JSON 會直接加入；Markdown、文字檔、PDF 與圖片存進素材（materials/），之後的課程會讀。可以一次放好幾個檔案；沒有語言欄的 CSV 用目前選的語言。檔案不會覆蓋同名檔案。">?</button>
         <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
       </div>
       <div class="wizard">
         <div class="drop" id="impDrop" role="button" tabindex="0"><span data-icon="upload"></span><b>拖放檔案到這裡</b><span class="note">或點一下選擇檔案</span></div>
-        <input type="file" id="impFiles" multiple accept=".csv,.tsv,.json,text/csv,application/json" hidden>
+        <div class="imp-types" aria-label="可以匯入的檔案">
+          <span title="單字表、文法表"><span data-icon="cards"></span>CSV</span>
+          <span title="每週素材"><span data-icon="folder"></span>JSON</span>
+          <span title="筆記、文章"><span data-icon="pen"></span>MD・TXT</span>
+          <span title="之後的課程會讀"><span data-icon="book"></span>PDF</span>
+          <span title="照片、截圖（之後的課程會讀）"><span data-icon="image"></span>圖片</span>
+          <a id="impTemplate" href="#" download="vocab-template.csv">單字表範本</a>
+        </div>
+        <input type="file" id="impFiles" multiple accept=".csv,.tsv,.json,.md,.markdown,.txt,.pdf,.png,.jpg,.jpeg,.webp,.gif,text/csv,application/json,text/markdown,text/plain,application/pdf,image/*" hidden>
         <ul class="imp-results" id="impResults"></ul>
       </div>
     </div>

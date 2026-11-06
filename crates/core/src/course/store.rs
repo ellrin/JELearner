@@ -31,6 +31,13 @@ pub fn recipes_dir(ws: &Workspace) -> PathBuf {
     ws.profile_dir().join("recipes")
 }
 
+/// `profiles/<id>/recipes/lists/` — word and grammar lists uploaded for a
+/// fixed course. Not read by the workspace import (only `vocab/` and
+/// `grammar/` are), so their words are scheduled lesson by lesson.
+pub fn lists_dir(ws: &Workspace) -> PathBuf {
+    recipes_dir(ws).join("lists")
+}
+
 /// `dir/stem.ext`, or `dir/stem-2.ext`… if taken. Never overwrites.
 pub fn free_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     let mut p = dir.join(format!("{stem}.{ext}"));

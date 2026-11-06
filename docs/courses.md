@@ -65,9 +65,9 @@
 
 剩下的分鐘一次一分鐘依序分給「對話、課文、輸出、複習、第二個輸出」，各有上限（15、15、10、10、10），合計最多 60 分鐘（＝一課的上限）。
 
-預設 30 分鐘：複習 5 分（20 張卡）、課文 10 分（閱讀理解 5 題）、輸出 5 分（3 題）、對話 10 分（20 回合，主題延續課文）。
+預設 30 分鐘：複習 5 分（20 張卡）、課文 10 分（閱讀理解 5 題）、輸出 5 分（4 題）、對話 10 分（20 回合，主題延續課文）。
 
-- 數量：複習卡＝分鐘×4；閱讀題＝分鐘÷2（3–8）；對話回合＝分鐘×2（6–30）；輸出題＝分鐘×3÷5（2–6）；克漏字＝分鐘（4–12）。
+- 數量：複習卡＝分鐘×4；閱讀題＝分鐘÷2（4–8）；對話回合＝分鐘×2（6–30）；輸出題＝分鐘×3÷5（4–6）；克漏字＝分鐘（4–12）。要計分的單元至少 4 題，錯一題（3/4＝75%）仍過 70% 的門檻。
 - 輸出題型依課號輪替：單數課「中翻英／中翻日」（`translation`），雙數課「造句」（`sentence-making`）；第二個輸出單數課克漏字、雙數課換句話說。
 - 複習課：課文換成整理前面課文的克漏字，輸出用造句。
 - 對話課：一段對話（5–30 分鐘）。檢核：測驗 40%、翻譯 20%、對話其餘。
@@ -86,7 +86,7 @@
 
 ## 6. 固定課程
 
-1. 讀單字表（與 `vocab/*.csv` 相同欄位，或一行一個字）與文法表（與 `grammar/*.csv` 相同欄位）。已會的字略過。
+1. 讀單字表（與 `vocab/*.csv` 相同欄位，或一行一個字）與文法表（與 `grammar/*.csv` 相同欄位）。已會的字略過。上傳的清單存在 `recipes/lists/vocab|grammar/`（不覆蓋），**不進複習**：每一課打開、產生教材時，只有那一課的新字與文法加入資料庫與複習排程；重建資料庫時也只排已打開的課的字（教材檔裡的字）。也可以選 `vocab/`、`grammar/` 裡已有的清單（那些字本來就在複習裡，不會重複排程）。
 2. **切課（不需模型）**：單字課數＝`ceil(單字數 ÷ 每課新字)`，文法需要更多課時取較大者（每課最多 `grammar.max` 個）；文法平均分配，除不盡時前面的課多一個。
 3. **複習課**（決定 1，已定案）：新字課與複習課分開；每第 5 個位置（5、10、15…）放一課複習，複習上一次複習後的所有單字與文法；最後沒有剛好結束在複習課時，再加一課複習。例：英文 B1 300 個字 → 30 課單字課＋8 課複習＝38 課。
 4. 每課單字課也複習前 1 課與前 3 課的字（間隔重複），最多一課新字的量。
@@ -125,7 +125,7 @@ daily_minutes = 30             # 建立時的每日目標（每課依 daily_sess
 summary = "一週認識 AI 晶片"
 keywords = ["AI chips"]
 source_url = "https://example.com/fab"   # 主題課程：學習者給的第一個網址
-# vocab = ["vocab/toeic-en.csv"]   固定課程：單字表
+# vocab = ["profiles/ellrin/recipes/lists/vocab/toeic-en.csv"]   固定課程：單字表
 # grammar = []                     固定課程：文法表
 # new_per_lesson = 10              固定課程
 # review_every = 5                 固定課程
@@ -232,7 +232,7 @@ units_done = [0, 1]            # 已通過的單元（從 0 起）
 | `POST /api/courses/:id/lessons/:n/open` | `needs_search(plan)` 為真時才依 `plan.search` 從資料庫新聞挑候選並抓全文 → `pick_article`；然後 `open_lesson`。`generated` 有值時照 `api.rs` 產生教材的做法寫入資料庫：`insert_lesson` 與新字、文法 `upsert`。`recent_accuracy` 由 A 階段的 `units` 表計算 |
 | `POST /api/courses/:id/lessons/:n/units/:u` | `{passed, score}` → `mark_unit` → `store::save_progress`；`UnitResult.points > 0` 時交給 A 階段的積分模組寫 `records/points/`（`unit`＝`UnitKind::code`、`skill`＝`Skill::code`、`detail`＝教材檔路徑） |
 | `POST /api/courses/:id/extend` | 記下原本最後的課號 → `extend_topic_course` → `store::append_lessons(ws, &course, 原課號 + 1, today)` |
-| 今日頁 | `Learner::lessons_per_day()` 為 2 時，今日任務排兩課 |
+| 今日頁 | `Learner::lessons_per_day()` 為 2 時，今日任務排兩課；每個單元附上已得的分數（`units` 表的課程單元與課程對話），結算卡用來顯示「+1.5 ✓」 |
 
 資料庫（第 3 個 migration 已加）：
 

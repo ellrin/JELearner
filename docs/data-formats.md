@@ -16,6 +16,7 @@ profiles/<id>/
   interests.csv         興趣關鍵字
   vocab/ grammar/ materials/ lessons/ conversations/ records/
   recipes/              課程（大綱＋進度，docs/courses.md §8）
+    lists/vocab|grammar/  為固定課程上傳的單字表、文法表（不直接進複習）
   notebook/<lang>/      復習筆記本（一課一頁、一段對話一頁）
 ```
 
@@ -77,6 +78,10 @@ term,reading,meaning,pos,example,tags,note
 - `week` 是 ISO 週（`YYYY-Www`），`language` 是 `en` 或 `ja`。
 - `word`、`grammar` 加入資料庫與複習；`article` 出現在「新聞」頁（可以做成教材）；`note` 只保存。
 - 從 App 上傳時會存成 `materials/<week>/<檔名>.json`，同名時自動加 `-2`。
+
+## `materials/*.md`、`*.txt`、`*.pdf`、圖片：留著之後用的素材
+
+匯入視窗（或拖放到視窗）收到 Markdown、文字檔、PDF 或圖片（PNG、JPEG、WebP、GIF）時，原樣存進 `materials/`，檔名取自上傳的檔名（只留字母、數字、中日文與 `-`，小寫），同名時加 `-2`，從不覆蓋。類型依副檔名＋檔頭檢查（PDF 要以 `%PDF-` 開頭、圖片要有該格式的檔頭、文字檔要是 UTF-8）；上限：文字 2 MB、圖片 10 MB、PDF 20 MB。這些檔案不進複習、不讀進資料庫；C 階段的照片判讀與教材製作再讀它們（第二版規劃 §13、§20）。
 
 ## `sources.toml`：新聞來源
 
@@ -167,6 +172,8 @@ App 產生，YAML front matter（title、language、level、date、source、engi
 
 課程的課（`<日期>-<課程>-<課號>.md`）front matter 多 `course`、`course_lesson`、`course_role`、`units`，內嵌資料多課文（`text`，日文以 `{漢字|かんじ}` 標音）、輸出題與對話計畫；重建資料庫時整份讀回，並記下它屬於哪個課程（docs/courses.md §8.2）。
 
+教材檔只在那一課產生（打開）後才存在，所以**重建資料庫時教材裡的新字與文法會重新排進複習**（單課教材與課程的課都一樣；複習進度再由 `records/progress.csv` 還原）。
+
 ## `records/`：紀錄匯出
 
 - `progress.csv`：`kind,lang,key,reading,ease,interval_days,reps,lapses,due_at,last_reviewed_at`（以文字對應單字／文法，不用資料庫 id）。
@@ -231,6 +238,8 @@ source: "profiles/ellrin/lessons/en/2026-11-06-ai-chips-02.md"
 ## `recipes/*.toml`：課程
 
 課程的大綱檔與進度檔（`<課程 id>.toml`、`<課程 id>.progress.toml`）格式見 [`courses.md`](courses.md) §8。大綱檔建立後 App 不再改寫（延伸主題課程時只在檔尾加課）；進度檔由 App 寫。每日課程（`kind = "daily"`）也存在這裡，一天一個。
+
+`recipes/lists/vocab/*.csv`、`recipes/lists/grammar/*.csv`：建立固定課程時上傳的清單（欄位與 `vocab/`、`grammar/` 相同，或一行一個字），存成不重複的檔名（`toeic-en.csv`、`toeic-en-2.csv`…），從不覆蓋。**工作區匯入不讀這個資料夾**：清單裡的字要等那一課打開、產生教材後才進資料庫與複習排程，建立 300 個字的課程不會讓今天多出 300 張卡片。已經放在 `vocab/` 的清單本來就是自己的單字庫，選它建課程時不會重複排程。
 
 ## `progress.toml`：積分、等級、難度規則（可選）
 

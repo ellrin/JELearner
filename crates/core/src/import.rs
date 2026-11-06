@@ -415,8 +415,48 @@ async fn import_lesson_file(db: &Db, path: &Path, origin: &str, lang: Lang) -> R
         let number = front_matter(&md, "course_lesson").and_then(|n| n.parse().ok()).unwrap_or(0);
         db.set_lesson_course(id, &course, number).await?;
     }
+    // A lesson file exists only once the lesson was produced (opened), so
+    // its new words go into review on a rebuild too — and only those: a
+    // fixed course's whole word list waits in `recipes/lists/` until each
+    // lesson is opened (docs/courses.md §6).
+    let (w, g) = index_lesson_items(db, &lesson, lang, &level, origin).await?;
+    rep.words += w;
+    rep.grammar += g;
     rep.lessons += 1;
     Ok(rep)
+}
+
+/// Put a produced lesson's vocabulary and grammar into the database for
+/// review (existing items keep their schedule). Returns (words, grammar).
+pub async fn index_lesson_items(db: &Db, lesson: &crate::lesson::Lesson, lang: Lang, level: &str, origin: &str) -> Result<(usize, usize), ImportError> {
+    use crate::course::plan::strip_furigana;
+    for v in &lesson.vocabulary {
+        let w = NewWord {
+            lang: Some(lang),
+            term: v.term.clone(),
+            reading: v.reading.clone(),
+            meaning: v.meaning.clone(),
+            pos: v.part_of_speech.clone(),
+            example: format!("{}｜{}", strip_furigana(&v.example), v.example_translation),
+            source: origin.to_string(),
+            ..Default::default()
+        };
+        db.upsert_word(&w, lang).await?;
+    }
+    for g in &lesson.grammar {
+        let x = NewGrammar {
+            lang: Some(lang),
+            pattern: g.pattern.clone(),
+            meaning: g.meaning.clone(),
+            explanation: g.explanation.clone(),
+            example: format!("{}｜{}", strip_furigana(&g.example), g.example_translation),
+            level: level.to_string(),
+            source: origin.to_string(),
+            ..Default::default()
+        };
+        db.upsert_grammar(&x, lang).await?;
+    }
+    Ok((lesson.vocabulary.len(), lesson.grammar.len()))
 }
 
 fn absorb(rep: &mut ImportReport, r: Result<ImportReport, ImportError>, origin: &str) {

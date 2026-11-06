@@ -56,6 +56,7 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .route("/api/mistakes/{id}/resolve", post(resolve_mistake))
         .route("/api/materials", get(materials))
         .route("/api/import", post(import_file).layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)))
+        .route("/api/import/file", post(import_material_file).layer(axum::extract::DefaultBodyLimit::max(MATERIAL_FILE_MAX + 1024)))
         .route("/api/records/export", post(export_records))
         .route("/api/claude", get(claude_status))
         .route("/api/settings/claude", post(claude_settings))
@@ -247,6 +248,11 @@ fn user_json(ws: &Workspace) -> Value {
         );
     }
     v["levels"] = Value::Object(langs);
+    // The learner's own interests (interests.csv), heaviest first: the
+    // one-tap keywords on the topic course page.
+    let mut ints = jl_core::course::topics::parse_interests(&std::fs::read_to_string(ws.interests_file()).unwrap_or_default());
+    ints.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(std::cmp::Ordering::Equal).then(a.keyword.cmp(&b.keyword)));
+    v["interests"] = json!(ints.iter().map(|i| json!({ "keyword": i.keyword, "lang": i.lang, "weight": i.weight })).collect::<Vec<_>>());
     v
 }
 
@@ -759,6 +765,8 @@ async fn news_list(State(s): State<Shared>, Query(q): Query<LangQuery>) -> R<Val
         v["blocked"] = json!(blocked);
         out.push(v);
     }
+    // The ones that can be used first; blocked pages last (stable order).
+    out.sort_by_key(|v| v["blocked"] == json!(true));
     Ok(Json(json!({ "articles": out, "fetched": fetched, "errors": errors })))
 }
 
@@ -1171,6 +1179,53 @@ async fn import_file(State(s): State<Shared>, Query(q): Query<ImportQuery>, body
         other => return Err(bad(format!("不支援的匯入類型：{other}（vocab、grammar、materials、auto）"))),
     };
     Ok(Json(json!({ "file": l.ws.relative(&path), "kind": kind, "report": report })))
+}
+
+/// Upper limit of a file kept as material (PDF; images and text are smaller).
+const MATERIAL_FILE_MAX: usize = 20 * 1024 * 1024;
+
+#[derive(Deserialize)]
+struct FileQuery {
+    name: String,
+}
+
+/// What a material file is, from its extension and its first bytes:
+/// (stored extension, kind, size limit). `None` for anything else.
+pub(crate) fn material_file_kind(name: &str, body: &[u8]) -> Option<(&'static str, &'static str, usize)> {
+    let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let starts = |m: &[u8]| body.starts_with(m);
+    match ext.as_str() {
+        "md" | "markdown" | "txt" => {
+            let text = std::str::from_utf8(body).ok()?;
+            (!text.trim().is_empty() && !text.contains('\0')).then_some((if ext == "txt" { "txt" } else { "md" }, "text", 2 * 1024 * 1024))
+        }
+        "pdf" if starts(b"%PDF-") => Some(("pdf", "pdf", MATERIAL_FILE_MAX)),
+        "png" if starts(b"\x89PNG\r\n\x1a\n") => Some(("png", "image", 10 * 1024 * 1024)),
+        "jpg" | "jpeg" if starts(&[0xFF, 0xD8, 0xFF]) => Some(("jpg", "image", 10 * 1024 * 1024)),
+        "webp" if body.len() > 12 && starts(b"RIFF") && &body[8..12] == b"WEBP" => Some(("webp", "image", 10 * 1024 * 1024)),
+        "gif" if starts(b"GIF87a") || starts(b"GIF89a") => Some(("gif", "image", 10 * 1024 * 1024)),
+        _ => None,
+    }
+}
+
+/// Keep a Markdown / text note, a PDF or a picture as material for later
+/// (stage C reads PDFs and pictures): saved into the profile's `materials/`
+/// under a safe, free name (never overwriting). Text notes are kept as they
+/// are; nothing is imported into review.
+async fn import_material_file(State(s): State<Shared>, Query(q): Query<FileQuery>, body: axum::body::Bytes) -> R<Value> {
+    let (ext, kind, max) = material_file_kind(&q.name, &body).ok_or_else(|| bad("只收 CSV、TSV、JSON、Markdown、文字檔、PDF 與圖片（PNG、JPEG、WebP、GIF）"))?;
+    if body.len() > max {
+        return Err(bad(format!("檔案太大（上限 {} MB）", max / 1024 / 1024)));
+    }
+    let l = ws(&s).await?;
+    let dir = l.ws.materials_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
+    let stem_src = Path::new(&q.name).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    let stem = slug(if stem_src.is_empty() { "material" } else { &stem_src }, 40);
+    let stem = if stem.is_empty() { "material".to_string() } else { stem };
+    let path = free_path(&dir, &stem, ext);
+    std::fs::write(&path, &body).map_err(|e| fail(e.to_string()))?;
+    Ok(Json(json!({ "file": l.ws.relative(&path), "kind": kind, "bytes": body.len() })))
 }
 
 async fn export_records(State(s): State<Shared>) -> R<Value> {

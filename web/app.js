@@ -15,7 +15,6 @@ const store = {
 const state = {
   lang: store.get("jl.lang", "en"),
   view: ["secretary"].includes(store.get("jl.view", "today")) ? "today" : store.get("jl.view", "today"),
-  todayMode: "tasks", // or "review"
   conv: null,         // the open conversation
   status: null,
   picked: null,       // article chosen on the news page
@@ -23,7 +22,6 @@ const state = {
   showMd: false,
   showResolved: false,
   query: "",
-  review: { items: [], i: 0, shown: false, done: 0 },
 };
 
 async function api(path, body, method) {
@@ -253,11 +251,7 @@ async function refreshStatus() {
   set("#cGrammar", st.grammar);
   set("#cMistakes", st.open_mistakes, st.open_mistakes > 0);
   $("#demoChip").hidden = !s.demo;
-  $("#wsFoot").innerHTML = "";
-  if (s.workspace) {
-    const f = $("#wsFoot");
-    f.append(el("b", null, s.demo ? "示範工作區" : "私人工作區"), el("br"), document.createTextNode(s.workspace));
-  }
+  paintFoot(s);
   // Level choices for the generator: the steps around the learner's
   // current difficulty (one major level below and above).
   const lv = $("#genLevel");
@@ -275,14 +269,15 @@ async function refreshStatus() {
     }
   }
 
+  // Status bar: only whether Claude works (details in its tooltip and settings).
   const sb = $("#statusbar");
   sb.innerHTML = "";
   const dot = el("span", `dot ${s.engine_ready ? "ok" : "warn"}`);
   const eng = el("button", "eng", null);
-  eng.append(dot, document.createTextNode(s.engine_ready ? `${s.engine_label}・${s.engine}` : "Claude 未連線"));
-  eng.title = s.engine_error ?? "切換引擎：設定 → Claude";
+  eng.append(dot, document.createTextNode(s.engine_ready ? "Claude 已連線" : "Claude 未連線"));
+  eng.title = s.engine_ready ? `${s.engine_label}・${s.engine}` : (s.engine_error ?? "設定 → Claude");
   eng.onclick = () => openSettings(3);
-  sb.append(eng, el("span", null, `Google：${s.google === "mock" ? "模擬" : s.google}`), el("span", "grow"));
+  sb.append(eng, el("span", "grow"));
   if (s.import?.warnings?.length) {
     const w = el("span", null, `匯入警告 ${s.import.warnings.length}`);
     w.title = s.import.warnings.join("\n");
@@ -292,7 +287,33 @@ async function refreshStatus() {
   if (s.error) flash(s.error, true);
 }
 
-function greet() {
+/** The left nav's foot: the workspace's name and whether it is synced (path in the tooltip). */
+let footGen = 0;
+async function paintFoot(s) {
+  const f = $("#wsFoot");
+  f.innerHTML = "";
+  if (!s.workspace) return;
+  const name = s.demo ? "示範工作區" : s.workspace_name || (s.workspace.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "私人工作區");
+  const ic = el("span", "sync");
+  ic.append(icon("cloud"));
+  f.append(ic, el("span", "nm", name));
+  f.title = s.workspace;
+  if (s.demo) return;
+  const gen = ++footGen;
+  try {
+    const g = await api("/api/git/status");
+    if (gen !== footGen) return;
+    const state_ = !g.repo ? "local" : g.changed?.length || g.ahead ? "dirty" : "ok";
+    ic.className = `sync ${state_}`;
+    f.title = `${s.workspace}\n${{ local: "只在這台電腦（不是 Git repository）", dirty: `${g.changed?.length ?? 0} 個檔案尚未同步`, ok: "已同步" }[state_]}`;
+  } catch { /* the name is enough */ }
+}
+
+/**
+ * The secretary's line: today's next task first (「繼續今天的課：中翻英」),
+ * then reviews and mistakes, then a news suggestion.
+ */
+async function greet() {
   const s = state.status;
   if (!s) return;
   const st = s.stats?.[state.lang] ?? {};
@@ -300,6 +321,12 @@ function greet() {
   const name = s.demo ? "" : `${s.user.name}，`;
   if (s.demo) return say(`${name}歡迎！目前用的是示範資料。到「設定 → 工作區」連接你的私人 repo（例如 JELearner-private），生字和錯題才會存到你自己的地方。`);
   if (!s.engine_ready) return say(`${name}你的 Claude 還沒連上。到「設定 → Claude」用瀏覽器登入你自己的 Claude 帳號（用訂閱額度），或貼上 API key。複習和錯題本可以先用。`);
+  try {
+    const t = await fetchToday();
+    const task = t.next != null ? t.tasks[t.next] : null;
+    if (task) return say(task.id === "mistakes" ? `${name}還有 ${task.open} 題錯題，訂正一下吧。` : `${name}繼續今天的課：${taskName(task)}。`);
+    if (t.summary && t.summary.today >= t.summary.goal) return say(`${name}今天的目標達成了！想多練可以再來一段對話。`);
+  } catch { /* fall back to the numbers below */ }
   const parts = [];
   if (st.due) parts.push(`${st.due} 張${langLabel(state.lang)}卡片要複習`);
   if (st.open_mistakes) parts.push(`${st.open_mistakes} 題錯題還沒訂正`);
@@ -309,8 +336,8 @@ function greet() {
 // ── language & views ───────────────────────────────────
 function setLang(v) {
   state.lang = v; store.set("jl.lang", v);
-  state.picked = null; state.lessonId = null; state.review = { items: [], i: 0, shown: false, done: 0 };
-  Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null, conv: null });
+  state.picked = null; state.lessonId = null;
+  Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null, conv: null, fromToday: false, inDaily: false });
   updatePicked();
   refreshStatus().then(() => { greet(); render(); });
 }
@@ -388,14 +415,13 @@ document.addEventListener("click", (e) => {
  */
 function resetUserState() {
   state.conv = null;
-  state.todayMode = "tasks";
-  state.review = { items: [], i: 0, shown: false, done: 0 };
   state.picked = null;
   state.lessonId = null;
   state.showMd = false;
   state.query = "";
   state.summary = null;
-  Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null });
+  Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null, fromToday: false, inDaily: false, cl: null });
+  if (typeof todayCache !== "undefined") todayCache = null;
   if (typeof convTimer !== "undefined") clearInterval(convTimer);
   if (typeof skipTopics !== "undefined") skipTopics = [];
   updatePicked();
@@ -449,7 +475,9 @@ $$("#views button").forEach((b) => (b.onclick = () => { go(b.dataset.view, { cou
 /** Open a view (nav, task cards, next-step buttons). */
 function go(view, extra = {}) {
   state.view = view; store.set("jl.view", view);
-  state.query = ""; state.todayMode = "tasks";
+  state.query = "";
+  // A lesson opened from today (or a daily lesson) keeps 今日 lit in the nav.
+  state.fromToday = false; state.inDaily = false;
   Object.assign(state, extra);
   document.body.classList.remove("nav-open");
   render();
@@ -481,9 +509,24 @@ function ghostButton(iconName, label, onclick) {
 // Each render draws into its own detached container; only the latest call
 // puts it on the page, so overlapping calls never draw a page twice.
 let renderGen = 0;
+/** Light the nav item of the current view; a daily lesson belongs to 今日. */
+function markNav() {
+  const cur = state.view === "courses" && state.courseLesson && state.inDaily ? "today" : state.view;
+  $$("#views button").forEach((b) => (b.getAttribute("data-view") === cur ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
+}
+
+/** A small ⋯ button whose tooltip holds technical details (file path, engine). */
+function infoButton(lines) {
+  const b = el("button", "help info", "⋯");
+  b.type = "button";
+  b.setAttribute("aria-label", "詳細資訊");
+  b.dataset.tip = lines.filter(Boolean).join("\n");
+  return b;
+}
+
 async function render() {
   const gen = ++renderGen;
-  $$("#views button").forEach((b) => (b.getAttribute("data-view") === state.view ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
+  markNav();
   const body = el("div", "page-body");
   try {
     await ({ today: renderToday, courses: renderCourses, conversation: renderConversation, news: renderNews, lessons: renderLessons, words: renderWords, grammar: renderGrammar,
@@ -495,95 +538,6 @@ async function render() {
   $("#page").replaceChildren(body);
   $("#pageArea").scrollTop = 0;
 }
-
-// ── review session (opened from the today page's review task) ──
-async function renderReview(page) {
-  const back = ghostButton("back", "今日", () => { state.todayMode = "tasks"; render(); });
-  viewbar("複習", null, back);
-  const card = el("div", "card");
-  const h = el("h3"); h.append(document.createTextNode(langLabel(state.lang)), el("span", "c", ""), el("span", "grow"));
-  const round = el("div", "pts-bar thin"); round.append(el("i"));
-  card.append(h, round);
-  page.append(card);
-  if (!state.review.items.length || state.review.i >= state.review.items.length) {
-    state.review = { items: await api(`/api/review?lang=${state.lang}&limit=50`), i: 0, shown: false, done: state.review.done, round: state.review.round };
-  }
-  drawReview(card);
-}
-
-function drawReview(card) {
-  const r = state.review;
-  $$(".flash-card, .empty", card).forEach((n) => n.remove());
-  $(".c", card).textContent = r.items.length ? `${Math.min(r.i + 1, r.items.length)} / ${r.items.length}` : "";
-  const bar = $(".pts-bar > i", card);
-  if (bar && r.round) bar.style.width = `${Math.min(100, (r.round.done / r.round.size) * 100)}%`;
-  const it = r.items[r.i];
-  if (!it) {
-    if (r.award) return;
-    const e = el("div", "empty cta", r.done ? `這輪複習了 ${r.done} 張` : "沒有到期的卡片");
-    e.append(primaryButton("回到今日", () => { state.todayMode = "tasks"; render(); }));
-    card.append(e);
-    return;
-  }
-  const fc = el("div", "flash-card");
-  fc.append(el("div", "kind", it.item_kind === "word" ? "單字" : "文法"));
-  fc.append(elr("div", `front${isJa() ? " ja" : ""}`, it.front, state.lang));
-  fc.append(el("div", "reading", r.shown ? it.reading : ""));
-  fc.append(el("div", "back", r.shown ? it.back : ""));
-  if (r.shown && it.example) fc.append(elr("div", `example${isJa() ? " ja" : ""}`, it.example, state.lang));
-  const g = el("div", "grades");
-  if (!r.shown) {
-    const b = el("button", "primary", "顯示答案（空白鍵）");
-    b.onclick = () => { r.shown = true; drawReview(card); };
-    g.append(b);
-  } else {
-    for (const [grade, label] of [[1, "忘了"], [3, "模糊"], [4, "記得"], [5, "很熟"]]) {
-      const b = el("button", grade >= 4 ? "primary" : "ghost", `${label}`);
-      b.title = `按 ${grade === 1 ? 1 : grade === 3 ? 2 : grade === 4 ? 3 : 4}`;
-      b.onclick = () => gradeCard(card, grade);
-      g.append(b);
-    }
-  }
-  fc.append(g);
-  card.append(fc);
-}
-
-async function gradeCard(card, grade) {
-  const r = state.review;
-  const it = r.items[r.i];
-  try {
-    const res = await api("/api/review", { kind: it.item_kind, id: it.item_id, grade });
-    r.i += 1; r.shown = false; r.done += 1;
-    if (res?.round) r.round = res.round;
-    if (res?.award) {
-      // A full round: the result card, then carry on or go back.
-      r.award = res.award;
-      drawReview(card);
-      $$(".flash-card", card).forEach((n) => n.remove());
-      const more = r.i < r.items.length;
-      const home = () => { state.todayMode = "tasks"; render(); };
-      card.after(resultCard({
-        points: res.award.points, title: "完成一輪複習", score: res.award.score, levelUp: res.level_up,
-        next: more
-          ? [{ label: "再一輪", primary: true, onclick: () => { r.award = null; render(); } }, { label: "回到今日", onclick: home }]
-          : [{ label: "回到今日", primary: true, onclick: home }],
-      }));
-      refreshStatus().then(greet);
-      return;
-    }
-    drawReview(card);
-    if (r.i >= r.items.length) refreshStatus().then(greet);
-  } catch (e) { flash(e.message, true); }
-}
-
-document.addEventListener("keydown", (e) => {
-  if (state.view !== "today" || state.todayMode !== "review" || e.target.closest("input, textarea, select, dialog")) return;
-  const card = $(".flash-card")?.closest(".card");
-  if (!card) return;
-  if (e.key === " ") { e.preventDefault(); if (!state.review.shown) { state.review.shown = true; drawReview(card); } }
-  const map = { 1: 1, 2: 3, 3: 4, 4: 5 };
-  if (state.review.shown && map[e.key]) gradeCard(card, map[e.key]);
-});
 
 // ── news ───────────────────────────────────────────────
 async function renderNews(page, refresh = false) {
@@ -618,6 +572,23 @@ async function renderNews(page, refresh = false) {
     const meta = el("div", "meta");
     meta.append(el("span", null, a.source), el("span", null, fmtDate(a.published_at ?? a.fetched_at)));
     li.append(meta);
+    if (!a.blocked) {
+      // Two ways to use it: a lesson now, or a topic course around it.
+      const acts = el("div", "news-acts");
+      const mk = el("button", "ghost small", "做成教材");
+      mk.onclick = (e) => {
+        e.stopPropagation();
+        state.picked = a; updatePicked(); setGenMode("news");
+        $$(".item.on", ul).forEach((x) => x.classList.remove("on")); li.classList.add("on");
+        mk.disabled = true; mk.textContent = "整理中…";
+        flash("整理中…（約 30 秒到 2 分鐘）");
+        $("#genRun").click();
+      };
+      const tc = el("button", "ghost small", "做成主題課程");
+      tc.onclick = (e) => { e.stopPropagation(); go("courses", { courseCreate: "topic", course: null, courseLesson: null, topicPrefill: a.url.startsWith("http") ? a.url : a.title }); };
+      acts.append(mk, tc);
+      li.append(acts);
+    }
     const side = el("div", "side");
     const open = el("a", "ico");
     open.href = a.url.startsWith("http") ? a.url : "#";
@@ -634,7 +605,7 @@ async function renderNews(page, refresh = false) {
       li.classList.add("on");
       setGenMode("news");
       updatePicked();
-      say(`選好了「${a.title.slice(0, 40)}」。按右邊的「產生教材」，我會整理單字、文法和問答。`);
+      say(`選好了「${a.title.slice(0, 40)}」。按「做成教材」，我會整理單字、文法和問答。`);
     };
     ul.append(li);
   }
@@ -646,8 +617,9 @@ function lessonItem(l) {
   const li = el("li", "item click");
   li.append(el("div", `t${l.lang === "ja" ? " ja" : ""}`, l.title));
   const meta = el("div", "meta");
-  meta.append(el("span", null, l.level), el("span", null, fmtDate(l.created_at)), el("span", null, l.path));
+  meta.append(el("span", null, l.level), el("span", null, fmtDate(l.created_at)));
   li.append(meta);
+  li.title = l.path;
   li.onclick = () => { state.view = "lessons"; state.lessonId = l.id; render(); };
   return li;
 }
@@ -699,9 +671,10 @@ function lessonPaper(paper, lesson, row, { quiz, parts, highlight } = {}) {
   if (want("head")) {
     paper.append(elr("h1", null, lesson.title, lang));
     const meta = el("div", "meta");
-    meta.append(el("span", null, `${langLabel(lang)}・${row.level}`), el("span", null, fmtDate(row.created_at)), el("span", null, row.engine));
+    meta.append(el("span", null, `${langLabel(lang)}・${row.level}`), el("span", null, fmtDate(row.created_at)));
     if (row.source_url) { const a = el("a", null, "原文"); a.href = row.source_url; a.target = "_blank"; a.rel = "noopener noreferrer"; meta.append(a); }
-    meta.append(el("span", null, row.path));
+    // Engine and file path are details: behind the ⋯ button.
+    meta.append(infoButton([row.path, row.engine ? `產生：${row.engine}` : ""]));
     paper.append(meta);
     if (lesson.summary) paper.append(el("div", "summary", lesson.summary));
   }
@@ -724,8 +697,8 @@ function lessonPaper(paper, lesson, row, { quiz, parts, highlight } = {}) {
     for (const v of lesson.vocabulary) {
       const tr = el("tr");
       const term = el("td", "term");
-      if (lang === "ja" && v.reading && /[一-鿿]/.test(v.term)) { term.innerHTML = `<ruby>${escHtml(v.term)}<rt>${escHtml(v.reading)}</rt></ruby>`; term.lang = "ja"; }
-      else setText(term, v.term, lang);
+      term.textContent = plainRuby(v.term);
+      if (lang === "ja") term.lang = "ja";
       tr.append(term, el("td", "reading", v.reading));
       const td = el("td");
       td.append(el("div", null, `${v.part_of_speech ? `〔${v.part_of_speech}〕` : ""}${v.meaning}`));
@@ -1114,6 +1087,7 @@ $("#genRun").onclick = async () => {
   btn.disabled = true;
   try {
     const r = await api("/api/lessons", body);
+    $(".tip.flash")?.remove();
     out.className = "note ok";
     out.textContent = `✓ 已加入 ${r.added.words} 個字・${r.added.grammar} 個文法`;
     out.title = r.path;
@@ -1124,6 +1098,7 @@ $("#genRun").onclick = async () => {
   } catch (e) {
     out.className = "note err";
     out.textContent = e.message;
+    flash(e.message, true);
     say("這篇沒有做成功，原因寫在「產生教材」按鈕下方。");
   } finally {
     btn.disabled = false;

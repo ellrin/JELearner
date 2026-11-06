@@ -1000,6 +1000,67 @@ async fn avatar_upload_and_limits() {
     assert_eq!(got.status().as_u16(), 404);
 }
 
+/// Materials kept as files: Markdown / text notes, PDFs and pictures go into
+/// the profile's materials/ under a safe free name (never overwriting); the
+/// type is checked by extension and content; too big or unknown is refused.
+#[tokio::test]
+async fn import_material_files() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws_path = ws_dir.path().join("JELearner-private");
+    let (c, _) = stage_a_setup(app_dir.path(), &ws_path).await;
+    let up = |name: &str, body: Vec<u8>| {
+        let c = &c;
+        let url = format!("{}/api/import/file?name={}", c.base, urlencode(name));
+        async move {
+            let r = c.http.post(url).body(body).send().await.unwrap();
+            (r.status().as_u16(), r.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let (code, r) = up("week notes.md", "# 本週\n\n- fab\n".as_bytes().to_vec()).await;
+    assert_eq!(code, 200, "{r}");
+    assert_eq!(r["kind"], "text");
+    assert_eq!(r["file"], "profiles/ellrin/materials/week-notes.md");
+    let (code, r2) = up("week notes.md", b"second".to_vec()).await;
+    assert_eq!(code, 200, "{r2}");
+    assert_eq!(r2["file"], "profiles/ellrin/materials/week-notes-2.md", "never overwrites");
+    assert_eq!(std::fs::read_to_string(ws_path.join("profiles/ellrin/materials/week-notes.md")).unwrap(), "# 本週\n\n- fab\n");
+    let (code, r) = up("article.txt", b"A short text.".to_vec()).await;
+    assert_eq!((code, r["kind"].as_str()), (200, Some("text")));
+    let mut pdf = b"%PDF-1.7\n".to_vec();
+    pdf.extend([0u8; 200]);
+    let (code, r) = up("../../Scan 01.PDF", pdf).await;
+    assert_eq!(code, 200, "{r}");
+    assert_eq!(r["kind"], "pdf");
+    assert_eq!(r["file"], "profiles/ellrin/materials/scan-01.pdf", "a safe name inside materials/");
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    png.extend([0u8; 100]);
+    let (code, r) = up("whiteboard.png", png).await;
+    assert_eq!((code, r["kind"].as_str()), (200, Some("image")));
+    let (code, r) = up("photo.jpg", vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3]).await;
+    assert_eq!((code, r["kind"].as_str()), (200, Some("image")));
+    // Wrong content for the extension, unknown types, binary text, too big.
+    let (code, _) = up("fake.pdf", b"not a pdf".to_vec()).await;
+    assert_eq!(code, 400);
+    let (code, _) = up("run.exe", b"MZ....".to_vec()).await;
+    assert_eq!(code, 400);
+    let (code, _) = up("notes.txt", vec![0xFF, 0xFE, 0x00, 0x01]).await;
+    assert_eq!(code, 400);
+    let mut big = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    big.extend(std::iter::repeat_n(0u8, 10 * 1024 * 1024 + 1));
+    let (code, _) = up("big.png", big).await;
+    assert_eq!(code, 400);
+    // Nothing went to review or outside materials/.
+    let (_, words) = c.get("/api/words?lang=en&q=fab").await;
+    assert_eq!(words.as_array().unwrap().len(), 0);
+    let files: Vec<_> = walk(&ws_path.join("profiles/ellrin/materials")).into_iter().filter(|p| p.extension().is_some_and(|e| e != "json")).collect();
+    assert_eq!(files.len(), 6, "{files:?}");
+}
+
+fn urlencode(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
 fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
     let mut out = vec![];
     if let Ok(rd) = std::fs::read_dir(dir) {

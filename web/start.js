@@ -233,12 +233,18 @@ async function loadStClaude() {
   const ul = $("#stClaude");
   ul.innerHTML = "";
   let c;
-  try { c = await api("/api/claude?fresh=true"); } catch (e) { ul.append(el("li", null, e.message)); return; }
+  try { c = await api("/api/claude?fresh=true"); } catch (e) { ul.append(el("li", null, e.message)); $("#stOther").open = true; return; }
+  // Something already works (subscription or API key): say so, and keep the
+  // other ways (install, sign-in) folded away until asked for.
+  $("#stReady").hidden = !c.active;
+  $("#stReadyVia").textContent = c.active ? c.active_label ?? "" : "";
+  $("#stOther").open = !c.active;
   const line = (ok, text) => {
     const li = el("li");
     li.append(el("span", ok === true ? "ok" : ok === false ? "bad" : "mid", ok === true ? "✓" : ok === false ? "•" : "!"), el("span", null, text));
     ul.append(li);
   };
+  $("#stOther").querySelector("summary").textContent = c.active ? "換一種方式" : "連接方式";
   const sub = c.subscription;
   if (!sub.installed) line(false, `尚未安裝 Claude Code（安裝：${c.install}）`);
   else if (sub.ready && sub.account) line(true, `已登入：${sub.account}`);
@@ -288,6 +294,9 @@ async function stDoInterests() {
 }
 
 // ── done ───────────────────────────────────────────────
+$("#stDoneAvatar").onclick = () => $("#meAvatarFile").click();
+$("#stDoneImport").onclick = () => { dlgStart.close(); $("#impResults").innerHTML = ""; openImport(); };
+
 function loadStDone() {
   const u = state.status?.user;
   const box = $("#stDone");

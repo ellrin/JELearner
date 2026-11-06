@@ -16,7 +16,7 @@ use jl_core::conversation::CourseLink;
 use jl_core::course::outline::{self, FixedRequest, TopicRequest};
 use jl_core::course::plan::{self, CourseLesson, LessonContext, SourceText};
 use jl_core::course::{fixed, sizing, store, topics as ctopics, Course, CourseError, CourseKind, CourseStatus, CourseTemplates, Learner, LessonPlan, LessonRole, LessonStatus, UnitKind};
-use jl_core::db::{NewGrammar, NewMistake, NewWord};
+use jl_core::db::NewMistake;
 use jl_core::lesson::{self, MAX_ARTICLE_CHARS};
 use jl_core::notebook::{self, NoteBetter, NoteGrammar, NoteMistake, NoteWord, PageData};
 use jl_core::points::{self, PointRecord, Skill};
@@ -183,7 +183,9 @@ async fn word_lists(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value>
     let l = ws(&s).await?;
     let lang = parse_lang(&q.lang)?;
     let mut out = vec![];
-    for (kind, dir) in [("vocab", l.ws.vocab_dir()), ("grammar", l.ws.grammar_dir())] {
+    // `course_only`: uploaded for a course (`recipes/lists/`), not in review.
+    let lists = store::lists_dir(&l.ws);
+    for (kind, dir, course_only) in [("vocab", l.ws.vocab_dir(), false), ("grammar", l.ws.grammar_dir(), false), ("vocab", lists.join("vocab"), true), ("grammar", lists.join("grammar"), true)] {
         for path in jl_core::workspace::files_with_ext(&dir, &["csv", "tsv"]) {
             let flang = jl_core::import::lang_from_path(&path, l.ws.profile.languages.first().copied().unwrap_or(Lang::En));
             if lang.is_some_and(|x| x != flang) {
@@ -191,7 +193,7 @@ async fn word_lists(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value>
             }
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             let n = if kind == "vocab" { fixed::read_word_list(&text).len() } else { fixed::read_grammar_list(&text).len() };
-            out.push(json!({ "kind": kind, "path": l.ws.relative(&path), "name": path.file_name().map(|f| f.to_string_lossy().to_string()), "items": n, "lang": flang }));
+            out.push(json!({ "kind": kind, "path": l.ws.relative(&path), "name": path.file_name().map(|f| f.to_string_lossy().to_string()), "items": n, "lang": flang, "course_only": course_only }));
         }
     }
     Ok(Json(json!(out)))
@@ -271,22 +273,36 @@ async fn fetch_source(s: &Shared, url: &str, lang: Lang) -> Result<SourceText, A
     Ok(SourceText { title: a.title, url: a.url, source: a.source, text: a.body.chars().take(MAX_ARTICLE_CHARS).collect() })
 }
 
-/// Save an uploaded word or grammar list into the workspace (free name) and
-/// import it, like the import dialog does. Returns the relative path.
-async fn save_list(l: &Loaded, kind: &str, text: &str, name: &str, lang: Lang) -> Result<String, ApiError> {
-    let dir = if kind == "vocab" { l.ws.vocab_dir() } else { l.ws.grammar_dir() };
+/// Save an uploaded word or grammar list for a fixed course under a free
+/// name in `recipes/lists/<vocab|grammar>/`. It is **not** imported: the
+/// course's words enter review only when their lesson is opened, so a
+/// 300-word list does not put 300 cards on today (docs/courses.md §6).
+/// Returns the workspace-relative path.
+fn save_list(l: &Loaded, kind: &str, text: &str, name: &str, lang: Lang) -> Result<String, ApiError> {
+    let dir = store::lists_dir(&l.ws).join(if kind == "vocab" { "vocab" } else { "grammar" });
     std::fs::create_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
+    let stem = format!("{}-{}", list_stem(name, kind), lang.code());
+    let path = crate::api::free_path(&dir, &stem, "csv");
+    std::fs::write(&path, text).map_err(|e| fail(e.to_string()))?;
+    Ok(l.ws.relative(&path))
+}
+
+/// A list's display stem from a file name, without a trailing language
+/// code (`toeic-en.csv` → `toeic`).
+pub(crate) fn list_stem(name: &str, kind: &str) -> String {
     let stem_src = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
     let base = slug(if stem_src.is_empty() { if kind == "vocab" { "course-words" } else { "course-grammar" } } else { &stem_src }, 40);
-    let stem = if base.ends_with(&format!("-{}", lang.code())) { base } else { format!("{base}-{}", lang.code()) };
-    let path = crate::api::free_path(&dir, &stem, "csv");
-    let origin = l.ws.relative(&path);
-    std::fs::write(&path, text).map_err(|e| fail(e.to_string()))?;
-    let r = if kind == "vocab" { jl_core::import::import_vocab_csv(&l.db, text, lang, &origin).await } else { jl_core::import::import_grammar_csv(&l.db, text, lang, &origin).await };
-    // A one-term-per-line list is fine for a course even when it is not a
-    // CSV the review import understands; the course reads it either way.
-    let _ = r;
-    Ok(origin)
+    match base.strip_suffix("-en").or_else(|| base.strip_suffix("-ja")) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => base,
+    }
+}
+
+/// `TOEIC words-en.csv` → `TOEIC words` (as the create page's placeholder).
+fn display_stem(file: &str) -> String {
+    let stem = Path::new(file.trim()).file_stem().and_then(|s| s.to_str()).unwrap_or("").trim().to_string();
+    let lower = stem.to_lowercase();
+    if (lower.ends_with("-en") || lower.ends_with("-ja")) && stem.len() > 3 { stem[..stem.len() - 3].to_string() } else { stem }
 }
 
 fn read_workspace_list(ws: &Workspace, rel: &str) -> Result<String, ApiError> {
@@ -318,6 +334,9 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
                 if !url.is_empty() {
                     match fetch_source(&s, url, lang).await {
                         Ok(t) => sources.push(t),
+                        // A site that does not allow fetching: say what to do
+                        // instead (the page offers a paste box), not the URL again.
+                        Err(e) if e.1.contains("robots.txt") => warnings.push(ROBOTS_BLOCKED.to_string()),
                         Err(e) => warnings.push(format!("{url}：{}", e.1)),
                     }
                 } else if !src.text.trim().is_empty() {
@@ -325,6 +344,7 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
                     sources.push(SourceText { title, url: String::new(), source: "貼上".into(), text: src.text.trim().chars().take(MAX_ARTICLE_CHARS).collect() });
                 }
             }
+            warnings.dedup();
             if keywords.is_empty() && sources.is_empty() && !b.sources.is_empty() {
                 return Err(bad(warnings.join("；")));
             }
@@ -344,10 +364,10 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
                 let mut grammar_files = b.grammar.clone();
                 let name = b.file_name.clone().unwrap_or_default();
                 if let Some(text) = b.vocab_text.as_deref().map(|t| t.trim_start_matches('\u{feff}')).filter(|t| !t.trim().is_empty()) {
-                    vocab_files.push(save_list(&l, "vocab", text, &name, lang).await?);
+                    vocab_files.push(save_list(&l, "vocab", text, &name, lang)?);
                 }
                 if let Some(text) = b.grammar_text.as_deref().map(|t| t.trim_start_matches('\u{feff}')).filter(|t| !t.trim().is_empty()) {
-                    grammar_files.push(save_list(&l, "grammar", text, &name, lang).await?);
+                    grammar_files.push(save_list(&l, "grammar", text, &name, lang)?);
                 }
                 let mut words = vec![];
                 for f in &vocab_files {
@@ -359,8 +379,11 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
                 }
                 (learner(&l, lang, true).await?, templates(&l.ws), words, grammar, vocab_files, grammar_files)
             };
+            // Left empty: the uploaded file's name without extension and
+            // language code (the create page shows the same as placeholder).
+            let uploaded = b.file_name.as_deref().map(display_stem).filter(|n| !n.is_empty());
             let name = if b.name.trim().is_empty() {
-                vocab_files.iter().chain(&grammar_files).next().and_then(|f| Path::new(f).file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+                uploaded.unwrap_or_else(|| vocab_files.iter().chain(&grammar_files).next().map(|f| list_stem(f, "vocab")).unwrap_or_default())
             } else {
                 b.name.clone()
             };
@@ -383,6 +406,9 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
     out["warnings"] = json!(warnings);
     Ok(Json(out))
 }
+
+/// The message for a URL whose site does not allow automatic fetching.
+pub(crate) const ROBOTS_BLOCKED: &str = "這個網站不允許自動抓取，直接貼上文章文字吧";
 
 // ── extend ──────────────────────────────────────────────
 
@@ -474,32 +500,7 @@ async fn index_lesson(l: &Loaded, course: &Course, number: u32, file: &str, mark
     let lang = course.lang;
     let id = l.db.insert_lesson(lang, &cl.lesson.title, &level, None, &url, file, markdown, &raw, engine).await?;
     l.db.set_lesson_course(id, &course.id, number).await?;
-    for v in &cl.lesson.vocabulary {
-        let w = NewWord {
-            lang: Some(lang),
-            term: v.term.clone(),
-            reading: v.reading.clone(),
-            meaning: v.meaning.clone(),
-            pos: v.part_of_speech.clone(),
-            example: format!("{}｜{}", plan::strip_furigana(&v.example), v.example_translation),
-            source: file.to_string(),
-            ..Default::default()
-        };
-        l.db.upsert_word(&w, lang).await?;
-    }
-    for g in &cl.lesson.grammar {
-        let x = NewGrammar {
-            lang: Some(lang),
-            pattern: g.pattern.clone(),
-            meaning: g.meaning.clone(),
-            explanation: g.explanation.clone(),
-            example: format!("{}｜{}", plan::strip_furigana(&g.example), g.example_translation),
-            level: level.clone(),
-            source: file.to_string(),
-            ..Default::default()
-        };
-        l.db.upsert_grammar(&x, lang).await?;
-    }
+    jl_core::import::index_lesson_items(&l.db, &cl.lesson, lang, &level, file).await.map_err(|e| fail(e.to_string()))?;
     Ok(id)
 }
 
@@ -824,12 +825,46 @@ fn daily_topic(ws: &Workspace, lang: Lang) -> Option<(String, String, &'static s
     }
 }
 
-fn lesson_entry(c: &Course, lp: &LessonPlan, lesson_id: Option<i64>, today: &str) -> Value {
-    json!({
+/// Points earned by each unit of a course lesson (index → best points), from
+/// the unit attempts linked to the course and the lesson's conversation.
+async fn unit_points(l: &Loaded, course: &str, number: u32) -> Result<std::collections::HashMap<u32, f64>, ApiError> {
+    let mut out = std::collections::HashMap::new();
+    let rows: Vec<(i64, f64)> = sqlx::query_as("SELECT unit_index, MAX(points) FROM units WHERE course = ? AND course_lesson = ? AND unit_index IS NOT NULL GROUP BY unit_index")
+        .bind(course)
+        .bind(number)
+        .fetch_all(l.db.pool())
+        .await?;
+    for (i, p) in rows {
+        out.insert(i as u32, p);
+    }
+    let conv: Vec<(i64, Option<f64>)> = sqlx::query_as(
+        "SELECT json_extract(data, '$.course.unit'), points FROM conversations
+         WHERE status = 'done' AND json_extract(data, '$.course.course') = ? AND json_extract(data, '$.course.lesson') = ?",
+    )
+    .bind(course)
+    .bind(number)
+    .fetch_all(l.db.pool())
+    .await
+    .unwrap_or_default();
+    for (i, p) in conv {
+        let e = out.entry(i as u32).or_insert(0.0);
+        *e = e.max(p.unwrap_or(0.0));
+    }
+    Ok(out)
+}
+
+async fn lesson_entry(l: &Loaded, c: &Course, lp: &LessonPlan, lesson_id: Option<i64>, today: &str) -> Result<Value, ApiError> {
+    let pts = unit_points(l, &c.id, lp.number).await?;
+    let mut units = unit_json(lp);
+    for u in units.iter_mut() {
+        let i = u["index"].as_u64().unwrap_or(0) as u32;
+        u["points"] = json!(pts.get(&i).copied());
+    }
+    Ok(json!({
         "course": c.id, "course_name": c.name, "kind": c.kind, "kind_label": c.kind.label(), "number": lp.number,
         "total": c.lessons.len(), "title": lp.title, "status": lp.status, "lesson_id": lesson_id,
-        "units": unit_json(lp), "minutes": sizing::total_minutes(&lp.units), "done_today": lp.done.as_deref() == Some(today),
-    })
+        "units": units, "minutes": sizing::total_minutes(&lp.units), "done_today": lp.done.as_deref() == Some(today),
+    }))
 }
 
 /// Today's lessons (one, or two when the daily goal is over 60 minutes):
@@ -846,7 +881,7 @@ pub(crate) async fn today_lessons(l: &Loaded, lang: Lang) -> Result<Value, ApiEr
     let mut entries: Vec<Value> = vec![];
     for c in &all {
         for lp in c.lessons.iter().filter(|x| x.done.as_deref() == Some(today.as_str())) {
-            entries.push(lesson_entry(c, lp, l.db.course_lesson_id(&c.id, lp.number).await?, &today));
+            entries.push(lesson_entry(l, c, lp, l.db.course_lesson_id(&c.id, lp.number).await?, &today).await?);
         }
     }
     let mut active: Vec<&Course> = all.iter().filter(|c| c.status == CourseStatus::Active && c.next_lesson().is_some() && c.kind != CourseKind::Daily).collect();
@@ -874,7 +909,7 @@ pub(crate) async fn today_lessons(l: &Loaded, lang: Lang) -> Result<Value, ApiEr
         }
     }
     for (c, lp) in picked {
-        entries.push(lesson_entry(c, lp, l.db.course_lesson_id(&c.id, lp.number).await?, &today));
+        entries.push(lesson_entry(l, c, lp, l.db.course_lesson_id(&c.id, lp.number).await?, &today).await?);
     }
     let mut suggestion = Value::Null;
     if entries.is_empty() && sources.is_empty() {

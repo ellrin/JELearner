@@ -188,6 +188,8 @@ pub(crate) async fn summary(ws: &Workspace, db: &Db, lang: Lang, r: &Rules) -> R
         "total": total_points(db, None).await?,
         "total_lang": total_points(db, Some(lang)).await?,
         "streak": points::streak(&days, today),
+        // For the result cards: the pass line and when the bonus comes.
+        "rules": { "pass_score": r.points.pass_score, "bonus_score": r.points.bonus_score, "bonus": r.points.bonus },
     }))
 }
 
@@ -220,7 +222,7 @@ async fn today(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value> {
         let generated = les["lesson_id"].is_i64();
         for u in les["units"].as_array().into_iter().flatten() {
             tasks.push(json!({
-                "id": "unit", "kind": u["kind"], "unit": u["index"], "minutes": u["minutes"], "items": u["items"], "done": u["done"],
+                "id": "unit", "kind": u["kind"], "unit": u["index"], "minutes": u["minutes"], "items": u["items"], "done": u["done"], "points": u["points"],
                 "course": les["course"], "number": les["number"], "lesson_title": les["title"], "lesson_id": les["lesson_id"],
                 "needs_engine": !generated || u["kind"] == "conversation",
                 "due": if u["kind"] == "review" { json!(stats.due) } else { Value::Null },
