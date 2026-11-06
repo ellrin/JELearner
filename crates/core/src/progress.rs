@@ -14,7 +14,7 @@
 use crate::lang::Lang;
 use crate::level;
 use crate::points::SkillPoints;
-use crate::rules::{DifficultyRules, Rules};
+use crate::rules::{DifficultyRules, MilestoneRules, Rules};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -72,6 +72,62 @@ pub fn assess(lang: Lang, label: &str, since: &SkillPoints, recent: &[f64], rule
     }
     let eligible = next.is_some() && !major_boundary && conditions.iter().all(|c| c.ok);
     Assessment { level: cur.label, next: next.map(|(n, _)| n), major_boundary, points_since: total, step_points, conditions, eligible }
+}
+
+/// Milestones within the current step (docs/plan.md §9.1): every
+/// `milestone_points` is a star, and the recent pace gives an estimate of
+/// the weeks to the next step.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Milestones {
+    /// Points earned since the current step was reached.
+    pub points_into_step: f64,
+    pub step_points: f64,
+    pub milestone_points: f64,
+    /// Stars reached / stars in the step (the last one is the step itself).
+    pub reached: u32,
+    pub total: u32,
+    /// Points to the next star; `None` once every star is reached.
+    pub to_next_milestone: Option<f64>,
+    /// Points of the last `pace_days` days and the same per week.
+    pub recent_points: f64,
+    pub pace_per_week: f64,
+    /// Weeks to the step's points at the recent pace (0 when they are
+    /// already there); `None` without a recent pace.
+    pub weeks_to_next_step: Option<u32>,
+}
+
+/// Stars and the estimate for `points_into_step` of `step_points`, with
+/// `recent_points` earned over the last `r.pace_days` days.
+pub fn milestones(points_into_step: f64, step_points: f64, recent_points: f64, r: &MilestoneRules) -> Milestones {
+    let since = points_into_step.max(0.0);
+    let size = if r.milestone_points > 0.0 { r.milestone_points } else { step_points.max(1.0) };
+    let total = ((step_points / size) - 1e-9).ceil().max(1.0) as u32;
+    let reached = (((since + 1e-9) / size).floor() as u32).min(total);
+    let to_next_milestone = (reached < total).then(|| {
+        let target = ((reached + 1) as f64 * size).min(step_points);
+        ((target - since) * 100.0).round() / 100.0
+    });
+    let weeks = r.pace_days.max(1) as f64 / 7.0;
+    let pace_per_week = recent_points.max(0.0) / weeks;
+    let remaining = step_points - since;
+    let weeks_to_next_step = if remaining <= 1e-9 {
+        Some(0)
+    } else if pace_per_week > 1e-9 {
+        Some((remaining / pace_per_week - 1e-9).ceil() as u32)
+    } else {
+        None
+    };
+    Milestones {
+        points_into_step: since,
+        step_points,
+        milestone_points: size,
+        reached,
+        total,
+        to_next_milestone,
+        recent_points,
+        pace_per_week: (pace_per_week * 100.0).round() / 100.0,
+        weeks_to_next_step,
+    }
 }
 
 /// The learner's answer to "how was this lesson?".
@@ -157,6 +213,45 @@ mod tests {
         assert!(a.major_boundary);
         assert!(!a.eligible);
         assert_eq!(a.conditions.last().unwrap().id, "major_check");
+    }
+
+    #[test]
+    fn milestones_without_pace() {
+        let r = Rules::bundled();
+        let m = milestones(42.0, r.step_points(Lang::En, "B1"), 0.0, &r.milestones);
+        assert_eq!((m.reached, m.total), (1, 15), "375 / 25 = 15 stars");
+        assert_eq!(m.to_next_milestone, Some(8.0));
+        assert_eq!(m.pace_per_week, 0.0);
+        assert_eq!(m.weeks_to_next_step, None, "no pace, no estimate");
+        let n5 = milestones(0.0, r.step_points(Lang::Ja, "N5"), 0.0, &r.milestones);
+        assert_eq!((n5.reached, n5.total), (0, 14), "350 / 25");
+    }
+
+    #[test]
+    fn milestones_exact_boundary_and_full_step() {
+        let r = Rules::bundled().milestones;
+        let m = milestones(50.0, 375.0, 0.0, &r);
+        assert_eq!(m.reached, 2, "exactly 50 points is the second star");
+        assert_eq!(m.to_next_milestone, Some(25.0));
+        let m = milestones(49.5, 375.0, 0.0, &r);
+        assert_eq!((m.reached, m.to_next_milestone), (1, Some(0.5)));
+        let full = milestones(400.0, 375.0, 0.0, &r);
+        assert_eq!((full.reached, full.total, full.to_next_milestone), (15, 15, None));
+        assert_eq!(full.weeks_to_next_step, Some(0), "points already there");
+        // A step that is not a multiple: the last star is the step itself.
+        let odd = milestones(390.0, 400.0, 0.0, &r);
+        assert_eq!((odd.reached, odd.total, odd.to_next_milestone), (15, 16, Some(10.0)));
+    }
+
+    #[test]
+    fn weeks_estimate_from_pace() {
+        let r = Rules::bundled().milestones;
+        // 40 points in 28 days = 10 per week; 375 - 315 = 60 → 6 weeks.
+        let m = milestones(315.0, 375.0, 40.0, &r);
+        assert_eq!(m.pace_per_week, 10.0);
+        assert_eq!(m.weeks_to_next_step, Some(6));
+        let m = milestones(314.0, 375.0, 40.0, &r);
+        assert_eq!(m.weeks_to_next_step, Some(7), "rounds up");
     }
 
     #[test]

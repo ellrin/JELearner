@@ -946,6 +946,48 @@ async fn points_levels_and_difficulty() {
     assert_eq!(code, StatusCode::BAD_REQUEST);
 }
 
+/// Stars within the step and the weeks estimate are in the summary of the
+/// today and progress pages and of a finished unit (docs/plan.md §9.1).
+#[tokio::test]
+async fn milestones_and_weeks_estimate_in_payloads() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws_path = ws_dir.path().join("JELearner-private");
+    let (c, _calls) = stage_a_setup(app_dir.path(), &ws_path).await;
+
+    // Nothing yet: no stars, no pace, no estimate.
+    let (code, t) = c.get("/api/today?lang=en").await;
+    assert_eq!(code, StatusCode::OK, "{t}");
+    let m = &t["summary"]["milestones"];
+    assert_eq!(m["reached"], 0, "{m}");
+    assert_eq!(m["total"], 15);
+    assert_eq!(m["milestone_points"], 25.0);
+    assert_eq!(m["to_next_milestone"], 25.0);
+    assert!(m["weeks_to_next_step"].is_null());
+
+    // 42 points today (written to records/points/, as from another computer).
+    let dir = ws_path.join("profiles/ellrin/records/points");
+    let rec = jl_core::points::PointRecord::now(jl_core::Lang::En, "conversation", jl_core::points::Skill::Writing, 42.0, Some(0.9), "conversations/en/a.md");
+    jl_core::points::append(&dir, &rec).unwrap();
+    c.post("/api/workspace/reindex", json!({})).await;
+    let (_, p) = c.get("/api/progress?lang=en").await;
+    let m = &p["summary"]["milestones"];
+    assert_eq!(m["reached"], 1, "{m}");
+    assert_eq!(m["to_next_milestone"], 8.0);
+    assert_eq!(m["recent_points"], 42.0);
+    assert_eq!(m["pace_per_week"], 10.5, "42 points in 28 days");
+    assert_eq!(m["weeks_to_next_step"], 32, "333 left at 10.5 a week");
+    let (_, t) = c.get("/api/today?lang=en").await;
+    assert_eq!(t["summary"]["milestones"], p["summary"]["milestones"]);
+
+    // A finished unit carries the new summary (the result card compares stars).
+    let (_, lesson) = c.post("/api/lessons", json!({"lang": "en", "title": "Chips", "text": "Several chipmakers announced new factories."})).await;
+    let answers = json!({"answers": [{"index": 0, "answer": "New factories"}, {"index": 1, "answer": "Prices keep rising.", "correct": true}]});
+    let (code, fin) = c.post(&format!("/api/lessons/{}/finish", lesson["id"]), answers).await;
+    assert_eq!(code, StatusCode::OK, "{fin}");
+    assert_eq!(fin["summary"]["milestones"]["points_into_step"], 43.5, "{fin}");
+}
+
 /// The user's picture: stored in the app folder (never the workspace),
 /// served back, only images, at most 2 MB.
 #[tokio::test]

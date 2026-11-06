@@ -171,6 +171,8 @@ pub(crate) async fn summary(ws: &Workspace, db: &Db, lang: Lang, r: &Rules) -> R
     let today_lang = per.iter().find(|(l, _)| l == lang.code()).map(|(_, p)| *p).unwrap_or(0.0);
     let a = assessment(ws, db, lang, r).await?;
     let days = points::active_days(db).await?;
+    let recent = points::recent_total(db, lang, today, r.milestones.pace_days as i64).await?;
+    let milestones = progress::milestones(a.points_since, a.step_points, recent, &r.milestones);
     let lp = ws.profile.lang(lang);
     Ok(json!({
         "lang": lang.code(),
@@ -180,6 +182,8 @@ pub(crate) async fn summary(ws: &Workspace, db: &Db, lang: Lang, r: &Rules) -> R
         "points_since": a.points_since,
         "step_points": a.step_points,
         "eligible": a.eligible,
+        // Stars within the step and the weeks estimate (plan §9.1).
+        "milestones": milestones,
         "difficulty": level::from_score(lang, lp.difficulty).label,
         "early_feedback_left": lp.early_feedback_left,
         "today": today_all,

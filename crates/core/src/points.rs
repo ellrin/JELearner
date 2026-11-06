@@ -332,6 +332,12 @@ pub async fn by_day(db: &Db, lang: Option<Lang>, today: NaiveDate, days: i64) ->
         .collect())
 }
 
+/// Points of a language over the last `days` local days, today included
+/// (the recent pace of docs/plan.md §9.1).
+pub async fn recent_total(db: &Db, lang: Lang, today: NaiveDate, days: i64) -> DbResult<f64> {
+    Ok(by_day(db, Some(lang), today, days.max(1)).await?.iter().map(|(_, p)| p).sum())
+}
+
 /// Days on which anything was practised, newest first.
 pub async fn active_days(db: &Db) -> DbResult<Vec<NaiveDate>> {
     let rows: Vec<String> = sqlx::query_scalar("SELECT DISTINCT day FROM points ORDER BY day DESC LIMIT 400").fetch_all(db.pool()).await?;
@@ -486,5 +492,38 @@ mod tests {
         assert!(already_passed(&db, Lang::En, "quiz", "lessons/en/a.md").await.unwrap());
         let days = by_day(&db, Some(Lang::En), NaiveDate::from_ymd_opt(2026, 11, 7).unwrap(), 3).await.unwrap();
         assert_eq!(days, vec![("2026-11-05".into(), 0.0), ("2026-11-06".into(), 3.5), ("2026-11-07".into(), 0.0)]);
+    }
+
+    #[tokio::test]
+    async fn recent_pace_from_point_records() {
+        // Records written to records/points/ and read back (as after a pull):
+        // only the last 28 days of this language count.
+        let dir = tempfile::tempdir().unwrap();
+        let rec = |time: &str, lang: Lang, points: f64| {
+            let mut r = PointRecord::now(lang, "quiz", Skill::Reading, points, Some(0.8), "lessons/x.md");
+            r.time = time.into();
+            r
+        };
+        for r in [
+            rec("2026-10-01T09:00:00+08:00", Lang::En, 30.0), // older than 28 days
+            rec("2026-10-10T09:00:00+08:00", Lang::En, 25.0),
+            rec("2026-11-01T09:00:00+08:00", Lang::En, 10.5),
+            rec("2026-11-06T09:00:00+08:00", Lang::En, 4.5),
+            rec("2026-11-06T10:00:00+08:00", Lang::Ja, 9.0),
+        ] {
+            append(dir.path(), &r).unwrap();
+        }
+        let (recs, w) = read_dir(dir.path());
+        assert!(w.is_empty(), "{w:?}");
+        let db = Db::memory().await.unwrap();
+        for r in &recs {
+            insert(&db, r, None).await.unwrap();
+        }
+        let today = NaiveDate::from_ymd_opt(2026, 11, 6).unwrap();
+        let rules = Rules::bundled();
+        let recent = recent_total(&db, Lang::En, today, rules.milestones.pace_days as i64).await.unwrap();
+        assert_eq!(recent, 40.0);
+        let m = crate::progress::milestones(315.0, 375.0, recent, &rules.milestones);
+        assert_eq!((m.pace_per_week, m.weeks_to_next_step), (10.0, Some(6)));
     }
 }

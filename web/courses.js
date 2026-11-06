@@ -433,7 +433,7 @@ async function reportUnit(box, o, u, body, title, total) {
     r = await api(`/api/courses/${encodeURIComponent(o.course.id)}/lessons/${o.number}/units/${u.index}`, body);
   } catch (e) { flash(e.message, true); return; }
   u.done = u.done || r.passed;
-  paintMe(r.summary);
+  const star = paintMe(r.summary);
   const nx = r.next ?? {};
   const lang = o.course.lang;
   const daily = o.course.kind === "daily";
@@ -466,6 +466,7 @@ async function reportUnit(box, o, u, body, title, total) {
     mistakes: gradable && r.score != null && r.score < 1,
     already: r.already,
     levelUp: r.level_up,
+    star,
     difficulty: r.ask_difficulty ? { lang } : null,
     notebook: r.notebook ? { lang, stem: r.notebook } : null,
     next,

@@ -44,6 +44,14 @@ up_above = 0.9
 down_below = 0.65
 step = 5
 
+[milestones]
+# Every `milestone_points` within the current step is a milestone (a star on
+# the progress and today pages); 375 / 25 = 15 stars for an English B1 step.
+milestone_points = 25
+# Recent pace = points of the last `pace_days` days, per week; it gives the
+# estimate of weeks to the next step.
+pace_days = 28
+
 # Points per major level ("本級積分"); each step needs an equal share.
 # English: 200–450 hours per level, Japanese for a Chinese speaker with kanji
 # background (plan §9.1, §9.3): about 6 points per hour.

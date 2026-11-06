@@ -89,6 +89,35 @@ function skillBars(rows) {
   return box;
 }
 
+/**
+ * `.stars`: one star per milestone of the step (plan §9.1), the reached ones
+ * filled. `compact` = one star and "3/15" (the today page).
+ */
+function starRow(m, compact = false) {
+  const box = el("div", `stars${compact ? " compact" : ""}`);
+  box.setAttribute("role", "img");
+  box.setAttribute("aria-label", `${m.reached} / ${m.total} 顆星`);
+  box.title = `每 ${fmtPts(m.milestone_points)} 分一顆星：${m.reached} / ${m.total}`;
+  if (compact) {
+    const s = el("span", m.reached > 0 ? "on" : "");
+    s.append(icon("star"));
+    box.append(s, el("b", null, `${m.reached}/${m.total}`));
+    return box;
+  }
+  for (let i = 0; i < m.total; i++) {
+    const s = el("span", i < m.reached ? "on" : "");
+    s.append(icon("star"));
+    box.append(s);
+  }
+  return box;
+}
+
+/** The star a new summary reached over the previous one (same language and step), or 0. */
+function starGain(prev, sum) {
+  if (!prev?.milestones || !sum?.milestones || prev.lang !== sum.lang || prev.level !== sum.level) return 0;
+  return sum.milestones.reached > prev.milestones.reached ? sum.milestones.reached : 0;
+}
+
 /** A user's picture (or coloured initial) on a `.dot` / `.big-dot`. */
 function setAvatar(node, u) {
   if (!node) return;
@@ -140,10 +169,10 @@ function scoreMeter(score, total, mistakes) {
 /**
  * The card shown when something is finished: +points (with a small label
  * when the bonus came), a word of praise, a level-up banner, the early
- * difficulty question, one or two next steps. A score that did not pass
+ * difficulty question, a new star of the step, one or two next steps. A score that did not pass
  * shows a meter with the pass line instead of a big "+0".
  */
-function resultCard({ points = 0, title, score, total, mistakes, bonusLabel, levelUp, already, difficulty, notebook, next = [] }) {
+function resultCard({ points = 0, title, score, total, mistakes, bonusLabel, levelUp, already, difficulty, notebook, star = 0, next = [] }) {
   const card = el("div", `result${points > 0 || already ? "" : " missed"}`);
   card.setAttribute("role", "status");
   if (points > 0) {
@@ -163,6 +192,11 @@ function resultCard({ points = 0, title, score, total, mistakes, bonusLabel, lev
     const lv = el("div", "levelup");
     lv.append(icon("star"), document.createTextNode(`${levelUp.from} → ${levelUp.to}`));
     card.append(lv);
+  } else if (star > 0) {
+    // A milestone of the step was reached by this unit.
+    const st = el("div", "levelup star-up");
+    st.append(icon("star"), document.createTextNode(`拿到第 ${star} 顆星！`));
+    card.append(st);
   }
   if (difficulty) {
     const d = el("div", "diff");
@@ -256,8 +290,10 @@ async function refreshMe() {
   } catch { /* the card keeps its last numbers */ } finally { meBusy = false; }
 }
 
+/** Paint the profile card; returns the star `sum` reached over the last summary (0 if none). */
 function paintMe(sum) {
-  if (!sum) return;
+  if (!sum) return 0;
+  const star = starGain(state.summary, sum);
   state.summary = sum;
   const lv = $("#meLevel");
   lv.innerHTML = "";
@@ -266,6 +302,7 @@ function paintMe(sum) {
   $("#meToday").textContent = fmtPts(sum.today);
   $("#meTotal").textContent = fmtPts(sum.total);
   $("#meStreak").textContent = String(sum.streak);
+  return star;
 }
 
 // Upload: crop to a square, resize to 256 px and compress in the browser.
@@ -328,6 +365,7 @@ async function renderToday(page) {
   const lvBar = ptsBar(sum.points_since / (sum.step_points || 1), `thin${sum.eligible ? " ok" : ""}`);
   lvBar.title = sum.next ? `下一階 ${sum.next}：${fmtPts(sum.points_since)} / ${fmtPts(sum.step_points)} 分` : "";
   mid.append(lv, lvBar);
+  if (sum.next && sum.milestones) mid.append(starRow(sum.milestones, true));
   const streak = el("div", "streak");
   streak.title = "連續天數";
   streak.append(icon("flame"), el("b", null, String(sum.streak)), el("span", null, "天"));
@@ -454,7 +492,7 @@ async function quizAnswered(quiz, index, answer, correct) {
   if (quiz.onDone) return quiz.onDone(Object.values(quiz.answers));
   try {
     const r = await api(`/api/lessons/${quiz.id}/finish`, { answers: Object.values(quiz.answers) });
-    paintMe(r.summary);
+    const star = paintMe(r.summary);
     // Each lesson scores once, so a miss is not "try again": the wrong
     // answers are in the mistakes book, and correcting them is the next step.
     const wrong = Object.values(quiz.answers).some((a) => a.correct === false);
@@ -470,6 +508,7 @@ async function quizAnswered(quiz, index, answer, correct) {
       mistakes: wrong,
       already: r.already,
       levelUp: r.level_up,
+      star,
       difficulty: r.ask_difficulty && !r.already ? { lang: quiz.lang } : null,
       next,
       notebook: r.notebook ? { lang: quiz.lang, stem: r.notebook } : null,
@@ -762,6 +801,7 @@ function drawConvEnd(page, v) {
       score: res.passed ? res.score : null,
       bonusLabel: "表現優秀加分",
       levelUp: res.level_up,
+      star: v.star,
       notebook: nb,
       next,
     }));
@@ -789,7 +829,7 @@ async function finishConversation() {
   try {
     const r = await api(`/api/conversations/${state.conv.id}/finish?user=${encodeURIComponent(state.status?.user?.id ?? "")}`, {});
     r.justFinished = true;
-    if (r.summary) paintMe(r.summary);
+    if (r.summary) r.star = paintMe(r.summary);
     r.nextToday = await nextTodayStep();
     state.conv = r;
     drawConv($("#page"));
@@ -877,6 +917,18 @@ async function renderProgress(page) {
   head.append(levelRing(128, sum.level, a.points_since / (a.step_points || 1), `教材 ${sum.difficulty}`, a.eligible));
   const right = el("div");
   right.append(el("div", "next", a.next ? `下一階 ${a.next}` : "最高等級"));
+  // Milestones: a star every few points, and the weeks at the recent pace.
+  const m = sum.milestones;
+  if (a.next && m) {
+    const ms = el("div", "milestones");
+    ms.append(starRow(m));
+    const lines = el("div", "ms-lines");
+    if (m.to_next_milestone != null) lines.append(el("span", null, `再 ${fmtPts(m.to_next_milestone)} 分拿下一顆星`));
+    if (m.weeks_to_next_step == null) lines.append(el("span", "muted", "多學幾天就能估算"));
+    else if (m.weeks_to_next_step > 0) lines.append(el("span", "muted", `照最近的速度，約 ${m.weeks_to_next_step} 週升到 ${a.next}`));
+    ms.append(lines);
+    right.append(ms);
+  }
   const conds = el("ul", "conds");
   const r = p.rules;
   for (const c of a.conditions) {

@@ -42,10 +42,17 @@ pub struct DifficultyRules {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MilestoneRules {
+    pub milestone_points: f64,
+    pub pace_days: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rules {
     pub points: PointRules,
     pub assessment: AssessmentRules,
     pub difficulty: DifficultyRules,
+    pub milestones: MilestoneRules,
     /// Points per major level, per language.
     pub levels: BTreeMap<Lang, BTreeMap<String, f64>>,
 }
