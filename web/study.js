@@ -261,7 +261,10 @@ function taskName(task) {
 async function nextTodayStep() {
   try {
     const t = await fetchToday(true);
-    const task = t.next != null ? t.tasks[t.next] : null;
+    // A review step whose lesson does not exist yet and has no due cards
+    // left was just done as a quick review: the step after it is next.
+    const open = (x) => x.done !== true && !(x.kind === "review" && x.lesson_id == null && !x.due);
+    const task = t.tasks.find(open) ?? null;
     if (task) return { label: `下一步：${taskName(task)}`, primary: true, onclick: () => (task.id === "mistakes" ? go("mistakes") : openStep(task)) };
   } catch { /* fall back to the today page */ }
   return { label: "回到今日", primary: true, onclick: () => go("today") };
@@ -427,6 +430,10 @@ const unitTitle = (k, lang = state.lang) => (k === "translation" ? (lang === "ja
 
 /** Open a step of a course lesson (creating today's daily lesson first if needed). */
 async function openStep(task) {
+  if (task.kind === "review" && task.lesson_id == null && !state.status?.engine_ready) {
+    go("courses", { quickReview: true, fromToday: true, inDaily: true });
+    return;
+  }
   if (task.daily) {
     try {
       const d = await api("/api/daily", { lang: state.lang });
@@ -446,7 +453,7 @@ function taskCard(task, isNext, engineReady) {
   if (task.id === "unit") {
     ic.append(icon(UNIT_ICON[task.kind] ?? "book"));
     title = unitTitle(task.kind);
-    if (task.kind === "review") sub = task.due ? `${task.due} 張到期` : `${task.items} 張`;
+    if (task.kind === "review") sub = task.due ? `${task.due} 張到期` : "";
     else if (task.kind === "conversation") sub = `${task.items} 回合`;
     else sub = `${task.items} 題`;
     // Each step passed = 1 point (more with a high score).
@@ -476,8 +483,6 @@ function taskCard(task, isNext, engineReady) {
     const b = primaryButton(label, (e) => { e.stopPropagation(); action(); });
     b.classList.add("go");
     card.append(b);
-  } else {
-    card.append(el("span"));
   }
   card.onclick = action;
   return card;
@@ -1089,6 +1094,7 @@ async function importFiles(files) {
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error ?? (r.status === 413 ? "檔案太大" : `${r.status}`));
         mark.className = "ok"; mark.textContent = "✓";
+        li.dataset.kind = d.kind;
         what.textContent = `${KIND_LABEL[d.kind] ?? d.kind}・存進素材`;
         info.textContent = f.name;
         info.title = d.file;
@@ -1104,6 +1110,7 @@ async function importFiles(files) {
       const r = await apiText(`/api/import?${q}`, text);
       const rep = r.report;
       mark.className = "ok"; mark.textContent = "✓";
+      li.dataset.kind = r.kind;
       what.textContent = `${KIND_LABEL[r.kind] ?? r.kind}　+${rep.words + rep.grammar}${rep.articles ? `・文章 ${rep.articles}` : ""}`;
       info.textContent = f.name;
       info.title = [r.file, ...rep.warnings].join("\n");
@@ -1114,6 +1121,21 @@ async function importFiles(files) {
       info.textContent = e.message;
       info.title = e.message;
     }
+  }
+  // Next steps for what came in (plan §0.1: the next step is a button).
+  $("#impNext")?.remove();
+  const okKinds = new Set($$("li", ul).filter((li) => $(".ok", li)).map((li) => li.dataset.kind));
+  if (okKinds.size) {
+    const row = el("div", "actions-row imp-next");
+    row.id = "impNext";
+    const lists = okKinds.has("vocab") || okKinds.has("grammar");
+    const mats = [...okKinds].some((k) => !["vocab", "grammar"].includes(k));
+    const close = (fn) => () => { dlgImport.close(); fn(); };
+    if (lists) row.append(primaryButton("用這份清單建立課程", close(() => go("courses", { course: null, courseLesson: null, courseCreate: "fixed" })), true));
+    else if (mats) row.append(primaryButton("用這份素材建立課程", close(() => go("courses", { course: null, courseLesson: null, courseCreate: "topic" })), true));
+    if (mats) row.append(ghostButton("folder", "看素材", close(() => go("materials"))));
+    if (okKinds.has("vocab")) row.append(ghostButton("cards", "看生字", close(() => go("words"))));
+    ul.after(row);
   }
   await refreshStatus();
   render();

@@ -14,6 +14,7 @@ const ANGLE_LABEL = { technical: "技術", social: "社會", "personal life": "�
 
 async function renderCourses(page) {
   if (!state.status?.user) { viewbar("課程", null); page.append(el("div", "empty", "請先選擇使用者")); return; }
+  if (state.quickReview) return renderQuickReview(page);
   if (state.courseCreate) return renderCourseCreate(page);
   if (state.course && state.courseLesson) return renderCourseLesson(page);
   if (state.course) return renderCourseOutline(page);
@@ -402,11 +403,61 @@ async function renderCourseLesson(page) {
   const box = el("div", "step-box");
   page.append(box);
   const u = units[cur];
-  if (u.kind === "review") stepReview(box, o, u);
-  else if (u.kind === "reading" || u.kind === "quiz") stepReading(box, o, u);
-  else if (u.kind === "conversation") stepConversation(box, o, u);
-  else stepOutput(box, o, u);
+  const draw = () => {
+    box.innerHTML = "";
+    if (u.kind === "review") stepReview(box, o, u);
+    else if (u.kind === "reading" || u.kind === "quiz") stepReading(box, o, u);
+    else if (u.kind === "conversation") stepConversation(box, o, u);
+    else stepOutput(box, o, u);
+  };
+  if (u.done) box.append(stepDoneCard(o, u, draw));
+  else draw();
 }
+
+/** A step already done: what it earned, today's next task, or practise it again. */
+function stepDoneCard(o, u, again) {
+  const card = el("div", "step-done");
+  const m = el("span", "mark");
+  m.append(icon("check"));
+  card.append(m, el("b", null, u.points != null ? `已完成 +${fmtPts(u.points)}` : "已完成"));
+  const row = el("div", "actions-row");
+  const main = primaryButton("回到今日", () => go("today"), true);
+  nextTodayStep().then((st) => { main.textContent = st.label; main.onclick = st.onclick; });
+  row.append(main, ghostButton("refresh", "再練一次", again));
+  card.append(row);
+  return card;
+}
+
+/**
+ * Review without a lesson yet (no Claude needed): the due cards from
+ * /api/review, graded like the review page (a round of cards = a unit).
+ */
+async function renderQuickReview(page) {
+  viewbar("今日", null, ghostButton("back", "今日", () => go("today")));
+  const due = await api(`/api/review?lang=${state.lang}&limit=${REVIEW_LIMIT}`);
+  const box = el("div", "step-box");
+  page.append(box);
+  if (!due.length) { box.append(quickReviewDone(0, null)); return; }
+  stepReview(box, { course: { lang: state.lang }, review_cards: due, standalone: true }, { index: 0, kind: "review" });
+}
+
+/** The end of a quick review: the cards done (points when a full round was reached) and today's next step. */
+function quickReviewDone(cards, award) {
+  const card = el("div", "step-done");
+  const m = el("span", "mark");
+  m.append(icon("check"));
+  const pts = award?.points ?? 0;
+  card.append(m, el("b", null, cards ? "複習完成" : "沒有到期的卡片"));
+  if (pts > 0) card.append(el("div", "plus", `+${fmtPts(pts)}`));
+  else if (cards) card.append(el("div", "sub", `${cards} 張`));
+  const row = el("div", "actions-row");
+  const main = primaryButton("回到今日", () => go("today"), true);
+  nextTodayStep().then((st) => { main.textContent = st.label; main.onclick = st.onclick; });
+  row.append(main);
+  card.append(row);
+  return card;
+}
+const REVIEW_LIMIT = 20;
 
 function lessonDoneBanner(o) {
   const b = el("div", "lesson-done");
@@ -461,7 +512,7 @@ async function reportUnit(box, o, u, body, title, total) {
   const card = resultCard({
     points: r.points,
     title: r.course_finished ? "整個課程完成了！" : r.lesson_done ? "這一課完成了！" : r.passed ? title : "差一點",
-    score: r.score,
+    score: gradable ? r.score : null,
     total: gradable ? total : null,
     mistakes: gradable && r.score != null && r.score < 1,
     already: r.already,
@@ -492,13 +543,19 @@ function stepReview(box, o, u) {
   box.append(bar);
   const stage = el("div", "card");
   box.append(stage);
-  let i = 0, shown = false, good = 0;
+  let i = 0, shown = false, good = 0, award = null;
   const draw = () => {
     stage.innerHTML = "";
     $(".c", head).textContent = `${Math.min(i + 1, cards.length)} / ${cards.length}`;
     $("i", bar).style.width = `${(i / cards.length) * 100}%`;
     if (i >= cards.length) {
       stage.remove();
+      if (o.standalone) {
+        // Points come from full review rounds (A stage rules).
+        box.append(quickReviewDone(cards.length, award));
+        refreshStatus().then(greet);
+        return;
+      }
       reportUnit(box, o, u, { cards: cards.length, score: good / cards.length }, "複習完成");
       return;
     }
@@ -541,7 +598,10 @@ function stepReview(box, o, u) {
     const it = cards[i];
     busyRate = true;
     try {
-      if (it.item_id != null) await api("/api/review", { kind: it.item_kind, id: it.item_id, grade, in_course: true });
+      if (it.item_id != null) {
+        const r = await api("/api/review", { kind: it.item_kind, id: it.item_id, grade, in_course: !o.standalone });
+        if (r?.award) award = r.award;
+      }
     } catch (e) { flash(e.message, true); busyRate = false; return; }
     busyRate = false;
     if (grade >= 3) good += 1;

@@ -631,6 +631,44 @@ async fn daily_lesson_on_today() {
     assert_eq!((ls[0]["number"].as_u64(), ls[1]["number"].as_u64()), (Some(1), Some(2)), "the same course twice");
 }
 
+/// A daily lesson started today stays on the today page when a course is
+/// created afterwards (plan §11: today's lessons are listed as they are);
+/// review steps never need Claude.
+#[tokio::test]
+async fn started_daily_lesson_stays_on_today() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws_path = ws_dir.path().join("JELearner-private");
+    let (c, _calls) = setup(app_dir.path(), &ws_path).await;
+
+    let (_, today) = c.get("/api/today?lang=en").await;
+    let review = today["tasks"].as_array().unwrap().iter().find(|t| t["kind"] == "review").unwrap().clone();
+    assert_eq!(review["needs_engine"], false, "review cards work without Claude: {review}");
+    assert!(today["tasks"].as_array().unwrap().iter().any(|t| t["kind"] == "conversation" && t["needs_engine"] == true));
+
+    let (_, d) = c.post("/api/daily", json!({ "lang": "en" })).await;
+    let daily_id = d["id"].as_str().unwrap().to_string();
+    let (code, opened) = c.post(&format!("/api/courses/{daily_id}/lessons/1/open"), json!({})).await;
+    assert_eq!(code, StatusCode::OK, "{opened}");
+    let (code, r) = c.post(&format!("/api/courses/{daily_id}/lessons/1/units/0"), json!({ "cards": 3, "score": 1.0 })).await;
+    assert_eq!(code, StatusCode::OK, "{r}");
+
+    // A new fixed course: the half-done daily lesson is still today's lesson.
+    let mut csv = String::from("term,reading,meaning\n");
+    for i in 0..12 {
+        csv.push_str(&format!("officeword{i},,辦公室單字 {i}\n"));
+    }
+    let (code, course) = c.post("/api/courses", json!({ "kind": "fixed", "lang": "en", "vocab_text": csv, "file_name": "office.csv", "describe": false })).await;
+    assert_eq!(code, StatusCode::OK, "{course}");
+    let (_, today) = c.get("/api/today?lang=en").await;
+    let ls = today["lessons"].as_array().unwrap();
+    assert_eq!(ls[0]["course"], daily_id.as_str(), "{today}");
+    assert_eq!(ls.len(), 1, "one lesson a day: the started one");
+    let tasks = today["tasks"].as_array().unwrap();
+    assert_eq!(tasks[0]["done"], true, "{today}");
+    assert_eq!(today["next"], 1);
+}
+
 /// News pages that robots.txt does not allow are marked, not offered.
 #[tokio::test]
 async fn news_blocked_by_robots_is_marked() {

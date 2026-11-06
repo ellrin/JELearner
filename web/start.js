@@ -246,7 +246,14 @@ async function loadStClaude() {
   };
   $("#stOther").querySelector("summary").textContent = c.active ? "換一種方式" : "連接方式";
   const sub = c.subscription;
-  if (!sub.installed) line(false, `尚未安裝 Claude Code（安裝：${c.install}）`);
+  if (!sub.installed) {
+    // The install command stays behind a copy button (no raw shell line in the text).
+    line(false, "尚未安裝 Claude Code");
+    const copy = iconButton("copy", "複製安裝指令", () => navigator.clipboard?.writeText(c.install).then(() => flash("已複製安裝指令")).catch(() => flash(c.install)));
+    copy.title = c.install;
+    copy.classList.add("inline-ico");
+    ul.lastElementChild.lastElementChild.append(copy);
+  }
   else if (sub.ready && sub.account) line(true, `已登入：${sub.account}`);
   else if (sub.ready) line(null, "已登入，但無法確認是哪個帳號；若不是你的帳號，請按「用瀏覽器登入」");
   else line(false, "尚未登入你的 Claude 帳號");

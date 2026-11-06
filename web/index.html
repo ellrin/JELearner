@@ -377,13 +377,15 @@
             <div class="note">key 只存在系統金鑰圈（或設定資料夾的 credentials.toml），不會進任何 repo。</div>
           </div>
 
-          <div class="form">
-            <label><span>模型</span><select id="setModel"></select></label>
-            <label><span>effort</span><select id="setEffort">
-              <option value="">模型預設</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option>
-            </select></label>
-            <div class="note">兩種連線方式用同一個模型設定；清單來自 models/catalog.json。</div>
-          </div>
+          <details class="other-way adv">
+            <summary>進階</summary>
+            <div class="form">
+              <label><span>模型</span><select id="setModel"></select><span class="inline"><button class="help" data-tip="兩種連線方式用同一個模型設定；清單來自 models/catalog.json。">?</button></span></label>
+              <label><span>effort</span><select id="setEffort">
+                <option value="">模型預設</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option>
+              </select></label>
+            </div>
+          </details>
           <div class="actions-row"><button class="ghost" id="setTest">測試連線</button><span class="note" id="setTestOut"></span></div>
         </section>
 

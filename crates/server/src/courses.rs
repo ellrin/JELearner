@@ -585,6 +585,13 @@ async fn open_lesson(State(s): State<Shared>, AxPath((id, n)): AxPath<(String, u
     let review_items = lp.units.iter().find(|u| u.kind == UnitKind::Review).map(|u| u.items).unwrap_or(0);
     let cards = if review_items > 0 { review_cards(&l, course.lang, &lp, cl.as_ref(), review_items).await? } else { vec![] };
     let page = notebook::find_page(&l.ws, course.lang, &row.path).and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
+    // Points of finished steps (a step revisited shows what it earned).
+    let pts = unit_points(&l, &id, n).await?;
+    let mut units = unit_json(&lp);
+    for u in units.iter_mut() {
+        let i = u["index"].as_u64().unwrap_or(0) as u32;
+        u["points"] = json!(pts.get(&i).copied());
+    }
     Ok(Json(json!({
         "course": course_json(&l, &opened.course).await?,
         "number": n,
@@ -592,7 +599,7 @@ async fn open_lesson(State(s): State<Shared>, AxPath((id, n)): AxPath<(String, u
         "file": opened.file,
         "lesson": data,
         "row": { "title": row.title, "level": row.level, "lang": row.lang, "path": row.path, "engine": row.engine, "created_at": row.created_at, "source_url": row.source_url },
-        "plan": { "number": lp.number, "role": lp.role, "title": lp.title, "angle": lp.angle, "purpose": lp.purpose, "units": unit_json(&lp), "words": lp.words, "review": lp.review, "status": lp.status },
+        "plan": { "number": lp.number, "role": lp.role, "title": lp.title, "angle": lp.angle, "purpose": lp.purpose, "units": units, "words": lp.words, "review": lp.review, "status": lp.status },
         "review_cards": cards,
         "generated": opened.generated.is_some(),
         "missing": opened.generated.as_ref().map(|g| g.missing.clone()).unwrap_or_default(),
@@ -884,6 +891,25 @@ pub(crate) async fn today_lessons(l: &Loaded, lang: Lang) -> Result<Value, ApiEr
             entries.push(lesson_entry(l, c, lp, l.db.course_lesson_id(&c.id, lp.number).await?, &today).await?);
         }
     }
+    // Lessons already started today stay on the page too (plan §11: today's
+    // lessons are listed as they are), before the current course is chosen:
+    // a new course must not push a half-done lesson off the page.
+    let started: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT DISTINCT course, course_lesson FROM units WHERE lang = ? AND course IS NOT NULL AND course_lesson IS NOT NULL AND ended_at >= ?",
+    )
+    .bind(lang.code())
+    .bind(crate::study::day_start(local_today()))
+    .fetch_all(l.db.pool())
+    .await?;
+    let listed = |entries: &[Value], c: &Course, n: u32| entries.iter().any(|e| e["course"] == c.id.as_str() && e["number"] == n);
+    for c in &all {
+        for lp in c.lessons.iter().filter(|x| x.status != LessonStatus::Done) {
+            let daily_started = c.kind == CourseKind::Daily && c.created == today && !lp.units_done.is_empty();
+            if (daily_started || started.iter().any(|(cid, n)| *cid == c.id && *n == lp.number as i64)) && !listed(&entries, c, lp.number) {
+                entries.push(lesson_entry(l, c, lp, l.db.course_lesson_id(&c.id, lp.number).await?, &today).await?);
+            }
+        }
+    }
     let mut active: Vec<&Course> = all.iter().filter(|c| c.status == CourseStatus::Active && c.next_lesson().is_some() && c.kind != CourseKind::Daily).collect();
     active.sort_by_key(|c| std::cmp::Reverse(activity(c)));
     let daily: Vec<&Course> = all.iter().filter(|c| c.kind == CourseKind::Daily && c.created == today && c.next_lesson().is_some()).collect();
@@ -894,7 +920,7 @@ pub(crate) async fn today_lessons(l: &Loaded, lang: Lang) -> Result<Value, ApiEr
         if entries.len() + picked.len() >= per_day {
             break;
         }
-        if let Some(lp) = c.next_lesson() {
+        if let Some(lp) = c.next_lesson().filter(|lp| !listed(&entries, c, lp.number)) {
             picked.push((c, lp));
         }
     }
@@ -903,7 +929,7 @@ pub(crate) async fn today_lessons(l: &Loaded, lang: Lang) -> Result<Value, ApiEr
             if entries.len() + picked.len() >= per_day {
                 break;
             }
-            if !picked.iter().any(|(pc, p)| pc.id == c.id && p.number == lp.number) {
+            if !picked.iter().any(|(pc, p)| pc.id == c.id && p.number == lp.number) && !listed(&entries, c, lp.number) {
                 picked.push((c, lp));
             }
         }

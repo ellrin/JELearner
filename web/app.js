@@ -324,8 +324,10 @@ async function greet() {
   try {
     const t = await fetchToday();
     const task = t.next != null ? t.tasks[t.next] : null;
-    if (task) return say(task.id === "mistakes" ? `${name}還有 ${task.open} 題錯題，訂正一下吧。` : `${name}繼續今天的課：${taskName(task)}。`);
-    if (t.summary && t.summary.today >= t.summary.goal) return say(`${name}今天的目標達成了！想多練可以再來一段對話。`);
+    const reached = t.summary && t.summary.goal > 0 && t.summary.today >= t.summary.goal;
+    const nextLine = task ? (task.id === "mistakes" ? `還有 ${task.open} 題錯題，訂正一下吧。` : `${reached ? "想多練可以繼續" : "繼續今天的課"}：${taskName(task)}。`) : "";
+    if (reached) return say(`${name}今天的目標達成了！${nextLine || "想多練可以再來一段對話。"}`);
+    if (task) return say(`${name}${nextLine}`);
   } catch { /* fall back to the numbers below */ }
   const parts = [];
   if (st.due) parts.push(`${st.due} 張${langLabel(state.lang)}卡片要複習`);
@@ -477,7 +479,7 @@ function go(view, extra = {}) {
   state.view = view; store.set("jl.view", view);
   state.query = "";
   // A lesson opened from today (or a daily lesson) keeps 今日 lit in the nav.
-  state.fromToday = false; state.inDaily = false;
+  state.fromToday = false; state.inDaily = false; state.quickReview = false;
   Object.assign(state, extra);
   document.body.classList.remove("nav-open");
   render();
@@ -511,7 +513,7 @@ function ghostButton(iconName, label, onclick) {
 let renderGen = 0;
 /** Light the nav item of the current view; a daily lesson belongs to 今日. */
 function markNav() {
-  const cur = state.view === "courses" && state.courseLesson && state.inDaily ? "today" : state.view;
+  const cur = state.view === "courses" && (state.courseLesson || state.quickReview) && state.inDaily ? "today" : state.view;
   $$("#views button").forEach((b) => (b.getAttribute("data-view") === cur ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
 }
 
@@ -1279,7 +1281,8 @@ async function loadClaudeStep(fresh = false) {
   $("#setEngine").value = c.engine;
   const act = $("#setActive");
   act.className = `now ${c.active ? "" : "warn"}`;
-  act.textContent = c.active ? `目前使用：${c.active_label}・${c.model}` : c.active_error;
+  // Not connected yet: this tab is where it happens, so no "go to Settings".
+  act.textContent = c.active ? `目前使用：${c.active_label}` : String(c.active_error ?? "").startsWith("Claude 還沒連上") ? "Claude 還沒連上：用下面任一種方式連接" : c.active_error;
   if (!via) via = c.subscription.ready || !c.api.configured ? "subscription" : "api";
   setVia(via);
 

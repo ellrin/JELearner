@@ -53,7 +53,7 @@ pub(crate) fn local_today() -> NaiveDate {
 }
 
 /// Start of a local day, in UTC.
-fn day_start(d: NaiveDate) -> DateTime<Utc> {
+pub(crate) fn day_start(d: NaiveDate) -> DateTime<Utc> {
     Local.from_local_datetime(&d.and_hms_opt(0, 0, 0).unwrap()).earliest().map(|t| t.with_timezone(&Utc)).unwrap_or_else(Utc::now)
 }
 
@@ -228,7 +228,8 @@ async fn today(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value> {
             tasks.push(json!({
                 "id": "unit", "kind": u["kind"], "unit": u["index"], "minutes": u["minutes"], "items": u["items"], "done": u["done"], "points": u["points"],
                 "course": les["course"], "number": les["number"], "lesson_title": les["title"], "lesson_id": les["lesson_id"],
-                "needs_engine": !generated || u["kind"] == "conversation",
+                // Review cards come from the database: never need Claude.
+                "needs_engine": u["kind"] != "review" && (!generated || u["kind"] == "conversation"),
                 "due": if u["kind"] == "review" { json!(stats.due) } else { Value::Null },
             }));
         }
@@ -237,7 +238,7 @@ async fn today(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value> {
         for u in units {
             tasks.push(json!({
                 "id": "unit", "daily": true, "kind": u["kind"], "unit": u["index"], "minutes": u["minutes"], "items": u["items"], "done": false,
-                "lesson_title": plan["daily"]["topic"]["name"], "needs_engine": true,
+                "lesson_title": plan["daily"]["topic"]["name"], "needs_engine": u["kind"] != "review",
                 "due": if u["kind"] == "review" { json!(stats.due) } else { Value::Null },
             }));
         }
