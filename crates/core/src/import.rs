@@ -388,6 +388,9 @@ pub async fn sync_workspace(ws: &Workspace, db: &Db) -> ImportReport {
     let (n, w) = crate::points::sync(ws, db).await;
     rep.points += n;
     rep.warnings.extend(w);
+    if let Err(e) = db.link_course_units().await {
+        rep.warnings.push(format!("units: {e}"));
+    }
     rep
 }
 
@@ -404,8 +407,14 @@ async fn import_lesson_file(db: &Db, path: &Path, origin: &str, lang: Lang) -> R
     let level = front_matter(&md, "level").unwrap_or_default();
     let url = front_matter(&md, "source").unwrap_or_default();
     let engine = front_matter(&md, "engine").unwrap_or_default();
-    let data = serde_json::to_value(&lesson)?;
-    db.insert_lesson(lang, &lesson.title, &level, None, &url, origin, &md, &data, &engine).await?;
+    // Keep everything that was embedded (a course lesson's text, output
+    // exercises and conversation), not only the plain lesson fields.
+    let data = crate::lesson::extract_raw(&md).filter(|v| v.is_object()).map_or_else(|| serde_json::to_value(&lesson), Ok)?;
+    let id = db.insert_lesson(lang, &lesson.title, &level, None, &url, origin, &md, &data, &engine).await?;
+    if let Some(course) = front_matter(&md, "course").filter(|c| !c.is_empty()) {
+        let number = front_matter(&md, "course_lesson").and_then(|n| n.parse().ok()).unwrap_or(0);
+        db.set_lesson_course(id, &course, number).await?;
+    }
     rep.lessons += 1;
     Ok(rep)
 }

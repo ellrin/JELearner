@@ -70,6 +70,8 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .route("/api/google/book-lesson", post(book_lesson))
         .route("/api/open/{page}", post(open_page))
         .merge(crate::study::routes())
+        .merge(crate::courses::routes())
+        .merge(crate::notebook::routes())
         .fallback_service(ServeDir::new(web))
 }
 
@@ -747,9 +749,17 @@ async fn news_list(State(s): State<Shared>, Query(q): Query<LangQuery>) -> R<Val
             }
         }
     }
-    let l = ws(&s).await?;
-    let list = l.db.list_articles(lang, q.limit.unwrap_or(60)).await?;
-    Ok(Json(json!({ "articles": list, "fetched": fetched, "errors": errors })))
+    let list = ws(&s).await?.db.list_articles(lang, q.limit.unwrap_or(60)).await?;
+    // Pages robots.txt does not let us fetch are shown but cannot be picked
+    // (docs/plan.md §19.1); the answer is cached per site.
+    let mut out = Vec::with_capacity(list.len());
+    for a in list {
+        let blocked = a.body.trim().is_empty() && a.url.starts_with("http") && !s.fetcher.allowed(&a.url).await.unwrap_or(false);
+        let mut v = json!(a);
+        v["blocked"] = json!(blocked);
+        out.push(v);
+    }
+    Ok(Json(json!({ "articles": out, "fetched": fetched, "errors": errors })))
 }
 
 async fn articles(State(s): State<Shared>, Query(q): Query<LangQuery>) -> R<Value> {
@@ -770,7 +780,7 @@ struct FetchBody {
 }
 
 /// Fetch one article page (robots.txt checked) and store its text.
-async fn fetch_article_into_db(s: &Shared, url: &str, lang: Lang, source: &str) -> Result<i64, ApiError> {
+pub(crate) async fn fetch_article_into_db(s: &Shared, url: &str, lang: Lang, source: &str) -> Result<i64, ApiError> {
     let selector = {
         let l = ws(s).await?;
         let (sources, _) = load_sources(&l);
@@ -1045,6 +1055,10 @@ struct Grade {
     kind: ItemKind,
     id: i64,
     grade: u8,
+    /// Part of a course lesson's review unit: the course unit carries the
+    /// point, so no separate review round is counted.
+    #[serde(default)]
+    in_course: bool,
 }
 
 async fn review_grade(State(s): State<Shared>, Json(g): Json<Grade>) -> R<Value> {
@@ -1060,6 +1074,7 @@ async fn review_grade(State(s): State<Shared>, Json(g): Json<Grade>) -> R<Value>
     };
     // A full round of cards is a unit worth a point.
     let round = match lang {
+        Some(_) if g.in_course => json!({}),
         Some(lang) => crate::study::review_round(&s, lang).await?,
         None => json!({}),
     };

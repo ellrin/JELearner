@@ -14,6 +14,7 @@
 //! - [`catalog`] — local model catalog (for the Mac)
 //! - [`rules`], [`points`], [`progress`] — points, levels, difficulty (stage A)
 //! - [`topics`], [`conversation`] — topics and the typed AI conversation
+//! - [`notebook`] — the review notebook: one page per lesson / conversation
 
 pub mod catalog;
 pub mod claude_code;
@@ -27,6 +28,7 @@ pub mod lang;
 pub mod lesson;
 pub mod level;
 pub mod news;
+pub mod notebook;
 pub mod points;
 pub mod progress;
 pub mod provider;

@@ -29,8 +29,14 @@ Rules for `text` (today's text, about {{ text_length }}):
 {% endif %}
 
 Rules for the rest:
+{% if new_words or role == "review" %}
 - `vocabulary`: every new word of the plan (same spelling), with reading{% if lang == "ja" %} in hiragana{% else %} as IPA{% endif %},
   part of speech, meaning, one new example sentence and its translation. Add nothing else.
+{% else %}
+- `vocabulary`: no words are planned for this lesson; choose 4–6 useful words from your text at the edge of the
+  learner's level, with reading{% if lang == "ja" %} in hiragana{% else %} as IPA{% endif %}, part of speech, meaning, one new example
+  sentence and its translation.
+{% endif %}
 - `grammar`: the planned pattern(s), with form, meaning, nuance and one new example each.
 - `questions`: {% if questions %}{{ questions }} reading-comprehension questions on the text{% else %}a few questions{% endif %}.
   For "choice" questions give 3 or 4 options and make `answer` exactly equal to one option.

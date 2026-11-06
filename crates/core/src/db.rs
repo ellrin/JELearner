@@ -200,6 +200,14 @@ CREATE TABLE listening_time (
 ALTER TABLE lessons ADD COLUMN topic TEXT NOT NULL DEFAULT '';
 ALTER TABLE lessons ADD COLUMN difficulty INTEGER;
 ALTER TABLE lessons ADD COLUMN recipe TEXT NOT NULL DEFAULT '';
+"#, r#"
+-- Stage B (docs/courses.md §10): lessons and unit attempts know their course.
+ALTER TABLE lessons ADD COLUMN course TEXT NOT NULL DEFAULT '';
+ALTER TABLE lessons ADD COLUMN course_lesson INTEGER;
+ALTER TABLE units ADD COLUMN course TEXT NOT NULL DEFAULT '';
+ALTER TABLE units ADD COLUMN course_lesson INTEGER;
+ALTER TABLE units ADD COLUMN unit_index INTEGER;
+CREATE INDEX lessons_course ON lessons (course, course_lesson);
 "#];
 
 #[derive(Clone)]
@@ -781,6 +789,39 @@ impl Db {
 
     pub async fn lesson_by_path(&self, path: &str) -> DbResult<Option<i64>> {
         sqlx::query_scalar("SELECT id FROM lessons WHERE path = ?").bind(path).fetch_optional(&self.pool).await
+    }
+
+    /// Mark a lesson as part of a course (docs/courses.md §10).
+    pub async fn set_lesson_course(&self, id: i64, course: &str, number: u32) -> DbResult<()> {
+        sqlx::query("UPDATE lessons SET course = ?, course_lesson = ? WHERE id = ?").bind(course).bind(number as i64).bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// The lesson row of a course lesson, if it was generated.
+    pub async fn course_lesson_id(&self, course: &str, number: u32) -> DbResult<Option<i64>> {
+        sqlx::query_scalar("SELECT id FROM lessons WHERE course = ? AND course_lesson = ? ORDER BY id DESC LIMIT 1")
+            .bind(course)
+            .bind(number as i64)
+            .fetch_optional(&self.pool)
+            .await
+    }
+
+    /// Fill `units.course`, `course_lesson` and `unit_index` for course unit
+    /// attempts. Their `ref` is `<lesson file relative to the profile>#<unit>`
+    /// (that is what `records/points/` keeps), so this also works after the
+    /// database was rebuilt from the files. Idempotent.
+    pub async fn link_course_units(&self) -> DbResult<u64> {
+        Ok(sqlx::query(
+            "UPDATE units SET course = l.course, course_lesson = l.course_lesson,
+                unit_index = CAST(substr(units.ref, instr(units.ref, '#') + 1) AS INTEGER)
+             FROM lessons l
+             WHERE units.course = '' AND instr(units.ref, '#') > 0 AND l.course != ''
+               AND (l.path = substr(units.ref, 1, instr(units.ref, '#') - 1)
+                    OR l.path LIKE '%/' || substr(units.ref, 1, instr(units.ref, '#') - 1))",
+        )
+        .execute(&self.pool)
+        .await?
+        .rows_affected())
     }
 
     // ── Materials ───────────────────────────────────────

@@ -135,6 +135,17 @@ pub struct Conversation {
     pub passed: Option<bool>,
     #[serde(default)]
     pub points: Option<f64>,
+    /// Set when the conversation is a unit of a course lesson.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub course: Option<CourseLink>,
+}
+
+/// The course lesson unit a conversation belongs to (docs/courses.md).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CourseLink {
+    pub course: String,
+    pub lesson: u32,
+    pub unit: u32,
 }
 
 impl Conversation {
@@ -659,6 +670,7 @@ mod tests {
             score: None,
             passed: None,
             points: None,
+            course: None,
         }
     }
 

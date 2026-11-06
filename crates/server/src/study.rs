@@ -48,7 +48,7 @@ pub fn routes() -> Router<Shared> {
 
 // ── helpers ─────────────────────────────────────────────
 
-fn local_today() -> NaiveDate {
+pub(crate) fn local_today() -> NaiveDate {
     Local::now().date_naive()
 }
 
@@ -57,11 +57,11 @@ fn day_start(d: NaiveDate) -> DateTime<Utc> {
     Local.from_local_datetime(&d.and_hms_opt(0, 0, 0).unwrap()).earliest().map(|t| t.with_timezone(&Utc)).unwrap_or_else(Utc::now)
 }
 
-fn api_err(e: impl std::fmt::Display) -> ApiError {
+pub(crate) fn api_err(e: impl std::fmt::Display) -> ApiError {
     ApiError(StatusCode::BAD_GATEWAY, e.to_string())
 }
 
-async fn rules(s: &Shared) -> Rules {
+pub(crate) async fn rules(s: &Shared) -> Rules {
     let root = s.root.read().await.as_ref().map(|r| r.root.root.clone());
     Rules::load(root.as_deref()).0
 }
@@ -80,7 +80,7 @@ async fn assessment(ws: &Workspace, db: &Db, lang: Lang, rules: &Rules) -> Resul
 
 /// Raise the level by one step when conditions 1–3 hold (never down, never
 /// across a major level). Returns `{ from, to }` when it went up.
-async fn try_level_up(s: &Shared, lang: Lang) -> Result<Option<Value>, ApiError> {
+pub(crate) async fn try_level_up(s: &Shared, lang: Lang) -> Result<Option<Value>, ApiError> {
     let r = rules(s).await;
     let a = {
         let l = ws(s).await?;
@@ -135,7 +135,7 @@ async fn last_difficulty_change(db: &Db, lang: Lang) -> Result<Option<DateTime<U
 }
 
 /// After the first lessons: adjust from recent quiz scores.
-async fn auto_difficulty(s: &Shared, lang: Lang) -> Result<Option<Value>, ApiError> {
+pub(crate) async fn auto_difficulty(s: &Shared, lang: Lang) -> Result<Option<Value>, ApiError> {
     let r = rules(s).await;
     let delta = {
         let l = ws(s).await?;
@@ -143,7 +143,7 @@ async fn auto_difficulty(s: &Shared, lang: Lang) -> Result<Option<Value>, ApiErr
             return Ok(None);
         }
         let since = last_difficulty_change(&l.db, lang).await?;
-        let scores = points::recent_scores(&l.db, lang, r.difficulty.window, Some(&["quiz"]), since).await?;
+        let scores = points::recent_scores(&l.db, lang, r.difficulty.window, Some(&["quiz", "reading"]), since).await?;
         progress::accuracy_delta(&scores, &r.difficulty)
     };
     if delta == 0 {
@@ -165,7 +165,7 @@ async fn total_points(db: &Db, lang: Option<Lang>) -> Result<f64, ApiError> {
 }
 
 /// The summary shown on the profile card and the today page.
-async fn summary(ws: &Workspace, db: &Db, lang: Lang, r: &Rules) -> Result<Value, ApiError> {
+pub(crate) async fn summary(ws: &Workspace, db: &Db, lang: Lang, r: &Rules) -> Result<Value, ApiError> {
     let today = local_today();
     let (today_all, per) = points_on(db, today).await?;
     let today_lang = per.iter().find(|(l, _)| l == lang.code()).map(|(_, p)| *p).unwrap_or(0.0);
@@ -203,55 +203,48 @@ fn lang_or_first(q: &Option<String>, ws: &Workspace) -> Result<Lang, ApiError> {
 
 // ── today & progress ────────────────────────────────────
 
-/// Today's tasks (3–4) and the numbers on top. The client highlights the
-/// first unfinished task as the one primary action.
+/// Today: the steps (units) of today's lesson(s) and the numbers on top.
+/// Today's lessons come from the course the learner is doing, or the daily
+/// lesson (docs/plan.md §11, `courses::today_lessons`). Open mistakes add a
+/// task. The client highlights the first unfinished task as the one
+/// primary action.
 async fn today(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value> {
     let r = rules(&s).await;
     let l = ws(&s).await?;
     let lang = lang_or_first(&q.lang, &l.ws)?;
     let db = &l.db;
-    let day = local_today();
-    let start = day_start(day);
-    let now = Utc::now();
-    let stats = db.stats(Some(lang), start, now).await?;
-
-    // Review: due cards, and progress in the current round.
-    let last_round: Option<DateTime<Utc>> =
-        sqlx::query_scalar("SELECT MAX(at) FROM points WHERE lang = ? AND unit = 'review'").bind(lang.code()).fetch_one(db.pool()).await?;
-    let in_round = reviews_since(db, lang, last_round).await?.len() as i64;
-    let review_done = points::units_on(db, lang, "review", day).await? > 0 || (stats.due == 0);
-
-    // Conversation: one finished today; or one to continue.
-    let conv_done = points::units_on(db, lang, "conversation", day).await? > 0;
-    let open: Option<(i64, i64, i64)> = sqlx::query_as(
-        "SELECT id, turns_done, turns_limit FROM conversations WHERE lang = ? AND status != 'done' ORDER BY started_at DESC LIMIT 1",
-    )
-    .bind(lang.code())
-    .fetch_optional(db.pool())
-    .await?;
-
-    // Lesson quiz: one finished today; the newest lesson without a passed quiz.
-    let quiz_done = points::units_on(db, lang, "quiz", day).await? > 0;
-    let lessons = db.list_lessons(Some(lang), 30).await?;
-    let mut todo_lesson = None;
-    for row in &lessons {
-        let rel = l.ws.profile_relative(std::path::Path::new(&row.path));
-        if !points::already_passed(db, lang, "quiz", &rel).await? {
-            todo_lesson = Some(json!({ "id": row.id, "title": row.title }));
-            break;
+    let stats = db.stats(Some(lang), day_start(local_today()), Utc::now()).await?;
+    let plan = crate::courses::today_lessons(&l, lang).await?;
+    let mut tasks = vec![];
+    for les in plan["lessons"].as_array().into_iter().flatten() {
+        let generated = les["lesson_id"].is_i64();
+        for u in les["units"].as_array().into_iter().flatten() {
+            tasks.push(json!({
+                "id": "unit", "kind": u["kind"], "unit": u["index"], "minutes": u["minutes"], "items": u["items"], "done": u["done"],
+                "course": les["course"], "number": les["number"], "lesson_title": les["title"], "lesson_id": les["lesson_id"],
+                "needs_engine": !generated || u["kind"] == "conversation",
+                "due": if u["kind"] == "review" { json!(stats.due) } else { Value::Null },
+            }));
         }
     }
-
-    let mut tasks = vec![
-        json!({ "id": "review", "done": review_done, "due": stats.due, "progress": [in_round.min(r.points.review_round), r.points.review_round], "reviews_today": stats.reviews }),
-        json!({ "id": "conversation", "done": conv_done, "open": open.map(|(id, d, t)| json!({ "id": id, "turns_done": d, "turns_limit": t })), "needs_engine": true }),
-        json!({ "id": "lesson", "done": quiz_done, "lesson": todo_lesson, "needs_engine": todo_lesson.is_none() }),
-    ];
+    if let Some(units) = plan["daily"]["units"].as_array() {
+        for u in units {
+            tasks.push(json!({
+                "id": "unit", "daily": true, "kind": u["kind"], "unit": u["index"], "minutes": u["minutes"], "items": u["items"], "done": false,
+                "lesson_title": plan["daily"]["topic"]["name"], "needs_engine": true,
+                "due": if u["kind"] == "review" { json!(stats.due) } else { Value::Null },
+            }));
+        }
+    }
     if stats.open_mistakes > 0 {
         tasks.push(json!({ "id": "mistakes", "done": false, "open": stats.open_mistakes }));
     }
     let next = tasks.iter().position(|t| t["done"] != true);
-    Ok(Json(json!({ "summary": summary(&l.ws, db, lang, &r).await?, "tasks": tasks, "next": next })))
+    Ok(Json(json!({
+        "summary": summary(&l.ws, db, lang, &r).await?,
+        "lessons": plan["lessons"], "daily": plan["daily"], "per_day": plan["per_day"], "due": stats.due,
+        "tasks": tasks, "next": next,
+    })))
 }
 
 /// The progress page: level and conditions, skills, recent days, topics.
@@ -465,7 +458,9 @@ async fn finish_lesson(State(s): State<Shared>, AxPath(id): AxPath<i64>, Json(b)
     let difficulty_change = auto_difficulty(&s, lang).await?;
     let level_up = try_level_up(&s, lang).await?;
     let l = ws(&s).await?;
+    let page = crate::courses::refresh_lesson_page(&l, id).await;
     let mut out = result;
+    out["notebook"] = json!(page.as_deref().and_then(|p| std::path::Path::new(p).file_stem()).map(|x| x.to_string_lossy().to_string()));
     out["ask_difficulty"] = json!(l.ws.profile.lang(lang).early_feedback_left > 0);
     out["difficulty_change"] = json!(difficulty_change);
     out["level_up"] = json!(level_up);
@@ -539,25 +534,82 @@ async fn next_topic(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value>
 struct StartBody {
     lang: Option<String>,
     topic_id: Option<String>,
+    /// The conversation unit of a course lesson: its topic, opening and
+    /// target words come from the generated lesson.
+    course: Option<conversation::CourseLink>,
+}
+
+/// The conversation of a course unit, if one was started already.
+async fn course_conversation(db: &Db, link: &conversation::CourseLink) -> Result<Option<i64>, ApiError> {
+    let pat = format!("%\"course\":{}%", serde_json::to_string(link).unwrap_or_default());
+    Ok(sqlx::query_scalar("SELECT id FROM conversations WHERE data LIKE ? ORDER BY id DESC LIMIT 1").bind(pat).fetch_optional(db.pool()).await?)
+}
+
+/// A course unit's conversation: topic, opening line, turns and targets
+/// from the lesson (no model call for the opening).
+async fn course_start(l: &crate::Loaded, lang: Lang, link: &conversation::CourseLink) -> Result<(Topic, Vec<conversation::Target>, u32, String), ApiError> {
+    use jl_core::course::{plan::CourseLesson, store, UnitKind};
+    let c = store::load(&l.ws, &link.course).map_err(|e| bad(e.to_string()))?;
+    let lp = c.lesson(link.lesson).ok_or_else(|| bad("找不到這一課"))?;
+    let unit = lp.units.get(link.unit as usize).filter(|u| u.kind == UnitKind::Conversation).ok_or_else(|| bad("這個單元不是對話"))?;
+    let lid = l.db.course_lesson_id(&link.course, link.lesson).await?.ok_or_else(|| bad("請先打開這一課"))?;
+    let row = l.db.get_lesson(lid).await?.ok_or_else(|| bad("找不到教材"))?;
+    let cl: Option<CourseLesson> = serde_json::from_str(&row.data).ok();
+    let plan_conv = cl.as_ref().map(|x| x.conversation.clone()).unwrap_or_default();
+    let name = [plan_conv.topic.trim(), lp.conversation_topic.trim(), lp.title.trim()].into_iter().find(|x| !x.is_empty()).unwrap_or("對話").to_string();
+    let topic = Topic { id: format!("course:{}:{}", link.course, link.lesson), name, kind: TopicKind::Interest, group: c.name.clone() };
+    let mut terms: Vec<String> = plan_conv.target_words.clone();
+    if terms.is_empty() {
+        terms = lp.words.iter().map(|w| w.term.clone()).chain(lp.review.iter().cloned()).take(4).collect();
+    }
+    let mut targets = vec![];
+    for t in terms.into_iter().take(if lang == Lang::En { 5 } else { 4 }) {
+        let v = cl.as_ref().and_then(|x| x.lesson.vocabulary.iter().find(|v| v.term.eq_ignore_ascii_case(&t)));
+        let (reading, meaning) = match v {
+            Some(v) => (v.reading.clone(), v.meaning.clone()),
+            None => sqlx::query_as::<_, (String, String)>("SELECT reading, meaning FROM words WHERE lang = ? AND term = ? LIMIT 1")
+                .bind(lang.code())
+                .bind(&t)
+                .fetch_optional(l.db.pool())
+                .await?
+                .unwrap_or_default(),
+        };
+        targets.push(conversation::Target { term: jl_core::course::plan::strip_furigana(&t), reading, meaning });
+    }
+    Ok((topic, targets, unit.items.max(4), jl_core::course::plan::strip_furigana(&plan_conv.opening)))
 }
 
 /// Start a conversation: topic, target words, and the AI's opening.
 async fn start_conversation(State(s): State<Shared>, Json(b): Json<StartBody>) -> R<Value> {
     let lang = need_lang(&b.lang)?;
-    let (mut c, learner, templates, secs) = {
+    let (mut c, learner, templates, secs, opening) = {
         let l = ws(&s).await?;
         if !l.ws.profile.languages.contains(&lang) {
             return Err(bad(format!("{} 不在你的學習語言中", lang.label())));
         }
-        let topic = choose_topic(&l, lang, b.topic_id.as_deref(), &[]).await?;
-        let targets = conversation::pick_targets(&l.db, lang, if lang == Lang::En { 4 } else { 3 }).await?;
+        if let Some(link) = &b.course
+            && let Some(id) = course_conversation(&l.db, link).await?
+        {
+            // Resume (or show) the conversation already started for this unit.
+            let (row, c) = load_conversation(&l, id).await?;
+            return Ok(Json(view(id, &row.status, &row.path, &c, l.ws.profile.conversation.seconds_per_turn)));
+        }
+        let (topic, targets, turns, opening) = match &b.course {
+            Some(link) => course_start(&l, lang, link).await?,
+            None => (
+                choose_topic(&l, lang, b.topic_id.as_deref(), &[]).await?,
+                conversation::pick_targets(&l.db, lang, if lang == Lang::En { 4 } else { 3 }).await?,
+                l.ws.profile.conversation.turns,
+                String::new(),
+            ),
+        };
         let level = l.ws.profile.difficulty(lang).label;
         let c = Conversation {
             lang,
             topic,
             level: level.clone(),
             targets,
-            turns_limit: l.ws.profile.conversation.turns,
+            turns_limit: turns,
             turns: vec![],
             engine: String::new(),
             started_at: Utc::now(),
@@ -566,14 +618,20 @@ async fn start_conversation(State(s): State<Shared>, Json(b): Json<StartBody>) -
             score: None,
             passed: None,
             points: None,
+            course: b.course.clone(),
         };
-        (c, learner(&l.ws, lang, &level), ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.conversation.seconds_per_turn)
+        (c, learner(&l.ws, lang, &level), ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.conversation.seconds_per_turn, opening)
     };
     let p = provider(&s).await?;
     c.engine = p.id();
-    let req = conversation::turn_request(&templates, &c, &learner).map_err(|e| bad(e.to_string()))?;
-    let reply = conversation::parse_turn(&p.chat(&req).await.map_err(api_err)?).map_err(api_err)?;
-    c.turns.push(Turn { role: Speaker::Ai, text: reply.question, recast: String::new(), starters: reply.starters, used: vec![], at: Utc::now() });
+    if opening.trim().is_empty() {
+        let req = conversation::turn_request(&templates, &c, &learner).map_err(|e| bad(e.to_string()))?;
+        let reply = conversation::parse_turn(&p.chat(&req).await.map_err(api_err)?).map_err(api_err)?;
+        c.turns.push(Turn { role: Speaker::Ai, text: reply.question, recast: String::new(), starters: reply.starters, used: vec![], at: Utc::now() });
+    } else {
+        let starters = if lang == Lang::Ja { vec!["わたしは〜".to_string(), "〜とおもいます".to_string(), "〜がすきです".to_string()] } else { vec![] };
+        c.turns.push(Turn { role: Speaker::Ai, text: opening, recast: String::new(), starters, used: vec![], at: Utc::now() });
+    }
     let l = ws(&s).await?;
     let id = conversation::insert(&l.db, &c, "").await?;
     Ok(Json(view(id, "active", "", &c, secs)))
@@ -692,8 +750,15 @@ async fn finish_conversation(State(s): State<Shared>, AxPath(id): AxPath<i64>) -
     };
     let level_up = try_level_up(&s, lang).await?;
     let l = ws(&s).await?;
+    let page = crate::courses::conversation_page(&l, &c, &rel);
+    let course = match &c.course {
+        Some(link) => Some(crate::courses::conversation_unit_done(&l, link, passed, c.score).await?),
+        None => None,
+    };
     let mut out = view(id, "done", &rel, &c, l.ws.profile.conversation.seconds_per_turn);
     out["result"] = result_json(&c, &rel, level_up);
+    out["result"]["notebook"] = json!(page.as_deref().and_then(|p| std::path::Path::new(p).file_stem()).map(|x| x.to_string_lossy().to_string()));
+    out["result"]["course"] = json!(course);
     out["summary"] = summary(&l.ws, &l.db, lang, &r).await?;
     Ok(Json(out))
 }
@@ -721,7 +786,7 @@ fn avatar_dir(st: &crate::Settings, ws_id: &str) -> PathBuf {
 
 const AVATAR_EXTS: &[(&str, &str)] = &[("jpg", "image/jpeg"), ("png", "image/png"), ("webp", "image/webp")];
 
-fn image_ext(bytes: &[u8]) -> Option<&'static str> {
+pub(crate) fn image_ext(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
         Some("jpg")
     } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {

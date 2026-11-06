@@ -742,10 +742,14 @@ async fn typed_conversation_until_locked() {
     assert_eq!(again["result"]["points"], 1.5);
     assert_eq!(points_csv(&ws_path).matches(",conversation,").count(), 1);
 
-    // Today: the conversation task is done.
+    // Today: no course yet, so the steps of today's daily lesson (a free
+    // conversation is extra practice, not one of its steps).
     let (_, today) = c.get("/api/today?lang=en").await;
-    let task = today["tasks"].as_array().unwrap().iter().find(|t| t["id"] == "conversation").unwrap().clone();
-    assert_eq!(task["done"], true, "{today}");
+    assert!(today["daily"]["topic"]["name"].is_string(), "{today}");
+    let kinds: Vec<&str> = today["tasks"].as_array().unwrap().iter().filter_map(|t| t["kind"].as_str()).collect();
+    assert_eq!(kinds.first(), Some(&"review"), "{today}");
+    assert!(kinds.contains(&"conversation") && kinds.contains(&"reading"), "{today}");
+    assert_eq!(today["next"], 0);
     assert_eq!(today["summary"]["streak"], 1);
 
     // Japanese: low-pressure prompt with sentence starters.

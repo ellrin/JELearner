@@ -109,6 +109,13 @@ pub fn ruby_html(text: &str) -> String {
     map_ruby(text, |base, reading| format!("<ruby>{base}<rt>{reading}</rt></ruby>"))
 }
 
+/// Like [`ruby_html`] for text that goes into HTML: `&`, `<` and `>` are
+/// escaped first (readings and bases too), then `{漢字|かんじ}` becomes ruby.
+pub fn ruby_html_escaped(text: &str) -> String {
+    let esc = text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    ruby_html(&esc)
+}
+
 fn map_ruby(text: &str, f: impl Fn(&str, &str) -> String) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -393,6 +400,8 @@ pub(crate) mod tests {
         assert_eq!(strip_furigana(t), "今日は雨です。{not ruby}");
         assert_eq!(ruby_html("{雨|あめ}"), "<ruby>雨<rt>あめ</rt></ruby>");
         assert_eq!(missing_words(t, &["今日".into(), "晴れ".into()], Lang::Ja), vec!["晴れ".to_string()]);
+        assert_eq!(ruby_html_escaped("<b>{雨|あめ}</b> & {x|y"), "&lt;b&gt;<ruby>雨<rt>あめ</rt></ruby>&lt;/b&gt; &amp; {x|y");
+        assert_eq!(ruby_html("{日本語|にほんご}を{勉強|べんきょう}する"), "<ruby>日本語<rt>にほんご</rt></ruby>を<ruby>勉強<rt>べんきょう</rt></ruby>する");
     }
 
     #[test]

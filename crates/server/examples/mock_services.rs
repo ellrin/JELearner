@@ -7,8 +7,9 @@
 //!
 //! - a Claude Messages API that answers with a canned lesson (English or
 //!   Japanese, depending on the article), conversation turns (a recast of the
-//!   learner's message and the next question) and the end evaluation — told
-//!   apart by the JSON schema in the request;
+//!   learner's message and the next question), the end evaluation, course
+//!   outlines (topic and fixed) and course lessons that use the planned
+//!   words — told apart by the JSON schema in the request;
 //! - a news site with robots.txt (`/private/` disallowed), an English and a
 //!   Japanese RSS feed and article pages.
 
@@ -130,11 +131,155 @@ fn review(ja: bool) -> Value {
     }
 }
 
+// ── courses (docs/courses.md) ──────────────────────────
+
+const EN_POOL: &[(&str, &str, &str)] = &[
+    ("semiconductor", "/ˌsemikənˈdʌktər/", "半導體"),
+    ("processor", "/ˈprəʊsesər/", "處理器"),
+    ("subsidy", "/ˈsʌbsədi/", "補助"),
+    ("capacity", "/kəˈpæsəti/", "產能"),
+    ("wafer", "/ˈweɪfər/", "晶圓"),
+    ("foundry", "/ˈfaʊndri/", "晶圓代工廠"),
+    ("throughput", "/ˈθruːpʊt/", "產出量"),
+    ("shortage", "/ˈʃɔːrtɪdʒ/", "短缺"),
+    ("efficiency", "/ɪˈfɪʃnsi/", "效率"),
+    ("benchmark", "/ˈbentʃmɑːrk/", "基準"),
+];
+const JA_POOL: &[(&str, &str, &str)] = &[
+    ("天気", "てんき", "天氣"),
+    ("電車", "でんしゃ", "電車"),
+    ("駅", "えき", "車站"),
+    ("友達", "ともだち", "朋友"),
+    ("映画", "えいが", "電影"),
+    ("料理", "りょうり", "料理"),
+    ("学校", "がっこう", "學校"),
+    ("音楽", "おんがく", "音樂"),
+    ("週末", "しゅうまつ", "週末"),
+    ("図書館", "としょかん", "圖書館"),
+];
+
+const JA_QS: [&str; 5] = ["{今日|きょう}の{天気|てんき}は？", "なにについて{話|はな}しましたか。", "どうでしたか。", "だれと{話|はな}しましたか。", "どこですか。"];
+const EN_QS: [&str; 5] = ["What did the chipmakers announce?", "What is the main bottleneck?", "Who explained why it matters?", "What may be slow?", "What will shape the next decade?"];
+
+/// A topic outline (5 lessons, new words in lessons 1–3 are kept by the app).
+fn course_outline(user: &str, ja: bool) -> Value {
+    let kw = user.lines().find_map(|l| l.strip_prefix("Keywords: ")).unwrap_or(if ja { "日本の生活" } else { "AI chips" }).to_string();
+    let pool = if ja { JA_POOL } else { EN_POOL };
+    let angles = ["background", "technical", "social", "personal life", "review"];
+    let lessons: Vec<Value> = (0..5)
+        .map(|i| {
+            let w = |k: usize| { let t = pool[k % pool.len()]; json!({ "term": t.0, "reading": t.1, "meaning": t.2 }) };
+            json!({
+                "title": if ja { format!("{kw}（{}）", i + 1) } else { format!("{kw}: {}", ["What it is", "Inside the fab", "Chips and jobs", "My phone's chip", "Looking back"][i]) },
+                "angle": angles[i], "purpose": "認識主題的核心單字", "search": [kw.clone()],
+                "conversation_topic": if ja { "週末になにをしますか".to_string() } else { format!("What do you think about {kw}?") },
+                "words": [w(3 * i), w(3 * i + 1), w(3 * i + 2)],
+                "grammar": [if ja { json!({ "pattern": "〜たいです", "meaning": "想要…" }) } else { json!({ "pattern": "so ... that ...", "meaning": "如此…以致於" }) }]
+            })
+        })
+        .collect();
+    json!({ "title": if ja { kw.clone() } else { format!("{kw} This Week") }, "summary": if ja { "用簡單的日文認識主題" } else { "一週認識這個主題" }, "keywords": [kw], "enough_material": true, "lessons": lessons })
+}
+
+fn fixed_titles() -> Value {
+    json!({ "lessons": (1..=80).map(|n| json!({ "number": n, "title": format!("Workday {n}"), "angle": "work", "purpose": "職場常用字", "conversation_topic": "Your workplace" })).collect::<Vec<_>>() })
+}
+
+/// A course lesson that uses every planned word (parsed from the prompt);
+/// Japanese texts mark readings as {漢字|かんじ}.
+fn course_lesson(user: &str, ja: bool) -> Value {
+    let mut words: Vec<(String, String, String)> = vec![];
+    let mut review: Vec<String> = vec![];
+    let mut outputs: Vec<(String, usize)> = vec![];
+    let mut questions = 3;
+    let mut in_words = false;
+    for line in user.lines() {
+        if line.starts_with("New words:") { in_words = true; continue; }
+        if in_words {
+            match line.strip_prefix("- ") {
+                Some("(none)") => {}
+                Some(w) => {
+                    let (head, meaning) = w.split_once(": ").unwrap_or((w, ""));
+                    let (term, reading) = match head.split_once(" [") { Some((t, r)) => (t.to_string(), r.trim_end_matches(']').to_string()), None => (head.to_string(), String::new()) };
+                    words.push((term, reading, meaning.to_string()));
+                    continue;
+                }
+                None => in_words = false,
+            }
+        }
+        if let Some(r) = line.strip_prefix("Review words (use them in the text too): ") { review = r.split(", ").map(String::from).collect(); }
+        if let Some(q) = line.strip_prefix("- Reading questions: ") { questions = q.trim().parse().unwrap_or(3).clamp(1, 5); }
+        for kind in ["translation", "sentence-making", "cloze", "paraphrase"] {
+            if let Some(n) = line.strip_prefix(&format!("- {kind}: ")) { outputs.push((kind.to_string(), n.split(' ').next().unwrap_or("2").parse().unwrap_or(2))); }
+        }
+    }
+    if words.is_empty() && review.is_empty() {
+        let pool = if ja { JA_POOL } else { EN_POOL };
+        words = pool.iter().take(4).map(|t| (t.0.to_string(), t.1.to_string(), t.2.to_string())).collect();
+    }
+    let reading_of = |t: &str| words.iter().find(|w| w.0 == t).map(|w| w.1.clone()).or_else(|| JA_POOL.iter().find(|p| p.0 == t).map(|p| p.1.to_string())).unwrap_or_default();
+    let mark = |t: &str| if ja && !reading_of(t).is_empty() { format!("{{{t}|{}}}", reading_of(t)) } else { t.to_string() };
+    let all: Vec<String> = words.iter().map(|w| w.0.clone()).chain(review.iter().cloned()).collect();
+    let text = if ja {
+        let mut t = String::from("{今日|きょう}は{晴|は}れです。");
+        for w in &all { t.push_str(&format!("{}について{{話|はな}}しました。", mark(w))); }
+        t.push_str("とても{楽|たの}しかったです。");
+        t
+    } else {
+        let mut t = String::from("Several chipmakers announced new factories this week. ");
+        for (i, w) in all.iter().enumerate() {
+            t.push_str(&[format!("Analysts say the {w} question will shape the next decade. "), format!("Engineers explained why {w} matters for cheaper phones. "), format!("A government report linked {w} to new jobs in the region. ")][i % 3]);
+        }
+        t.push_str("Power supply is still the main bottleneck, so progress may be slow.");
+        t
+    };
+    let vocabulary: Vec<Value> = words.iter().map(|(t, r, m)| json!({
+        "term": t, "reading": r, "part_of_speech": if ja { "名詞" } else { "n." }, "meaning": m,
+        "example": if ja { format!("{}はとても{{大切|たいせつ}}です。", mark(t)) } else { format!("The {t} is growing fast.") },
+        "example_translation": if ja { format!("{m}非常重要。") } else { format!("{m}正快速成長。") }
+    })).collect();
+    let qs: Vec<Value> = (0..questions).map(|i| if ja {
+        json!({ "kind": "choice", "question": JA_QS[i % 5], "options": ["{晴|は}れ", "{雨|あめ}", "{雪|ゆき}"], "answer": "{晴|は}れ", "explanation": "課文第一句。" })
+    } else {
+        json!({ "kind": "choice", "question": EN_QS[i % 5], "options": ["New factories", "Layoffs", "A merger"], "answer": "New factories", "explanation": "第一句提到新工廠。" })
+    }).collect();
+    let mut output: Vec<Value> = vec![];
+    for (k, n) in &outputs { for i in 0..*n {
+        let w = all.get(i % all.len().max(1)).cloned().unwrap_or_default();
+        output.push(
+        match (k.as_str(), ja) {
+            ("translation", false) => json!({ "kind": k, "prompt": format!("政府提供{}給新工廠。", ["補助", "協助", "資金"][i % 3]), "answer": "The government gives a subsidy to the new factory.", "hint": w }),
+            ("translation", true) => json!({ "kind": k, "prompt": "我週末和朋友去看電影。", "answer": "{週末|しゅうまつ}、{友達|ともだち}と{映画|えいが}を{見|み}に{行|い}きました。", "hint": w }),
+            (_, false) => json!({ "kind": k, "prompt": format!("用「{w}」造一個句子"), "answer": format!("The new {w} will help many people."), "hint": w }),
+            (_, true) => json!({ "kind": k, "prompt": format!("「{w}」を{{使|つか}}って{{文|ぶん}}を{{作|つく}}ってください。"), "answer": format!("{}がすきです。", mark(&w)), "hint": w }),
+        });
+    } }
+    json!({
+        "title": if ja { "{今日|きょう}の{話|はなし}" } else { "Inside the fab" },
+        "summary": if ja { "用今天的單字聊日常生活。" } else { "晶片廠擴產，帶動補助與就業的討論。" },
+        "text": text, "vocabulary": vocabulary,
+        "grammar": [if ja {
+            json!({ "pattern": "〜たいです", "meaning": "想要…", "explanation": "動詞ます形去掉ます＋たいです，表示自己的願望。", "example": "{映画|えいが}が{見|み}たいです。", "example_translation": "我想看電影。" })
+        } else {
+            json!({ "pattern": "so ... that ...", "meaning": "如此…以致於…", "explanation": "so 後接形容詞或副詞，that 子句說明結果。", "example": "The demand was so high that prices rose.", "example_translation": "需求高到價格上漲。" })
+        }],
+        "questions": qs, "output": output,
+        "conversation": { "topic": if ja { "週末のこと" } else { "Should governments pay for chip factories?" }, "opening": if ja { "こんにちは！{週末|しゅうまつ}はなにをしましたか。" } else { "Hi! Do you think a subsidy for a chip factory is a good idea?" }, "target_words": all.iter().take(3).collect::<Vec<_>>() }
+    })
+}
+
 async fn messages(Json(b): Json<Value>) -> Json<Value> {
     let user = b["messages"][0]["content"].as_str().unwrap_or("");
     let ja = user.chars().any(|c| ('\u{3040}'..='\u{30ff}').contains(&c));
     let props = &b["output_config"]["format"]["schema"]["properties"];
-    let (text, wait) = if props["recast"].is_object() {
+    let (text, wait) = if props["enough_material"].is_object() {
+        (course_outline(user, ja || user.contains("Japanese")).to_string(), 900)
+    } else if props["lessons"]["items"]["properties"]["number"].is_object() {
+        (fixed_titles().to_string(), 600)
+    } else if props["text"].is_object() && props["conversation"].is_object() {
+        let ja = b["system"].as_str().unwrap_or("").contains("Japanese teacher");
+        (course_lesson(user, ja).to_string(), 1000)
+    } else if props["recast"].is_object() {
         (turn(&b).to_string(), 500)
     } else if props["fluency"].is_object() {
         let ja = b["system"].as_str().unwrap_or("").contains("in Japanese");

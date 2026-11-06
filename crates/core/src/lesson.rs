@@ -269,6 +269,14 @@ pub fn embed_data<T: Serialize>(markdown: &str, data: &T) -> String {
     format!("{}\n\n{DATA_MARK}{json} -->\n", markdown.trim_end())
 }
 
+/// The embedded data as JSON, with every field (a course lesson's text,
+/// output exercises and conversation plan too).
+pub fn extract_raw(markdown: &str) -> Option<serde_json::Value> {
+    let start = markdown.rfind(DATA_MARK)? + DATA_MARK.len();
+    let end = markdown[start..].find(" -->")? + start;
+    serde_json::from_str(&markdown[start..end]).ok()
+}
+
 pub fn extract_data(markdown: &str) -> Option<Lesson> {
     let start = markdown.rfind(DATA_MARK)? + DATA_MARK.len();
     let end = markdown[start..].find(" -->")? + start;
