@@ -75,6 +75,10 @@ scripts/dev.sh --mock                        # both of the above together
   real Google OAuth) is verified with mock data and marked **not tested on real
   hardware** in code comments and docs.
 - Propose a task list before large changes; each stage must build and test.
+- Every frontend UI change (web/) is reviewed afterwards by an advisor (a separate review
+  agent that runs the app, takes screenshots across themes and widths, and checks the three
+  UI principles in docs/plan.md §0.1); fix its findings before calling the UI done.
+  New CSS uses the `--accent*-text` tokens for accent text, line icons and thin borders.
 - Commits: the author (ellrin) is the only author. Do not add `Co-Authored-By` or other
   AI attribution trailers to commit messages; the README's 開發說明 section already
   notes that Claude Code helped write the code.

@@ -126,15 +126,15 @@ const THEMES = [
   { id: "synthwave", name: "落日合成", dark: true, multi: true, sw: ["#1e1329", "#ff8a3d", "#ff4fa0", "#b691ff"] },
   { id: "aurora", name: "極光", dark: true, multi: true, sw: ["#121b2a", "#4cf5a8", "#46c8ff", "#d58cff"] },
   { id: "lavender", name: "薰衣草", dark: false, multi: false, sw: ["#ebe7f6", "#b7abdb", "#6f4fd0", "#5232ad"] },
-  { id: "lemon", name: "檸檬塔", dark: false, multi: false, sw: ["#faf2d2", "#d3c27a", "#b86f00", "#8f5a00"] },
+  { id: "lemon", name: "檸檬塔", dark: false, multi: false, sw: ["#faf2d2", "#ffdf5e", "#f5c518", "#e9a200"] },
   { id: "mint", name: "薄荷", dark: false, multi: false, sw: ["#e2f3eb", "#9eccb5", "#0b7a5d", "#08604a"] },
   { id: "blueberry", name: "藍莓", dark: false, multi: false, sw: ["#e3e8f6", "#a6b3db", "#3a4bb0", "#2a3888"] },
   { id: "strawberry", name: "草莓", dark: false, multi: false, sw: ["#f9e4ea", "#d9a2b4", "#c8254f", "#9c1a3c"] },
-  { id: "giftbox", name: "甜點禮盒", dark: false, multi: true, sw: ["#f8efe4", "#c2366b", "#0f7d62", "#966500"] },
-  { id: "peachlavender", name: "蜜桃薰衣草", dark: false, multi: true, sw: ["#fae7da", "#d85a34", "#7556c9", "#b8487c"] },
-  { id: "sakuramatcha", name: "櫻花抹茶", dark: false, multi: true, sw: ["#f5eaee", "#d05a88", "#557619", "#8c4f42"] },
-  { id: "blueberrylemon", name: "藍莓檸檬", dark: false, multi: true, sw: ["#e6ebf7", "#3a4bb0", "#926400", "#8048a8"] },
-  { id: "caramelpistachio", name: "焦糖開心果", dark: false, multi: true, sw: ["#f2e7d6", "#955222", "#4c7a1a", "#a8475a"] },
+  { id: "giftbox", name: "甜點禮盒", dark: false, multi: true, sw: ["#f8efe4", "#e0457b", "#3ec7a0", "#f5c518"] },
+  { id: "peachlavender", name: "蜜桃薰衣草", dark: false, multi: true, sw: ["#fae7da", "#ff8a5c", "#9b7fe6", "#e86a9e"] },
+  { id: "sakuramatcha", name: "櫻花抹茶", dark: false, multi: true, sw: ["#f5eaee", "#f08cae", "#8dba4a", "#8c4f42"] },
+  { id: "blueberrylemon", name: "藍莓檸檬", dark: false, multi: true, sw: ["#e6ebf7", "#4a5fd0", "#f5c518", "#a462d4"] },
+  { id: "caramelpistachio", name: "焦糖開心果", dark: false, multi: true, sw: ["#f2e7d6", "#d68b3a", "#93c572", "#cf6f84"] },
 ];
 const DEFAULT_THEME = "giftbox";
 // Ids from earlier versions → the nearest current theme.
@@ -181,8 +181,8 @@ async function chooseTheme(id) {
   }
   applyTheme();
 }
-// Settings → 外觀: a swatch card per theme (dark row, then light row; single
-// hue first, then combinations); hover or focus previews it.
+// Settings → 外觀: a swatch card per theme (light group, then dark; in each,
+// single hue, then combinations); hover or focus previews it.
 for (const t of THEMES) {
   const b = el("button", "theme-card");
   b.dataset.theme = t.id;
@@ -193,7 +193,7 @@ for (const t of THEMES) {
   b.onmouseenter = b.onfocus = () => showTheme(t.id);
   b.onmouseleave = b.onblur = () => showTheme(currentTheme());
   b.onclick = () => chooseTheme(t.id);
-  $(t.dark ? "#themesDark" : "#themesLight").append(b);
+  $(`#themes${t.dark ? "Dark" : "Light"}${t.multi ? "Multi" : "Mono"}`).append(b);
 }
 
 // ── help tips & collapsible blocks ─────────────────────
@@ -242,12 +242,7 @@ async function refreshStatus() {
   const who = `${s.user?.id ?? ""}/${state.lang}`;
   if (state.who !== who) {
     state.who = who;
-    state.review = { items: [], i: 0, shown: false, done: 0 };
-    state.picked = null;
-    state.lessonId = null;
-    Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null });
-    updatePicked();
-    const out = $("#genOut"); out.textContent = ""; out.title = "";
+    resetUserState();
   }
   refreshMe();
   const st = s.stats?.[state.lang] ?? {};
@@ -315,7 +310,7 @@ function greet() {
 function setLang(v) {
   state.lang = v; store.set("jl.lang", v);
   state.picked = null; state.lessonId = null; state.review = { items: [], i: 0, shown: false, done: 0 };
-    Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null, conv: null });
+  Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null, conv: null });
   updatePicked();
   refreshStatus().then(() => { greet(); render(); });
 }
@@ -385,12 +380,32 @@ document.addEventListener("click", (e) => {
   document.body.classList.remove("aside-open", "nav-open");
 });
 
+/**
+ * Forget everything that belongs to the previous user (or language): the open
+ * conversation, the review queue, the picked article, the open lesson and
+ * the today page mode. Called on every user switch and new user, and by
+ * refreshStatus whenever the user or language changes.
+ */
+function resetUserState() {
+  state.conv = null;
+  state.todayMode = "tasks";
+  state.review = { items: [], i: 0, shown: false, done: 0 };
+  state.picked = null;
+  state.lessonId = null;
+  state.showMd = false;
+  state.query = "";
+  state.summary = null;
+  Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null });
+  if (typeof convTimer !== "undefined") clearInterval(convTimer);
+  if (typeof skipTopics !== "undefined") skipTopics = [];
+  updatePicked();
+  const out = $("#genOut"); out.textContent = ""; out.title = "";
+}
+
 async function switchUser(id) {
   try {
     await api("/api/users/select", { id });
-    state.picked = null; state.lessonId = null; state.review = { items: [], i: 0, shown: false, done: 0 };
-    Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null, conv: null });
-    updatePicked();
+    resetUserState();
     await refreshStatus();
     greet();
     render();
@@ -463,16 +478,21 @@ function ghostButton(iconName, label, onclick) {
   return b;
 }
 
+// Each render draws into its own detached container; only the latest call
+// puts it on the page, so overlapping calls never draw a page twice.
+let renderGen = 0;
 async function render() {
+  const gen = ++renderGen;
   $$("#views button").forEach((b) => (b.getAttribute("data-view") === state.view ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
-  const page = $("#page");
-  page.innerHTML = "";
+  const body = el("div", "page-body");
   try {
     await ({ today: renderToday, courses: renderCourses, conversation: renderConversation, news: renderNews, lessons: renderLessons, words: renderWords, grammar: renderGrammar,
-      mistakes: renderMistakes, notebook: renderNotebook, materials: renderMaterials, progress: renderProgress }[state.view] ?? renderToday)(page);
+      mistakes: renderMistakes, notebook: renderNotebook, materials: renderMaterials, progress: renderProgress }[state.view] ?? renderToday)(body);
   } catch (e) {
-    page.append(el("div", "empty", e.message));
+    body.append(el("div", "empty", e.message));
   }
+  if (gen !== renderGen) return;
+  $("#page").replaceChildren(body);
   $("#pageArea").scrollTop = 0;
 }
 

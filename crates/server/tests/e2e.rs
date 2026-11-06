@@ -773,6 +773,54 @@ async fn typed_conversation_until_locked() {
     assert_eq!(today2["summary"]["total"], 1.5, "points restored from records/points");
 }
 
+/// A conversation belongs to the user who started it: after switching to
+/// daidai, ellrin's conversation id cannot be read, continued or finished,
+/// not even when daidai has a conversation with the same id.
+#[tokio::test]
+async fn conversation_stays_with_its_user_after_a_switch() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws_path = ws_dir.path().join("JELearner-private");
+    let (c, _calls) = stage_a_setup(app_dir.path(), &ws_path).await;
+    let (code, conv) = c.post("/api/conversations", json!({"lang": "en"})).await;
+    assert_eq!(code, StatusCode::OK, "{conv}");
+    let id = conv["id"].as_i64().unwrap();
+    let (code, r) = c.post(&format!("/api/conversations/{id}/turns?user=ellrin"), json!({"text": "This is my first answer about music."})).await;
+    assert_eq!(code, StatusCode::OK, "{r}");
+
+    // Switch: creating daidai makes her the active user.
+    let (code, r) = c.post("/api/users", json!({"name": "daidai", "languages": ["ja"], "majors": {"ja": "N5"}})).await;
+    assert_eq!(code, StatusCode::OK, "{r}");
+    assert_eq!(r["user"]["id"], "daidai");
+    let turn = json!({"text": "This is my second answer about music."});
+    let (code, _) = c.get(&format!("/api/conversations/{id}")).await;
+    assert_eq!(code, StatusCode::NOT_FOUND, "not in daidai's database");
+    let (code, _) = c.post(&format!("/api/conversations/{id}/turns"), turn.clone()).await;
+    assert_eq!(code, StatusCode::NOT_FOUND);
+    let (code, _) = c.post(&format!("/api/conversations/{id}/finish"), json!({})).await;
+    assert_eq!(code, StatusCode::NOT_FOUND);
+    let (code, _) = c.post(&format!("/api/conversations/{id}/turns?user=ellrin"), turn.clone()).await;
+    assert_eq!(code, StatusCode::CONFLICT, "the page still thinks ellrin is active");
+
+    // daidai's own first conversation gets the same id in her database.
+    let (code, dconv) = c.post("/api/conversations", json!({"lang": "ja"})).await;
+    assert_eq!(code, StatusCode::OK, "{dconv}");
+    assert_eq!(dconv["id"].as_i64().unwrap(), id, "ids are per user");
+    let (code, _) = c.post(&format!("/api/conversations/{id}/turns?user=ellrin"), json!({"text": "音楽が好きです、特に jazz"})).await;
+    assert_eq!(code, StatusCode::CONFLICT, "ellrin's page cannot write into daidai's conversation");
+    let (code, _) = c.post(&format!("/api/conversations/{id}/finish?user=ellrin"), json!({})).await;
+    assert_eq!(code, StatusCode::CONFLICT);
+    let (_, d) = c.get(&format!("/api/conversations/{id}?user=daidai")).await;
+    assert_eq!(d["turns_done"], 0, "daidai's conversation is untouched");
+
+    // Back to ellrin: her conversation goes on where it was.
+    let (code, _) = c.post("/api/users/select", json!({"id": "ellrin"})).await;
+    assert_eq!(code, StatusCode::OK);
+    let (code, r) = c.post(&format!("/api/conversations/{id}/turns?user=ellrin"), turn).await;
+    assert_eq!(code, StatusCode::OK, "{r}");
+    assert_eq!(r["turns_done"], 2);
+}
+
 /// Points come back on a fresh machine from records/points; a level step
 /// needs points, balance and recent scores; lessons, reviews and passive
 /// reading earn points; early difficulty feedback moves the difficulty.

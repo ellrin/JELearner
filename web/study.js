@@ -28,12 +28,26 @@ function levelRing(size, label, frac, sub, ready) {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  // The ring runs from --accent to --accent-2 (stop colours in styles.css).
+  const gid = `lr-grad-${++levelRing.n}`;
+  const defs = document.createElementNS(ns, "defs");
+  const grad = document.createElementNS(ns, "linearGradient");
+  grad.id = gid;
+  grad.setAttribute("x1", "1"); grad.setAttribute("y1", "0.5"); grad.setAttribute("x2", "0"); grad.setAttribute("y2", "0.5");
+  for (const [off, cls] of [["0", "g1"], ["1", "g2"]]) {
+    const st = document.createElementNS(ns, "stop");
+    st.setAttribute("offset", off); st.setAttribute("class", cls);
+    grad.append(st);
+  }
+  defs.append(grad);
+  svg.append(defs);
   for (const cls of ["track", "fill"]) {
     const ci = document.createElementNS(ns, "circle");
     ci.setAttribute("class", cls);
     ci.setAttribute("cx", size / 2); ci.setAttribute("cy", size / 2); ci.setAttribute("r", r);
     ci.setAttribute("stroke-width", w);
     if (cls === "fill") {
+      ci.style.stroke = `url(#${gid})`;
       ci.setAttribute("stroke-dasharray", c);
       ci.setAttribute("stroke-dashoffset", c);
       requestAnimationFrame(() => requestAnimationFrame(() => ci.setAttribute("stroke-dashoffset", c * (1 - Math.max(0, Math.min(1, frac))))));
@@ -48,6 +62,7 @@ function levelRing(size, label, frac, sub, ready) {
   box.append(svg, lab);
   return box;
 }
+levelRing.n = 0;
 
 /** `.pts-bar`: a filled bar (0–1). */
 function ptsBar(frac, cls = "") {
@@ -399,7 +414,7 @@ async function renderConversation(page) {
     if (open) state.conv = { id: open.id };
   }
   if (state.conv?.id && !state.conv.conversation) {
-    try { state.conv = await api(`/api/conversations/${state.conv.id}`); } catch { state.conv = null; }
+    try { state.conv = await api(`/api/conversations/${state.conv.id}?user=${encodeURIComponent(state.status.user.id)}`); } catch { state.conv = null; }
   }
   if (state.conv && state.conv.conversation.lang !== state.lang) state.conv = null;
   if (!state.conv) return drawConvStart(page, list);
@@ -603,7 +618,7 @@ function composer(v, tr, ja) {
     $("#pageArea").scrollTop = $("#pageArea").scrollHeight;
     const usedBefore = v.used;
     try {
-      const r = await api(`/api/conversations/${v.id}/turns`, { text });
+      const r = await api(`/api/conversations/${v.id}/turns?user=${encodeURIComponent(state.status?.user?.id ?? "")}`, { text });
       state.conv = r;
       drawConv($("#page"), r.used.filter((u) => !usedBefore.includes(u)));
       if (r.locked) finishConversation();
@@ -670,7 +685,7 @@ function backToLesson(link) {
 
 async function finishConversation() {
   try {
-    const r = await api(`/api/conversations/${state.conv.id}/finish`, {});
+    const r = await api(`/api/conversations/${state.conv.id}/finish?user=${encodeURIComponent(state.status?.user?.id ?? "")}`, {});
     r.justFinished = true;
     state.conv = r;
     drawConv($("#page"));
