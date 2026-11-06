@@ -52,6 +52,36 @@ const fmtDue = (s) => {
   return d <= 0 ? "到期" : d < 1 ? "今天" : `${Math.ceil(d)} 天後`;
 };
 const isJa = () => state.lang === "ja";
+
+// ── furigana ───────────────────────────────────────────
+// Japanese lesson texts mark readings as {漢字|かんじ}; they show as <ruby>.
+// The reading line can be hidden (remembered per user on this computer).
+const escHtml = (t) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const RUBY_RE = /\{([^{}|]+)\|([^{}]*)\}/g;
+/** `{漢字|かんじ}` → `<ruby>漢字<rt>かんじ</rt></ruby>` (the rest escaped). */
+function rubyHtml(text) { return escHtml(text).replace(RUBY_RE, "<ruby>$1<rt>$2</rt></ruby>"); }
+/** `{漢字|かんじ}` → `漢字`. */
+function plainRuby(text) { return String(text ?? "").replace(RUBY_RE, "$1"); }
+/** Text into a node: Japanese with ruby and lang="ja", otherwise plain. */
+function setText(node, text, lang) {
+  if (lang === "ja") { node.innerHTML = rubyHtml(text); node.lang = "ja"; }
+  else node.textContent = plainRuby(text);
+  return node;
+}
+/** el() for lesson content in either language. */
+const elr = (tag, cls, text, lang) => setText(el(tag, cls), text, lang);
+const furiKey = () => `jl.furigana.${state.status?.user?.id ?? "_"}`;
+const furiganaOn = () => store.get(furiKey(), true);
+function applyFurigana() { document.documentElement.classList.toggle("hide-rt", !furiganaOn()); }
+/** The ふりがな switch (Japanese pages only). */
+function furiganaButton() {
+  const b = el("button", "ghost furi", "ふりがな");
+  b.lang = "ja";
+  b.setAttribute("aria-pressed", String(furiganaOn()));
+  b.title = "顯示或隱藏假名標音";
+  b.onclick = () => { store.set(furiKey(), !furiganaOn()); applyFurigana(); b.setAttribute("aria-pressed", String(furiganaOn())); };
+  return b;
+}
 const langLabel = (l) => ({ en: "英文", ja: "日文" }[l] ?? l);
 
 // ── feedback ───────────────────────────────────────────
@@ -207,6 +237,7 @@ async function refreshStatus() {
   }
   const s = state.status;
   applyUser();
+  applyFurigana();
   // Another user or language: the review queue and selections belong to them.
   const who = `${s.user?.id ?? ""}/${state.lang}`;
   if (state.who !== who) {
@@ -214,6 +245,7 @@ async function refreshStatus() {
     state.review = { items: [], i: 0, shown: false, done: 0 };
     state.picked = null;
     state.lessonId = null;
+    Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null });
     updatePicked();
     const out = $("#genOut"); out.textContent = ""; out.title = "";
   }
@@ -283,6 +315,7 @@ function greet() {
 function setLang(v) {
   state.lang = v; store.set("jl.lang", v);
   state.picked = null; state.lessonId = null; state.review = { items: [], i: 0, shown: false, done: 0 };
+    Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null, conv: null });
   updatePicked();
   refreshStatus().then(() => { greet(); render(); });
 }
@@ -356,6 +389,7 @@ async function switchUser(id) {
   try {
     await api("/api/users/select", { id });
     state.picked = null; state.lessonId = null; state.review = { items: [], i: 0, shown: false, done: 0 };
+    Object.assign(state, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null, conv: null });
     updatePicked();
     await refreshStatus();
     greet();
@@ -394,7 +428,8 @@ function langPicker(box, user, showProgress) {
   };
 }
 
-$$("#views button").forEach((b) => (b.onclick = () => { go(b.dataset.view); }));
+// The nav opens a view at its start (list, not the last opened item).
+$$("#views button").forEach((b) => (b.onclick = () => { go(b.dataset.view, { course: null, courseLesson: null, courseCreate: null, step: null, nbPage: null, lessonId: null, conv: state.view === "conversation" ? state.conv : null }); }));
 
 /** Open a view (nav, task cards, next-step buttons). */
 function go(view, extra = {}) {
@@ -433,8 +468,8 @@ async function render() {
   const page = $("#page");
   page.innerHTML = "";
   try {
-    await ({ today: renderToday, conversation: renderConversation, news: renderNews, lessons: renderLessons, words: renderWords, grammar: renderGrammar,
-      mistakes: renderMistakes, materials: renderMaterials, progress: renderProgress }[state.view] ?? renderToday)(page);
+    await ({ today: renderToday, courses: renderCourses, conversation: renderConversation, news: renderNews, lessons: renderLessons, words: renderWords, grammar: renderGrammar,
+      mistakes: renderMistakes, notebook: renderNotebook, materials: renderMaterials, progress: renderProgress }[state.view] ?? renderToday)(page);
   } catch (e) {
     page.append(el("div", "empty", e.message));
   }
@@ -472,10 +507,10 @@ function drawReview(card) {
   }
   const fc = el("div", "flash-card");
   fc.append(el("div", "kind", it.item_kind === "word" ? "單字" : "文法"));
-  fc.append(el("div", `front${isJa() ? " ja" : ""}`, it.front));
+  fc.append(elr("div", `front${isJa() ? " ja" : ""}`, it.front, state.lang));
   fc.append(el("div", "reading", r.shown ? it.reading : ""));
   fc.append(el("div", "back", r.shown ? it.back : ""));
-  if (r.shown && it.example) fc.append(el("div", `example${isJa() ? " ja" : ""}`, it.example));
+  if (r.shown && it.example) fc.append(elr("div", `example${isJa() ? " ja" : ""}`, it.example, state.lang));
   const g = el("div", "grades");
   if (!r.shown) {
     const b = el("button", "primary", "顯示答案（空白鍵）");
@@ -549,8 +584,16 @@ async function renderNews(page, refresh = false) {
   }
   const ul = el("ul", "list");
   for (const a of data.articles) {
-    const li = el("li", `item click${state.picked?.id === a.id ? " on" : ""}`);
-    li.append(el("div", `t${a.lang === "ja" ? " ja" : ""}`, a.title || a.url));
+    const li = el("li", `item${a.blocked ? " blocked" : " click"}${state.picked?.id === a.id ? " on" : ""}`);
+    const t = el("div", `t${a.lang === "ja" ? " ja" : ""}`, a.title || a.url);
+    if (a.lang === "ja") t.lang = "ja";
+    if (a.blocked) {
+      const tag = el("span", "tag", "無法擷取");
+      tag.title = "這個網站的 robots.txt 不允許擷取，無法做成教材";
+      t.append(" ", tag);
+      li.setAttribute("aria-disabled", "true");
+    }
+    li.append(t);
     if (a.summary) li.append(el("div", `sub${a.lang === "ja" ? " ja" : ""}`, a.summary.slice(0, 220)));
     const meta = el("div", "meta");
     meta.append(el("span", null, a.source), el("span", null, fmtDate(a.published_at ?? a.fetched_at)));
@@ -565,6 +608,7 @@ async function renderNews(page, refresh = false) {
     if (a.url.startsWith("http")) side.append(open);
     li.append(side);
     li.onclick = () => {
+      if (a.blocked) return;
       state.picked = a;
       $$(".item.on", ul).forEach((x) => x.classList.remove("on"));
       li.classList.add("on");
@@ -607,7 +651,10 @@ async function renderLesson(page, id) {
   const { lesson, row } = await api(`/api/lessons/${id}`);
   const back = ghostButton("back", "教材列表", () => { state.lessonId = null; render(); });
   const md = ghostButton("code", state.showMd ? "排版" : "Markdown", () => { state.showMd = !state.showMd; render(); });
-  viewbar(row.title, null, back, md);
+  const extra = [back, md];
+  if (row.lang === "ja") extra.unshift(furiganaButton());
+  if (row.course) extra.unshift(ghostButton("layers", "課程", () => go("courses", { course: row.course, courseLesson: row.course_lesson, step: null })));
+  viewbar(plainRuby(row.title), null, ...extra);
   const paper = el("div", "paper");
   paper.lang = row.lang;
   page.append(paper);
@@ -615,62 +662,103 @@ async function renderLesson(page, id) {
     paper.append(el("pre", "md", row.markdown.replace(/\n*<!-- jelearner:lesson [\s\S]*$/, "\n")));
     return;
   }
-  paper.append(el("h1", null, lesson.title));
-  const meta = el("div", "meta");
-  meta.append(el("span", null, `${langLabel(row.lang)}・${row.level}`), el("span", null, fmtDate(row.created_at)), el("span", null, row.engine));
-  if (row.source_url) { const a = el("a", null, "原文"); a.href = row.source_url; a.target = "_blank"; a.rel = "noopener noreferrer"; meta.append(a); }
-  meta.append(el("span", null, row.path));
-  paper.append(meta);
-
-  paper.append(el("div", "summary", lesson.summary));
-
-  const h2 = (t, n) => { const h = el("h2", null, t); if (n != null) h.append(el("span", "c", String(n))); return h; };
-  paper.append(h2("單字", lesson.vocabulary.length));
-  const tb = el("table", "vocab");
-  tb.innerHTML = "<thead><tr><th>單字</th><th>讀音</th><th>意思與例句</th></tr></thead>";
-  const body = el("tbody");
-  for (const v of lesson.vocabulary) {
-    const tr = el("tr");
-    tr.append(el("td", "term", v.term), el("td", "reading", v.reading));
-    const td = el("td");
-    td.append(el("div", null, `${v.part_of_speech ? `〔${v.part_of_speech}〕` : ""}${v.meaning}`));
-    const ex = el("div", "ex", v.example);
-    ex.append(el("div", "tr", v.example_translation));
-    td.append(ex);
-    tr.append(td);
-    body.append(tr);
-  }
-  tb.append(body);
-  paper.append(tb);
-
-  paper.append(h2("文法", lesson.grammar.length));
-  lesson.grammar.forEach((g, i) => {
-    const d = el("div", "gram");
-    const h = el("h3", null, `${i + 1}. ${g.pattern}`);
-    h.append(el("span", "m", g.meaning));
-    d.append(h, el("p", null, g.explanation));
-    const ex = el("p", "ex", g.example);
-    ex.append(el("div", "tr", g.example_translation));
-    d.append(ex);
-    paper.append(d);
-  });
-
-  paper.append(h2("問答", lesson.questions.length));
   // When every question has a verdict, the quiz is finished: result card.
   const quiz = { id, lang: row.lang, total: lesson.questions.length, answers: {}, done: false, after: paper };
-  lesson.questions.forEach((q, i) => paper.append(questionCard(id, q, i, quiz)));
+  lessonPaper(paper, lesson, row, { quiz });
   startReading();
 }
 
-function questionCard(lessonId, q, index, quiz) {
+/**
+ * A lesson on the paper sheet: title, meta, summary, today's text (course
+ * lessons), words, grammar and questions. Japanese shows {漢字|かんじ} as ruby.
+ * `parts` limits what is drawn (e.g. ["text", "questions"]).
+ */
+function lessonPaper(paper, lesson, row, { quiz, parts, highlight } = {}) {
+  const lang = row.lang;
+  const want = (p) => !parts || parts.includes(p);
+  if (want("head")) {
+    paper.append(elr("h1", null, lesson.title, lang));
+    const meta = el("div", "meta");
+    meta.append(el("span", null, `${langLabel(lang)}・${row.level}`), el("span", null, fmtDate(row.created_at)), el("span", null, row.engine));
+    if (row.source_url) { const a = el("a", null, "原文"); a.href = row.source_url; a.target = "_blank"; a.rel = "noopener noreferrer"; meta.append(a); }
+    meta.append(el("span", null, row.path));
+    paper.append(meta);
+    if (lesson.summary) paper.append(el("div", "summary", lesson.summary));
+  }
+  const h2 = (t, n) => { const h = el("h2", null, t); if (n != null) h.append(el("span", "c", String(n))); return h; };
+  if (want("text") && lesson.text) {
+    paper.append(h2("今日課文"));
+    const tx = el("div", "lesson-text");
+    for (const para of lesson.text.split(/\n{2,}|\n/).filter((x) => x.trim())) {
+      const pEl = elr("p", null, para, lang);
+      if (highlight?.length) markWords(pEl, highlight, lang);
+      tx.append(pEl);
+    }
+    paper.append(tx);
+  }
+  if (want("words") && lesson.vocabulary?.length) {
+    paper.append(h2("單字", lesson.vocabulary.length));
+    const tb = el("table", "vocab");
+    tb.innerHTML = "<thead><tr><th>單字</th><th>讀音</th><th>意思與例句</th></tr></thead>";
+    const body = el("tbody");
+    for (const v of lesson.vocabulary) {
+      const tr = el("tr");
+      const term = el("td", "term");
+      if (lang === "ja" && v.reading && /[一-鿿]/.test(v.term)) { term.innerHTML = `<ruby>${escHtml(v.term)}<rt>${escHtml(v.reading)}</rt></ruby>`; term.lang = "ja"; }
+      else setText(term, v.term, lang);
+      tr.append(term, el("td", "reading", v.reading));
+      const td = el("td");
+      td.append(el("div", null, `${v.part_of_speech ? `〔${v.part_of_speech}〕` : ""}${v.meaning}`));
+      const ex = elr("div", "ex", v.example, lang);
+      ex.append(el("div", "tr", v.example_translation));
+      td.append(ex);
+      tr.append(td);
+      body.append(tr);
+    }
+    tb.append(body);
+    paper.append(tb);
+  }
+  if (want("grammar") && lesson.grammar?.length) {
+    paper.append(h2("文法", lesson.grammar.length));
+    lesson.grammar.forEach((g, i) => {
+      const d = el("div", "gram");
+      const h = elr("h3", null, `${i + 1}. ${g.pattern}`, lang);
+      h.append(el("span", "m", g.meaning));
+      d.append(h, el("p", null, g.explanation));
+      const ex = elr("p", "ex", g.example, lang);
+      ex.append(el("div", "tr", g.example_translation));
+      d.append(ex);
+      paper.append(d);
+    });
+  }
+  if (want("questions") && lesson.questions?.length) {
+    paper.append(h2("問答", lesson.questions.length));
+    const lessonId = quiz?.id;
+    lesson.questions.forEach((q, i) => paper.append(questionCard(lessonId, q, i, quiz, lang)));
+  }
+}
+
+/** Underline the lesson's target words in a paragraph (English: word starts, so inflections count). */
+function markWords(node, terms, lang) {
+  const list = [...new Set(terms.map((t) => plainRuby(t).trim()).filter((t) => t.length > 1))].sort((a, b) => b.length - a.length);
+  if (!list.length) return;
+  const esc = (t) => escHtml(t).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = lang === "ja"
+    ? new RegExp(`(${list.map(esc).join("|")})`, "g")
+    : new RegExp(`\\b(${list.map((t) => esc(t.length >= 5 ? t.slice(0, -1) : t)).join("|")})(\\w*)`, "gi");
+  // Only text outside tags and outside readings.
+  node.innerHTML = node.innerHTML.split(/(<rt>[^<]*<\/rt>|<[^>]+>)/).map((part) => (part.startsWith("<") ? part : part.replace(re, (m) => `<mark class="tw">${m}</mark>`))).join("");
+}
+
+function questionCard(lessonId, q, index, quiz, lang = state.lang) {
   const box = el("div", "q");
-  box.append(el("div", "qt", `${index + 1}. ${q.question}`));
+  box.append(elr("div", "qt", `${index + 1}. ${q.question}`, lang));
   const fb = el("div", "fb");
   const showFeedback = (correct, answer) => {
     if (quiz && correct !== null && correct !== undefined) quizAnswered(quiz, index, answer, correct);
     fb.innerHTML = "";
     const v = el("b", null, correct === true ? "答對 " : correct === false ? "答錯（已記入錯題本） " : "參考答案 ");
-    fb.append(v, document.createTextNode(`${q.answer}　${q.explanation}`));
+    fb.append(v, elr("span", null, q.answer, lang), document.createTextNode(`　${q.explanation}`));
   };
   const send = async (answer, correct) => {
     const res = await api(`/api/lessons/${lessonId}/answers`, { answers: [{ index, answer, correct }] });
@@ -679,13 +767,14 @@ function questionCard(lessonId, q, index, quiz) {
   if (q.kind === "choice") {
     const opts = el("div", "opts");
     q.options.forEach((o, k) => {
-      const b = el("button", "opt", `${"ABCDEFG"[k]}. ${o}`);
+      const b = elr("button", "opt", `${"ABCDEFG"[k]}. ${o}`, lang);
+      b.dataset.opt = o;
       b.onclick = async () => {
         try {
           const r = await send(o, null);
           $$(".opt", opts).forEach((x) => (x.disabled = true));
           b.classList.add(r.correct ? "right" : "wrong");
-          if (!r.correct) $$(".opt", opts).find((x) => x.textContent.endsWith(`. ${q.answer}`))?.classList.add("right");
+          if (!r.correct) $$(".opt", opts).find((x) => x.dataset.opt === q.answer)?.classList.add("right");
           showFeedback(r.correct, o);
           if (!r.correct) refreshStatus();
         } catch (e) { flash(e.message, true); }

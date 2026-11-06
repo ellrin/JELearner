@@ -237,11 +237,16 @@ struct CreateBody {
     describe: Option<bool>,
 }
 
+/// Stored news below this many articles says little about a topic (a
+/// handful of feeds), so the series length is left to the model's
+/// `enough_material` then.
+const NEWS_FOR_COUNTING: i64 = 30;
+
 /// Count stored news articles that mention a keyword (only when there is
-/// any news at all, so a fresh workspace keeps the full 5-lesson series).
+/// enough news to tell, so a small or fresh workspace keeps the full series).
 async fn available_articles(l: &Loaded, lang: Lang, keywords: &[String]) -> Result<Option<usize>, ApiError> {
     let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM articles WHERE lang = ?").bind(lang.code()).fetch_one(l.db.pool()).await?;
-    if total == 0 || keywords.is_empty() {
+    if total < NEWS_FOR_COUNTING || keywords.is_empty() {
         return Ok(None);
     }
     let mut ids = std::collections::BTreeSet::new();

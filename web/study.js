@@ -3,7 +3,7 @@
 // drag-and-drop import and the profile card. Little text; the next step is
 // shown by the one primary button and by components that light up.
 
-const UNIT_LABEL = { conversation: "對話", quiz: "教材測驗", review: "複習", reading: "閱讀時間", listening: "聆聽時間" };
+const UNIT_LABEL = { conversation: "對話", quiz: "教材測驗", review: "複習", reading: "閱讀", listening: "聆聽時間", translation: "翻譯", "sentence-making": "造句", cloze: "填空", paraphrase: "換句話說" };
 const SKILL_LABEL = { listening: "聽", reading: "讀", speaking: "說", writing: "寫", vocab: "單字文法" };
 
 function primaryButton(label, onclick, small = false) {
@@ -92,7 +92,7 @@ function setAvatar(node, u) {
  * The card shown when something is finished: +points, a word of praise,
  * a level-up banner, the early difficulty question, one or two next steps.
  */
-function resultCard({ points = 0, title, score, levelUp, already, difficulty, next = [] }) {
+function resultCard({ points = 0, title, score, levelUp, already, difficulty, notebook, next = [] }) {
   const card = el("div", "result");
   card.setAttribute("role", "status");
   const plus = el("div", `plus${points > 0 ? "" : " zero"}`, points > 0 ? `+${fmtPts(points)}` : already ? "✓" : "+0");
@@ -133,6 +133,12 @@ function resultCard({ points = 0, title, score, levelUp, already, difficulty, ne
     b.onclick = n.onclick;
     row.append(b);
   });
+  // The review notebook page of what was just finished.
+  if (notebook?.stem) {
+    const b = ghostButton("notebook", "筆記本", () => go("notebook", { nbPage: notebook }));
+    b.classList.add("nb-link");
+    row.append(b);
+  }
   if (row.children.length) card.append(row);
   setTimeout(() => card.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" }), 60);
   return card;
@@ -232,54 +238,93 @@ async function renderToday(page) {
   page.append(head);
 
   const ready = !!state.status?.engine_ready;
-  const list = el("div", "tasks");
-  t.tasks.forEach((task, i) => list.append(taskCard(task, i === t.next, ready)));
-  page.append(list);
+  // One group per lesson of today (and the daily lesson not created yet).
+  const groups = [];
+  const keyOf = (task) => (task.daily ? "daily" : task.course ? `${task.course}#${task.number}` : "other");
+  t.tasks.forEach((task, i) => {
+    const k = keyOf(task);
+    let g = groups.find((x) => x.key === k);
+    if (!g) { g = { key: k, tasks: [] }; groups.push(g); }
+    g.tasks.push([task, i]);
+  });
+  for (const g of groups) {
+    const box = el("div", "today-lesson");
+    const first = g.tasks[0][0];
+    if (g.key !== "other") {
+      const les = g.key === "daily" ? null : t.lessons.find((l) => `${l.course}#${l.number}` === g.key);
+      const hd = el("div", "tl-head");
+      const kind = g.key === "daily" ? "每日課程" : les?.kind_label ?? "";
+      hd.append(el("span", `tag ${g.key === "daily" || les?.kind === "daily" ? "acc2" : "acc"}`, kind));
+      const title = g.key === "daily" ? (t.daily?.topic?.name ?? "今日課程") : les?.kind === "daily" ? les.title : `第 ${les?.number} 課・${les?.title ?? ""}`;
+      hd.append(elr("b", null, title, state.lang));
+      if (les && les.kind !== "daily") hd.append(el("span", "sub", les.course_name));
+      const doneN = g.tasks.filter(([x]) => x.done).length;
+      const mins = g.key === "daily" ? t.daily?.minutes : les?.minutes;
+      const meta = el("span", "n", `${doneN} / ${g.tasks.length}${mins ? `・${mins} 分` : ""}`);
+      hd.append(meta);
+      box.append(hd);
+    }
+    const list = el("div", "tasks");
+    g.tasks.forEach(([task, i]) => list.append(taskCard(task, i === t.next, ready)));
+    box.append(list);
+    page.append(box);
+  }
   if (t.next == null) {
     const done = el("div", "all-done");
     const m = el("div", "done-mark"); const sp = el("span"); sp.append(icon("check")); m.append(sp);
-    done.append(m, el("h3", null, "今天的任務都完成了"));
-    done.append(ghostButton("chat", "再一段對話", () => go("conversation", { conv: null })));
+    done.append(m, el("h3", null, "今天的課完成了"));
+    const row = el("div", "actions-row center");
+    row.append(ghostButton("layers", "課程", () => go("courses")), ghostButton("chat", "再一段對話", () => go("conversation", { conv: null })));
+    done.append(row);
     page.append(done);
   }
 }
 
+const UNIT_TITLE = { review: "複習卡片", reading: "課文與閱讀", translation: "翻譯", "sentence-making": "造句", cloze: "填空", paraphrase: "換句話說", conversation: "AI 對話", quiz: "測驗", listening: "聽力", dictation: "聽寫", shadowing: "跟讀" };
+const UNIT_ICON = { review: "cards", reading: "book", translation: "pen", "sentence-making": "pen", cloze: "pen", paraphrase: "pen", conversation: "chat", quiz: "check" };
+const unitTitle = (k, lang = state.lang) => (k === "translation" ? (lang === "ja" ? "中翻日" : "中翻英") : UNIT_TITLE[k] ?? k);
+
+/** Open a step of a course lesson (creating today's daily lesson first if needed). */
+async function openStep(task) {
+  if (task.daily) {
+    try {
+      const d = await api("/api/daily", { lang: state.lang });
+      go("courses", { course: d.id, courseLesson: d.next ?? 1, step: task.unit });
+    } catch (e) { flash(e.message, true); }
+    return;
+  }
+  go("courses", { course: task.course, courseLesson: task.number, step: task.unit });
+}
+
 function taskCard(task, isNext, engineReady) {
   const card = el("div", `task${task.done ? " done" : ""}${isNext ? " next" : ""}`);
-  card.dataset.task = task.id;
+  card.dataset.task = task.kind ?? task.id;
   const ic = el("div", "ic");
   const body = el("div");
   let title, sub, action, label = "開始";
-  if (task.id === "review") {
-    ic.append(icon("cards"));
-    title = "複習卡片";
-    sub = task.done ? (task.due === 0 && !task.reviews_today ? "沒有到期的卡片" : "完成") : `${task.due} 張到期`;
-    action = () => { state.todayMode = "review"; render(); };
-  } else if (task.id === "conversation") {
-    ic.append(icon("chat"));
-    title = "AI 對話";
-    if (task.open) { sub = `${task.open.turns_done} / ${task.open.turns_limit} 回合`; label = "繼續"; }
-    else sub = task.done ? "完成" : `${state.status?.user?.conversation?.turns ?? 20} 回合`;
-    action = () => go("conversation", { conv: task.open ? { id: task.open.id } : null });
-  } else if (task.id === "lesson") {
-    ic.append(icon("book"));
-    title = "教材測驗";
-    sub = task.done ? "完成" : task.lesson ? task.lesson.title : "從新聞做一份";
-    action = task.lesson ? () => go("lessons", { lessonId: task.lesson.id }) : () => go("news");
-    if (!task.lesson) label = "選新聞";
+  if (task.id === "unit") {
+    ic.append(icon(UNIT_ICON[task.kind] ?? "book"));
+    title = unitTitle(task.kind);
+    const bits = [];
+    if (task.kind === "review") bits.push(task.due ? `${task.due} 張到期` : `${task.items} 張`);
+    else if (task.kind === "reading") bits.push(`${task.items} 題`);
+    else if (task.kind === "conversation") bits.push(`${task.items} 回合`);
+    else bits.push(`${task.items} 題`);
+    bits.push(`${task.minutes} 分`);
+    sub = task.done ? "完成" : bits.join("・");
+    action = () => openStep(task);
+    if (task.unit > 0 && !task.done) label = "繼續";
   } else {
     ic.append(icon("alert"));
     title = "訂正錯題";
     sub = `${task.open} 題`;
     action = () => go("mistakes");
   }
-  if (task.needs_engine && !engineReady && !task.done && !(task.id === "conversation" && task.open)) {
+  if (task.needs_engine && !engineReady && !task.done) {
     action = () => openSettings(3);
     label = "連接 Claude";
   }
-  const s = el("div", "s", sub);
-  if (task.id === "review" && !task.done && task.progress) s.append(ptsBar(task.progress[0] / task.progress[1], "thin"));
-  body.append(el("div", "t", title), s);
+  body.append(el("div", "t", title), el("div", "s", sub));
   card.append(ic, body);
   if (task.done) {
     const m = el("span", "mark"); m.append(icon("check")); card.append(m);
@@ -300,6 +345,7 @@ async function quizAnswered(quiz, index, answer, correct) {
   quiz.answers[index] = { index, answer: answer ?? "", correct };
   if (quiz.done || Object.keys(quiz.answers).length < quiz.total) return;
   quiz.done = true;
+  if (quiz.onDone) return quiz.onDone(Object.values(quiz.answers));
   try {
     const r = await api(`/api/lessons/${quiz.id}/finish`, { answers: Object.values(quiz.answers) });
     const card = resultCard({
@@ -313,6 +359,7 @@ async function quizAnswered(quiz, index, answer, correct) {
         { label: "回到今日", primary: true, onclick: () => go("today") },
         { label: "練習對話", onclick: () => go("conversation", { conv: null }) },
       ],
+      notebook: r.notebook ? { lang: quiz.lang, stem: r.notebook } : null,
     });
     quiz.after.after(card);
     paintMe(r.summary);
@@ -328,7 +375,7 @@ let readingTimer = null;
 function startReading() {
   if (readingTimer) return;
   readingTimer = setInterval(async () => {
-    const reading = state.view === "lessons" && state.lessonId && document.visibilityState === "visible" && Date.now() - lastActive < 120000;
+    const reading = ((state.view === "lessons" && state.lessonId) || (state.view === "courses" && state.courseLesson)) && document.visibilityState === "visible" && Date.now() - lastActive < 120000;
     if (!reading || !state.status?.user) return;
     try {
       const r = await api("/api/passive", { lang: state.lang, kind: "reading", seconds: 30 });
@@ -425,7 +472,9 @@ function drawConv(page, newlyUsed = []) {
   const c = v.conversation;
   const ja = c.lang === "ja";
   // Only a finished conversation can be left for another; an open one waits.
-  const back = v.status === "done" ? ghostButton("back", "主題", () => { state.conv = null; render(); }) : null;
+  const back = c.course
+    ? ghostButton("back", "這一課", () => backToLesson(c.course))
+    : v.status === "done" ? ghostButton("back", "主題", () => { state.conv = null; render(); }) : null;
   viewbar(`對話・${langLabel(c.lang)}`, null, ...(back ? [back] : []));
 
   // Head: topic, dot progress (last 3 highlighted), target words.
@@ -583,24 +632,40 @@ function drawConvEnd(page, v) {
   }
   const c = v.conversation;
   const res = v.result ?? { points: c.points, score: c.score, passed: c.passed, review: c.review, used: v.used };
+  const nb = res.notebook ? { lang: c.lang, stem: res.notebook } : null;
   if (v.justFinished) {
+    const course = res.course;
     page.append(resultCard({
       points: res.points,
-      title: res.passed ? (res.excellent ? "說得真好！" : "完成這段對話") : "完成了，下次再多說一點",
+      title: course?.lesson_done ? "這一課完成了！" : res.passed ? (res.excellent ? "說得真好！" : "完成這段對話") : "完成了，下次再多說一點",
       score: res.score,
       levelUp: res.level_up,
-      next: [
-        { label: "再一段", primary: true, onclick: () => { state.conv = null; render(); } },
-        { label: "回到今日", onclick: () => go("today") },
-      ],
+      notebook: nb,
+      next: c.course
+        ? [
+          course?.next?.lesson && course.next.lesson !== c.course.lesson
+            ? { label: `下一課`, primary: true, onclick: () => go("courses", { course: c.course.course, courseLesson: course.next.lesson, step: null }) }
+            : { label: "回到這一課", primary: true, onclick: () => backToLesson(c.course) },
+          { label: "回到今日", onclick: () => go("today") },
+        ]
+        : [
+          { label: "再一段", primary: true, onclick: () => { state.conv = null; render(); } },
+          { label: "回到今日", onclick: () => go("today") },
+        ],
     }));
   }
   if (c.review) page.append(feedbackCard(c, v.used));
   if (!v.justFinished) {
     const row = el("div", "actions-row");
-    row.append(primaryButton("再一段", () => { state.conv = null; render(); }, true));
+    if (c.course) row.append(primaryButton("回到這一課", () => backToLesson(c.course), true));
+    else row.append(primaryButton("再一段", () => { state.conv = null; render(); }, true));
     page.append(row);
   }
+}
+
+function backToLesson(link) {
+  state.conv = null;
+  go("courses", { course: link.course, courseLesson: link.lesson, step: null });
 }
 
 async function finishConversation() {

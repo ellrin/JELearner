@@ -388,6 +388,11 @@ pub struct LessonRow {
     pub data: String,
     pub engine: String,
     pub created_at: DateTime<Utc>,
+    /// The course this lesson belongs to (empty for a single lesson).
+    #[sqlx(default)]
+    pub course: String,
+    #[sqlx(default)]
+    pub course_lesson: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -774,7 +779,7 @@ impl Db {
 
     pub async fn list_lessons(&self, lang: Option<Lang>, limit: i64) -> DbResult<Vec<LessonRow>> {
         sqlx::query_as::<_, LessonRow>(
-            "SELECT id, lang, title, level, article_id, source_url, path, '' AS markdown, '' AS data, engine, created_at
+            "SELECT id, lang, title, level, article_id, source_url, path, '' AS markdown, '' AS data, engine, created_at, course, course_lesson
              FROM lessons WHERE (?1 IS NULL OR lang = ?1) ORDER BY created_at DESC, id DESC LIMIT ?2",
         )
         .bind(lang.map(Lang::code))

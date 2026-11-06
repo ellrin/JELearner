@@ -19,10 +19,13 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
-const PORT: u16 = 7980;
+/// 7980, or `JELEARNER_MOCK_PORT` when that one is taken (e.g. a second copy).
+fn port() -> u16 {
+    std::env::var("JELEARNER_MOCK_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7980)
+}
 
 fn base() -> String {
-    format!("http://127.0.0.1:{PORT}")
+    format!("http://127.0.0.1:{}", port())
 }
 
 fn english_lesson() -> Value {
@@ -347,7 +350,7 @@ async fn main() {
         )
         .route("/feeds/ja.xml", get(|| async { rss(&[("政府、半導体工場の新設を支援へ", "/articles/hanndoutai.html", "供給網の安定を確保する狙い。")]) }))
         .route("/articles/{name}", get(article));
-    let l = tokio::net::TcpListener::bind(("127.0.0.1", PORT)).await.expect("port 7980 free");
+    let l = tokio::net::TcpListener::bind(("127.0.0.1", port())).await.expect("mock port free (set JELEARNER_MOCK_PORT for another)");
     println!("Mock services on {}", base());
     println!("Run the app against them:");
     println!("  JELEARNER_ENGINE=api JELEARNER_CLAUDE_BASE_URL={} ANTHROPIC_API_KEY=sk-ant-mock JELEARNER_NO_KEYCHAIN=1 cargo run -p jl-server", base());
