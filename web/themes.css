@@ -3,15 +3,23 @@
    combinations of three accents. Every theme is dark or light by itself
    (there is no separate light/dark mode).
 
-   Tokens: the usual set plus --accent-2 / --accent-3 (each with -ink and
-   -soft). --accent stays the primary action colour; -2 and -3 colour
-   secondary marks (nav icons, section numbers, tiles, chips, paper
-   headings, ...). In single-hue themes they are shades of the same hue.
+   Tokens: the usual set plus --accent-2 / --accent-3. Each accent comes as
+   a fill and a text colour:
+     --accent, --accent-2, --accent-3        fills: bars, rings, dots, button
+                                             and chip backgrounds; may be bright
+     --accent-*-ink                          text on that fill
+     --accent-*-soft                         translucent tint of the fill
+     --accent-text, --accent-2-text, ...     the same hue as text, line icons,
+                                             thin borders and focus rings
+   --accent stays the primary action colour; -2 and -3 colour secondary
+   marks (nav icons, section numbers, tiles, chips, paper headings, ...). In
+   single-hue themes they are shades of the same hue.
 
    Rules (docs/design.md「主題」): no background, panel, surface or paper is
    pure black or white; text on bg and panel ≥ 7:1; muted ≥ 4.5:1 on panel;
-   faint ≥ 3:1; accent, accent-2, accent-3 on panel ≥ 3:1; every -ink on its
-   accent ≥ 4.5:1; paper-ink on paper ≥ 7:1.
+   faint ≥ 3:1; every -text ≥ 4.5:1 on bg and panel (and surface); every
+   -ink on its fill ≥ 4.5:1; paper-ink on paper ≥ 7:1. Fills have no
+   contrast rule of their own, so a lemon can stay lemon.
    The ids are also listed in crates/core/src/workspace.rs (THEMES) and
    web/app.js (THEMES); a core test checks they match this file.
    With no or an unknown data-theme the default (giftbox) applies. */
@@ -26,6 +34,7 @@
   --accent: #39ff6a; --accent-ink: #031a08; --accent-soft: #39ff6a2e;
   --accent-2: #16c94d; --accent-2-ink: #021306; --accent-2-soft: #16c94d2e;
   --accent-3: #a8ffbc; --accent-3-ink: #062010; --accent-3-soft: #a8ffbc2e;
+  --accent-text: #39ff6a; --accent-2-text: #16c94d; --accent-3-text: #a8ffbc;
   --dot: #39ff6a12; --paper: #151c16; --paper-ink: #b8f7c4;
   --ok: #8cff6a; --warn: #e3f55a; --err: #ff6a5f;
 }
@@ -38,6 +47,7 @@
   --accent: #ffb000; --accent-ink: #1f1400; --accent-soft: #ffb0002e;
   --accent-2: #ff8a1f; --accent-2-ink: #200c00; --accent-2-soft: #ff8a1f2e;
   --accent-3: #ffd98a; --accent-3-ink: #241800; --accent-3-soft: #ffd98a2e;
+  --accent-text: #ffb000; --accent-2-text: #ff8a1f; --accent-3-text: #ffd98a;
   --dot: #ffb00010; --paper: #25221b; --paper-ink: #ffe4b8;
   --ok: #9be564; --warn: #ffcf4a; --err: #ff6a55;
 }
@@ -50,6 +60,7 @@
   --accent: #5ce1ff; --accent-ink: #03161d; --accent-soft: #5ce1ff2e;
   --accent-2: #2fb2e6; --accent-2-ink: #02121a; --accent-2-soft: #2fb2e62e;
   --accent-3: #b8f2ff; --accent-3-ink: #062028; --accent-3-soft: #b8f2ff2e;
+  --accent-text: #5ce1ff; --accent-2-text: #2fb2e6; --accent-3-text: #b8f2ff;
   --dot: #5ce1ff12; --paper: #edf5f7; --paper-ink: #142028;
   --ok: #4ade80; --warn: #fcd34d; --err: #fb7185;
 }
@@ -62,6 +73,7 @@
   --accent: #ae7aff; --accent-ink: #12062a; --accent-soft: #ae7aff2e;
   --accent-2: #8c5cff; --accent-2-ink: #0c0322; --accent-2-soft: #8c5cff2e;
   --accent-3: #dcc8ff; --accent-3-ink: #1a0d33; --accent-3-soft: #dcc8ff2e;
+  --accent-text: #ae7aff; --accent-2-text: #a27bff; --accent-3-text: #dcc8ff;
   --dot: #ae7aff12; --paper: #231c3e; --paper-ink: #ece6ff;
   --ok: #5ee6a8; --warn: #ffcf5c; --err: #ff6b9a;
 }
@@ -74,6 +86,7 @@
   --accent: #ff4752; --accent-ink: #1a0204; --accent-soft: #ff47522e;
   --accent-2: #e8323f; --accent-2-ink: #160103; --accent-2-soft: #e8323f2e;
   --accent-3: #ffa3a8; --accent-3-ink: #2a0a0d; --accent-3-soft: #ffa3a82e;
+  --accent-text: #ff4a54; --accent-2-text: #ed5e68; --accent-3-text: #ffa3a8;
   --dot: #ff475212; --paper: #f7eded; --paper-ink: #2a1518;
   --ok: #3ddc84; --warn: #ffc233; --err: #ff8f7a;
 }
@@ -88,6 +101,7 @@
   --accent: #ff3fb4; --accent-ink: #1a0716; --accent-soft: #ff3fb42e;
   --accent-2: #2de2e6; --accent-2-ink: #03191a; --accent-2-soft: #2de2e62e;
   --accent-3: #ffd23f; --accent-3-ink: #1f1700; --accent-3-soft: #ffd23f2e;
+  --accent-text: #ff4cb9; --accent-2-text: #2de2e6; --accent-3-text: #ffd23f;
   --dot: #2de2e61a; --paper: #f3f0fa; --paper-ink: #1d1838;
   --ok: #3ee8b5; --warn: #ff9f43; --err: #ff6b86;
 }
@@ -100,6 +114,7 @@
   --accent: #ff5fa2; --accent-ink: #24030f; --accent-soft: #ff5fa22e;
   --accent-2: #4fd8ff; --accent-2-ink: #021820; --accent-2-soft: #4fd8ff2e;
   --accent-3: #a98cff; --accent-3-ink: #140a2e; --accent-3-soft: #a98cff2e;
+  --accent-text: #ff5fa2; --accent-2-text: #4fd8ff; --accent-3-text: #a98cff;
   --dot: #4fd8ff12; --paper: #eef1f6; --paper-ink: #161d2a;
   --ok: #4fe3a0; --warn: #ffcf5a; --err: #ff7b7b;
 }
@@ -112,6 +127,7 @@
   --accent: #ff5147; --accent-ink: #1e0302; --accent-soft: #ff51472e;
   --accent-2: #2ee6a6; --accent-2-ink: #03190f; --accent-2-soft: #2ee6a62e;
   --accent-3: #ffc845; --accent-3-ink: #1f1500; --accent-3-soft: #ffc8452e;
+  --accent-text: #ff6961; --accent-2-text: #2ee6a6; --accent-3-text: #ffc845;
   --dot: #ffc84512; --paper: #f6efe2; --paper-ink: #22201a;
   --ok: #8be78b; --warn: #ffa94d; --err: #ff8fa3;
 }
@@ -124,6 +140,7 @@
   --accent: #ff8a3d; --accent-ink: #220c02; --accent-soft: #ff8a3d2e;
   --accent-2: #ff4fa0; --accent-2-ink: #24020f; --accent-2-soft: #ff4fa02e;
   --accent-3: #b691ff; --accent-3-ink: #150833; --accent-3-soft: #b691ff2e;
+  --accent-text: #ff8a3d; --accent-2-text: #ff4fa0; --accent-3-text: #b691ff;
   --dot: #ff4fa016; --paper: #fff1e4; --paper-ink: #2a1530;
   --ok: #4be0b0; --warn: #ffd166; --err: #ff6b6b;
 }
@@ -136,6 +153,7 @@
   --accent: #4cf5a8; --accent-ink: #03190e; --accent-soft: #4cf5a82e;
   --accent-2: #46c8ff; --accent-2-ink: #02141e; --accent-2-soft: #46c8ff2e;
   --accent-3: #d58cff; --accent-3-ink: #1e0730; --accent-3-soft: #d58cff2e;
+  --accent-text: #4cf5a8; --accent-2-text: #46c8ff; --accent-3-text: #d58cff;
   --dot: #4cf5a810; --paper: #eef4f3; --paper-ink: #142026;
   --ok: #8ff07a; --warn: #ffd36b; --err: #ff7a90;
 }
@@ -150,6 +168,7 @@
   --accent: #6f4fd0; --accent-ink: #faf8ff; --accent-soft: #6f4fd024;
   --accent-2: #5232ad; --accent-2-ink: #f6f2ff; --accent-2-soft: #5232ad24;
   --accent-3: #8d6edb; --accent-3-ink: #1a0f3a; --accent-3-soft: #8d6edb24;
+  --accent-text: #6a49ce; --accent-2-text: #5232ad; --accent-3-text: #6e47d1;
   --dot: #6f4fd014; --paper: #f6f3f9; --paper-ink: #231c3a;
   --ok: #2a7655; --warn: #835c00; --err: #b8344f;
 }
@@ -159,9 +178,10 @@
   --bg: #faf2d2; --panel: #fcf6e0; --surface: #f4e9bd; --surface-hover: #ede0a8;
   --line: #eadeab; --line-strong: #d3c27a;
   --text: #33290a; --muted: #665619; --faint: #847640;
-  --accent: #b86f00; --accent-ink: #1c1200; --accent-soft: #e0b4002e;
-  --accent-2: #8f5a00; --accent-2-ink: #fff8e6; --accent-2-soft: #8f5a0024;
-  --accent-3: #9a7e00; --accent-3-ink: #1c1700; --accent-3-soft: #9a7e0024;
+  --accent: #f5c518; --accent-ink: #3a2a00; --accent-soft: #f5c51833;
+  --accent-2: #e9a200; --accent-2-ink: #2e1d00; --accent-2-soft: #e9a20033;
+  --accent-3: #ffdf5e; --accent-3-ink: #3a2c00; --accent-3-soft: #ffdf5e33;
+  --accent-text: #806606; --accent-2-text: #8b6000; --accent-3-text: #7f6600;
   --dot: #d9b30018; --paper: #fdf7e6; --paper-ink: #2a220a;
   --ok: #2e7340; --warn: #9a4f00; --err: #b3332b;
 }
@@ -174,6 +194,7 @@
   --accent: #0b7a5d; --accent-ink: #effbf6; --accent-soft: #0b7a5d24;
   --accent-2: #08604a; --accent-2-ink: #ecfaf4; --accent-2-soft: #08604a24;
   --accent-3: #1f9474; --accent-3-ink: #03140e; --accent-3-soft: #1f947424;
+  --accent-text: #0b7559; --accent-2-text: #08604a; --accent-3-text: #18745b;
   --dot: #0b7a5d14; --paper: #f2f8f2; --paper-ink: #14291f;
   --ok: #2a7336; --warn: #865f00; --err: #b83a44;
 }
@@ -186,6 +207,7 @@
   --accent: #3a4bb0; --accent-ink: #f2f4fd; --accent-soft: #3a4bb024;
   --accent-2: #2a3888; --accent-2-ink: #eef1ff; --accent-2-soft: #2a388824;
   --accent-3: #4f63c4; --accent-3-ink: #f4f6ff; --accent-3-soft: #4f63c424;
+  --accent-text: #3a4bb0; --accent-2-text: #2a3888; --accent-3-text: #4459c0;
   --dot: #3a4bb014; --paper: #f4f5fa; --paper-ink: #1a2040;
   --ok: #287447; --warn: #835c00; --err: #b83246;
 }
@@ -198,6 +220,7 @@
   --accent: #c8254f; --accent-ink: #fff3f6; --accent-soft: #c8254f24;
   --accent-2: #9c1a3c; --accent-2-ink: #fff0f4; --accent-2-soft: #9c1a3c24;
   --accent-3: #d9547a; --accent-3-ink: #2a0612; --accent-3-soft: #d9547a24;
+  --accent-text: #bd234b; --accent-2-text: #9c1a3c; --accent-3-text: #ba2953;
   --dot: #c8254f14; --paper: #fdf2ed; --paper-ink: #2b1219;
   --ok: #23784a; --warn: #8f5a00; --err: #b8261f;
 }
@@ -210,9 +233,10 @@
   --bg: #f8efe4; --panel: #fbf4ec; --surface: #f2e6d8; --surface-hover: #ebdccb;
   --line: #eadccb; --line-strong: #d6c1a8;
   --text: #3a2a24; --muted: #6c5248; --faint: #8f766b;
-  --accent: #c2366b; --accent-ink: #fff4f8; --accent-soft: #c2366b24;
-  --accent-2: #0f7d62; --accent-2-ink: #effbf6; --accent-2-soft: #0f7d6224;
-  --accent-3: #966500; --accent-3-ink: #fff8e6; --accent-3-soft: #96650024;
+  --accent: #e0457b; --accent-ink: #2a0614; --accent-soft: #e0457b33;
+  --accent-2: #3ec7a0; --accent-2-ink: #032019; --accent-2-soft: #3ec7a033;
+  --accent-3: #f5c518; --accent-3-ink: #3a2a00; --accent-3-soft: #f5c51833;
+  --accent-text: #c4215a; --accent-2-text: #22755e; --accent-3-text: #7e6405;
   --dot: #0f7d6214; --paper: #fdf5ec; --paper-ink: #2e211c;
   --ok: #287a46; --warn: #8a5a00; --err: #b8302c;
 }
@@ -222,9 +246,10 @@
   --bg: #fae7da; --panel: #fcf0e7; --surface: #f6dccb; --surface-hover: #f0cfb9;
   --line: #eed0bd; --line-strong: #ddac90;
   --text: #3b2015; --muted: #744532; --faint: #946854;
-  --accent: #d85a34; --accent-ink: #250b02; --accent-soft: #d85a3424;
-  --accent-2: #7556c9; --accent-2-ink: #faf7ff; --accent-2-soft: #7556c924;
-  --accent-3: #b8487c; --accent-3-ink: #fff3f8; --accent-3-soft: #b8487c24;
+  --accent: #ff8a5c; --accent-ink: #2a0c02; --accent-soft: #ff8a5c33;
+  --accent-2: #9b7fe6; --accent-2-ink: #160a33; --accent-2-soft: #9b7fe633;
+  --accent-3: #e86a9e; --accent-3-ink: #2a0616; --accent-3-soft: #e86a9e33;
+  --accent-text: #b83400; --accent-2-text: #6e45db; --accent-3-text: #bd1d5f;
   --dot: #7556c914; --paper: #fdf3eb; --paper-ink: #2e1a12;
   --ok: #287446; --warn: #8a5800; --err: #b8352a;
 }
@@ -234,9 +259,10 @@
   --bg: #f5eaee; --panel: #f9f2f4; --surface: #eedfe5; --surface-hover: #e6d1d9;
   --line: #e5d3da; --line-strong: #cdb0bb;
   --text: #3d2a30; --muted: #6a545b; --faint: #87727a;
-  --accent: #d05a88; --accent-ink: #26070f; --accent-soft: #d05a8824;
-  --accent-2: #557619; --accent-2-ink: #f6fbec; --accent-2-soft: #55761924;
-  --accent-3: #8c4f42; --accent-3-ink: #fff4f0; --accent-3-soft: #8c4f4224;
+  --accent: #f08cae; --accent-ink: #2a0712; --accent-soft: #f08cae33;
+  --accent-2: #8dba4a; --accent-2-ink: #132005; --accent-2-soft: #8dba4a33;
+  --accent-3: #8c4f42; --accent-3-ink: #fff4f0; --accent-3-soft: #8c4f4233;
+  --accent-text: #c41a54; --accent-2-text: #526d29; --accent-3-text: #8c4f42;
   --dot: #7fa65a1a; --paper: #fbf4f2; --paper-ink: #2f2025;
   --ok: #2f7340; --warn: #8a5a00; --err: #b3303a;
 }
@@ -246,9 +272,10 @@
   --bg: #e6ebf7; --panel: #eff2fa; --surface: #dbe2f3; --surface-hover: #ced6ee;
   --line: #cfd7ec; --line-strong: #aab6dc;
   --text: #1b2348; --muted: #444f7c; --faint: #64709a;
-  --accent: #3a4bb0; --accent-ink: #f2f4fd; --accent-soft: #3a4bb024;
-  --accent-2: #926400; --accent-2-ink: #fff8e3; --accent-2-soft: #92640024;
-  --accent-3: #8048a8; --accent-3-ink: #faf3ff; --accent-3-soft: #8048a824;
+  --accent: #4a5fd0; --accent-ink: #f4f6ff; --accent-soft: #4a5fd033;
+  --accent-2: #f5c518; --accent-2-ink: #3a2a00; --accent-2-soft: #f5c51833;
+  --accent-3: #a462d4; --accent-3-ink: #1c0830; --accent-3-soft: #a462d433;
+  --accent-text: #4258ce; --accent-2-text: #7b6205; --accent-3-text: #8d3ac9;
   --dot: #e0b40026; --paper: #f6f6f8; --paper-ink: #1a2040;
   --ok: #287447; --warn: #9a5200; --err: #b83246;
 }
@@ -258,9 +285,10 @@
   --bg: #f2e7d6; --panel: #f7eee2; --surface: #eadcc6; --surface-hover: #e1cfb4;
   --line: #e1d1ba; --line-strong: #c7ab89;
   --text: #3a2614; --muted: #6a4c31; --faint: #876b50;
-  --accent: #955222; --accent-ink: #fff6ea; --accent-soft: #95522224;
-  --accent-2: #4c7a1a; --accent-2-ink: #f5fbea; --accent-2-soft: #4c7a1a24;
-  --accent-3: #a8475a; --accent-3-ink: #fff2f4; --accent-3-soft: #a8475a24;
+  --accent: #d68b3a; --accent-ink: #2a1505; --accent-soft: #d68b3a33;
+  --accent-2: #93c572; --accent-2-ink: #142608; --accent-2-soft: #93c57233;
+  --accent-3: #cf6f84; --accent-3-ink: #2a0a10; --accent-3-soft: #cf6f8433;
+  --accent-text: #8b561d; --accent-2-text: #466c2d; --accent-3-text: #aa3951;
   --dot: #4c7a1a14; --paper: #f9f1e3; --paper-ink: #2e1e10;
   --ok: #2f6f3e; --warn: #8a5400; --err: #b0352a;
 }
@@ -297,29 +325,29 @@
 /* ── The second and third accents on existing elements ─────
    Single-hue themes get shades of one colour here; combinations show all
    three. --accent keeps the primary actions (buttons, focus, current tab). */
-.brand b { color: var(--accent-2); }
-.views button[data-view="news"] svg, .views button[data-view="grammar"] svg, .views button[data-view="materials"] svg { color: var(--accent-2); }
-.views button[data-view="lessons"] svg, .views button[data-view="mistakes"] svg, .views button[data-view="secretary"] svg { color: var(--accent-3); }
-.views button[data-view="today"] svg, .views button[data-view="words"] svg { color: var(--accent); }
+.brand b { color: var(--accent-2-text); }
+.views button[data-view="news"] svg, .views button[data-view="grammar"] svg, .views button[data-view="materials"] svg { color: var(--accent-2-text); }
+.views button[data-view="lessons"] svg, .views button[data-view="mistakes"] svg, .views button[data-view="secretary"] svg { color: var(--accent-3-text); }
+.views button[data-view="today"] svg, .views button[data-view="words"] svg { color: var(--accent-text); }
 .views button[data-view="news"][aria-current="page"], .views button[data-view="grammar"][aria-current="page"], .views button[data-view="materials"][aria-current="page"] { background: var(--accent-2-soft); }
 .views button[data-view="lessons"][aria-current="page"], .views button[data-view="mistakes"][aria-current="page"], .views button[data-view="secretary"][aria-current="page"] { background: var(--accent-3-soft); }
-.block + .block .block-head .n, .block + .block[data-open="true"] .block-head h3 { color: var(--accent-2); }
-.avatar .a-bg { fill: var(--accent-3-soft); stroke: var(--accent-3); }
+.block + .block .block-head .n, .block + .block[data-open="true"] .block-head h3 { color: var(--accent-2-text); }
+.avatar .a-bg { fill: var(--accent-3-soft); stroke: var(--accent-3-text); }
 .tiles .tile { border-top: 3px solid var(--accent); }
 .tiles .tile:nth-child(4n+2) { border-top-color: var(--accent-2); }
 .tiles .tile:nth-child(4n+3) { border-top-color: var(--accent-3); }
 .tiles .tile:nth-child(4n+4) { border-top-color: var(--line-strong); }
-.tiles .tile:nth-child(4n+2) .v { color: var(--accent-2); }
-.tiles .tile:nth-child(4n+3) .v { color: var(--accent-3); }
-.flash-card .kind { color: var(--accent-2); }
+.tiles .tile:nth-child(4n+2) .v { color: var(--accent-2-text); }
+.tiles .tile:nth-child(4n+3) .v { color: var(--accent-3-text); }
+.flash-card .kind { color: var(--accent-2-text); }
 .card:has(> .flash-card) { border-top: 3px solid var(--accent-2); }
-.tag.acc2 { color: var(--accent-2); border-color: var(--accent-2); }
-.tag.acc3 { color: var(--accent-3); border-color: var(--accent-3); }
-.chip-btn:nth-child(3n+2)[aria-pressed="true"] { background: var(--accent-2-soft); border-color: var(--accent-2); }
-.chip-btn:nth-child(3n+3)[aria-pressed="true"] { background: var(--accent-3-soft); border-color: var(--accent-3); }
-.flow-icons div:nth-of-type(2) svg.i { color: var(--accent-2); }
-.flow-icons div:nth-of-type(3) svg.i { color: var(--accent-3); }
-.done-langs .lang-badge:nth-child(2) span { color: var(--accent-2); }
+.tag.acc2 { color: var(--accent-2-text); border-color: var(--accent-2-text); }
+.tag.acc3 { color: var(--accent-3-text); border-color: var(--accent-3-text); }
+.chip-btn:nth-child(3n+2)[aria-pressed="true"] { background: var(--accent-2-soft); border-color: var(--accent-2-text); }
+.chip-btn:nth-child(3n+3)[aria-pressed="true"] { background: var(--accent-3-soft); border-color: var(--accent-3-text); }
+.flow-icons div:nth-of-type(2) svg.i { color: var(--accent-2-text); }
+.flow-icons div:nth-of-type(3) svg.i { color: var(--accent-3-text); }
+.done-langs .lang-badge:nth-child(2) span { color: var(--accent-2-text); }
 .paper h2 { border-bottom: 2px solid color-mix(in srgb, var(--accent-2) 45%, var(--paper)); }
 .paper h2 .c { color: var(--paper-accent-3); }
 .paper .summary { border-left-color: var(--accent-2); }
@@ -329,15 +357,17 @@
 .paper .q .opt:hover:not(:disabled) { border-color: var(--accent-2); }
 
 /* ── Theme picker (settings → 外觀) ─────────────────── */
-.theme-pick h4 { margin: 0 0 10px; font: 500 11px var(--mono); color: var(--muted); letter-spacing: .04em; }
+.theme-pick h4 { margin: 0 0 10px; font: 600 13px var(--mono); color: var(--muted); letter-spacing: .04em; }
+.theme-pick h5 { margin: 12px 0 6px; font: 500 13px var(--sans); color: var(--muted); }
+.theme-pick h4 + h5 { margin-top: 0; }
 .theme-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-.theme-grid + .theme-grid { margin-top: 18px; }
+.theme-pick .theme-grid + h4 { margin-top: 22px; }
 .theme-card {
   display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 5px; min-width: 0;
   border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--muted);
 }
 .theme-card:hover { border-color: var(--line-strong); color: var(--text); }
-.theme-card[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); color: var(--text); font-weight: 600; }
+.theme-card[aria-pressed="true"] { border-color: var(--accent-text); box-shadow: 0 0 0 1px var(--accent-text); color: var(--text); font-weight: 600; }
 .theme-card .sw { display: flex; height: 26px; border-radius: 3px; overflow: hidden; box-shadow: inset 0 0 0 1px #8882; }
 .theme-card .sw i { flex: 1; }
 .theme-card .sw i:first-child { flex: 1.4; }

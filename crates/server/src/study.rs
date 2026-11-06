@@ -579,15 +579,33 @@ async fn start_conversation(State(s): State<Shared>, Json(b): Json<StartBody>) -
     Ok(Json(view(id, "active", "", &c, secs)))
 }
 
-async fn load_conversation(l: &crate::Loaded, id: i64) -> Result<(conversation::Row, Conversation), ApiError> {
-    let row = conversation::get(&l.db, id).await?.ok_or_else(|| bad("找不到這段對話"))?;
+/// `?user=` on the conversation endpoints: the user the page believes is
+/// active. Databases are per user, so the same id can exist for two users;
+/// a page left open from before a user switch must not reach the other
+/// user's conversation.
+#[derive(Deserialize)]
+struct OwnerQ {
+    user: Option<String>,
+}
+
+fn user_switched() -> ApiError {
+    ApiError(StatusCode::CONFLICT, "使用者已切換，請重新整理".into())
+}
+
+/// The conversation in the active user's database. Missing → 404; a page
+/// that names another user → 409.
+async fn load_conversation(l: &crate::Loaded, id: i64, owner: Option<&str>) -> Result<(conversation::Row, Conversation), ApiError> {
+    if owner.is_some_and(|u| u != l.ws.profile.id) {
+        return Err(user_switched());
+    }
+    let row = conversation::get(&l.db, id).await?.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "找不到這段對話".into()))?;
     let c = row.conversation().ok_or_else(|| fail("對話資料無法讀取"))?;
     Ok((row, c))
 }
 
-async fn get_conversation(State(s): State<Shared>, AxPath(id): AxPath<i64>) -> R<Value> {
+async fn get_conversation(State(s): State<Shared>, AxPath(id): AxPath<i64>, Query(q): Query<OwnerQ>) -> R<Value> {
     let l = ws(&s).await?;
-    let (row, c) = load_conversation(&l, id).await?;
+    let (row, c) = load_conversation(&l, id, q.user.as_deref()).await?;
     Ok(Json(view(id, &row.status, &row.path, &c, l.ws.profile.conversation.seconds_per_turn)))
 }
 
@@ -598,11 +616,11 @@ struct TurnBody {
 
 /// One learner turn: recast + next question. The last turn locks the
 /// conversation; nothing more can be said in it.
-async fn conversation_turn(State(s): State<Shared>, AxPath(id): AxPath<i64>, Json(b): Json<TurnBody>) -> R<Value> {
+async fn conversation_turn(State(s): State<Shared>, AxPath(id): AxPath<i64>, Query(q): Query<OwnerQ>, Json(b): Json<TurnBody>) -> R<Value> {
     let text = b.text.trim().to_string();
-    let (mut c, before, learner, templates, secs) = {
+    let (mut c, before, learner, templates, secs, owner) = {
         let l = ws(&s).await?;
-        let (row, c) = load_conversation(&l, id).await?;
+        let (row, c) = load_conversation(&l, id, q.user.as_deref()).await?;
         if row.status != "active" || c.locked() {
             return Err(ApiError(StatusCode::CONFLICT, "這段對話已經完成".into()));
         }
@@ -614,7 +632,7 @@ async fn conversation_turn(State(s): State<Shared>, AxPath(id): AxPath<i64>, Jso
         }
         let before = c.turns_done();
         let lr = learner(&l.ws, c.lang, &c.level);
-        (c, before, lr, ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.conversation.seconds_per_turn)
+        (c, before, lr, ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.conversation.seconds_per_turn, l.ws.profile.id.clone())
     };
     let detected = conversation::detect_used(&text, &c.targets, c.lang);
     c.turns.push(Turn { role: Speaker::Me, text, recast: String::new(), starters: vec![], used: detected.clone(), at: Utc::now() });
@@ -629,6 +647,10 @@ async fn conversation_turn(State(s): State<Shared>, AxPath(id): AxPath<i64>, Jso
     let starters = if last { vec![] } else { reply.starters.clone() };
     c.turns.push(Turn { role: Speaker::Ai, text: reply.question.clone(), recast: reply.recast.clone(), starters, used: vec![], at: Utc::now() });
     let l = ws(&s).await?;
+    // The user may have switched while the model was answering.
+    if l.ws.profile.id != owner {
+        return Err(user_switched());
+    }
     if !conversation::update(&l.db, id, &c, Some(before), "").await? {
         return Err(ApiError(StatusCode::CONFLICT, "這一回合已經送出過了".into()));
     }
@@ -641,11 +663,11 @@ async fn conversation_turn(State(s): State<Shared>, AxPath(id): AxPath<i64>, Jso
 }
 
 /// After the last turn: evaluation, points, the Markdown record.
-async fn finish_conversation(State(s): State<Shared>, AxPath(id): AxPath<i64>) -> R<Value> {
+async fn finish_conversation(State(s): State<Shared>, AxPath(id): AxPath<i64>, Query(q): Query<OwnerQ>) -> R<Value> {
     let r = rules(&s).await;
-    let (mut c, learner, templates) = {
+    let (mut c, learner, templates, owner) = {
         let l = ws(&s).await?;
-        let (row, c) = load_conversation(&l, id).await?;
+        let (row, c) = load_conversation(&l, id, q.user.as_deref()).await?;
         if row.status == "done" {
             let mut out = view(id, "done", &row.path, &c, l.ws.profile.conversation.seconds_per_turn);
             out["result"] = result_json(&c, &row.path, None);
@@ -655,7 +677,7 @@ async fn finish_conversation(State(s): State<Shared>, AxPath(id): AxPath<i64>) -
             return Err(bad(format!("還有 {} 回合", c.turns_limit - c.turns_done())));
         }
         let lr = learner(&l.ws, c.lang, &c.level);
-        (c, lr, ConvTemplates::load(Some(&l.ws.prompts_dir())))
+        (c, lr, ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.id.clone())
     };
     let req = conversation::review_request(&templates, &c, &learner).map_err(|e| bad(e.to_string()))?;
     let p = provider(&s).await?;
@@ -672,8 +694,8 @@ async fn finish_conversation(State(s): State<Shared>, AxPath(id): AxPath<i64>) -
     let lang = c.lang;
     let rel = {
         let l = ws(&s).await?;
-        // Someone may have finished it meanwhile.
-        let (row, _) = load_conversation(&l, id).await?;
+        // The user may have switched, or someone finished it, meanwhile.
+        let (row, _) = load_conversation(&l, id, Some(&owner)).await?;
         if row.status == "done" {
             return Err(ApiError(StatusCode::CONFLICT, "這段對話已經結算過了".into()));
         }

@@ -136,8 +136,8 @@
           <div class="flow-icons">
             <div><span data-icon="news"></span><b>新聞與你的資料</b></div><i>→</i>
             <div><span data-icon="book"></span><b>每日課程</b></div><i>→</i>
-            <div><span data-icon="mail"></span><b>AI 對話</b></div><i>→</i>
-            <div><span data-icon="check"></span><b>積分與升級</b></div>
+            <div><span data-icon="chat"></span><b>AI 對話</b></div><i>→</i>
+            <div><span data-icon="star"></span><b>積分與升級</b></div>
           </div>
         </section>
 
@@ -252,7 +252,7 @@
           <button data-step="3"><span class="c">04</span>Claude</button>
           <button data-step="4"><span class="c">05</span>本機模型</button>
           <button data-step="5"><span class="c">06</span>信件與行事曆</button>
-          <button data-step="6">外觀</button>
+          <button data-step="6"><span class="c">07</span>外觀</button>
         </div>
         <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
       </div>
@@ -379,9 +379,13 @@
         </section>
 
         <section class="step" data-step="6" hidden>
-          <div class="theme-pick"><h4>主題</h4>
-            <div class="theme-grid" id="themesDark" role="group" aria-label="深色主題"></div>
-            <div class="theme-grid" id="themesLight" role="group" aria-label="淺色主題"></div>
+          <div class="theme-pick">
+            <h4>淺色</h4>
+            <h5>單色</h5><div class="theme-grid" id="themesLightMono" role="group" aria-label="淺色・單色"></div>
+            <h5>搭配色</h5><div class="theme-grid" id="themesLightMulti" role="group" aria-label="淺色・搭配色"></div>
+            <h4>深色</h4>
+            <h5>單色</h5><div class="theme-grid" id="themesDarkMono" role="group" aria-label="深色・單色"></div>
+            <h5>搭配色</h5><div class="theme-grid" id="themesDarkMulti" role="group" aria-label="深色・搭配色"></div>
           </div>
         </section>
       </div>

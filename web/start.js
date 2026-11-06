@@ -174,6 +174,7 @@ function loadStUser() {
     b.onclick = async () => {
       try {
         await api("/api/users/select", { id: u.id });
+        resetUserState();
         await refreshStatus();
         dlgStart.close();
         greet();
@@ -218,6 +219,7 @@ async function stDoLangs() {
   const daily = Number($("#stDaily").value) || 30;
   if (wiz.creating) {
     await api("/api/users", { name: $("#stName").value, color: $("#stColor").value, languages, majors, daily_minutes: daily });
+    resetUserState();
     wiz.creating = false;
   } else {
     await api("/api/user", { languages, majors, daily_minutes: daily }, "PUT");

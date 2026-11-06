@@ -755,6 +755,46 @@ mod tests {
         assert_eq!(slug("!!!", 40), "untitled");
     }
 
+    /// WCAG contrast ratio of two `#rrggbb` colours.
+    fn contrast(a: &str, b: &str) -> f64 {
+        let lum = |h: &str| {
+            let c: Vec<f64> = (0..3)
+                .map(|i| {
+                    let v = u8::from_str_radix(&h[1 + 2 * i..3 + 2 * i], 16).unwrap() as f64 / 255.0;
+                    if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+                })
+                .collect();
+            0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+        };
+        let (x, y) = (lum(a), lum(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// docs/design.md「主題」: text ≥ 7:1, muted ≥ 4.5:1 on panel, every
+    /// accent's -text ≥ 4.5:1 on bg and panel, every -ink ≥ 4.5:1 on its fill.
+    #[test]
+    fn themes_meet_the_contrast_rules() {
+        let css = include_str!("../../../web/themes.css");
+        for id in THEMES {
+            let start = css.find(&format!(":root[data-theme=\"{id}\"] {{")).unwrap();
+            let block = &css[start..start + css[start..].find("\n}").unwrap()];
+            let tok = |name: &str| {
+                let key = format!("--{name}: #");
+                let i = block.find(&key).unwrap_or_else(|| panic!("{id}: no {name}")) + key.len() - 1;
+                &block[i..i + 7]
+            };
+            let (bg, panel) = (tok("bg"), tok("panel"));
+            assert!(contrast(tok("text"), bg) >= 7.0 && contrast(tok("text"), panel) >= 7.0, "{id}: text");
+            assert!(contrast(tok("muted"), panel) >= 4.5, "{id}: muted on panel");
+            for a in ["accent", "accent-2", "accent-3"] {
+                let t = tok(&format!("{a}-text"));
+                assert!(contrast(t, bg) >= 4.5 && contrast(t, panel) >= 4.5, "{id}: {a}-text {t}");
+                let (fill, ink) = (tok(a), tok(&format!("{a}-ink")));
+                assert!(contrast(ink, fill) >= 4.5, "{id}: {a}-ink {ink} on {fill}");
+            }
+        }
+    }
+
     #[test]
     fn theme_ids_match_the_stylesheet() {
         let css = include_str!("../../../web/themes.css");
@@ -765,7 +805,10 @@ mod tests {
             assert!(app.contains(&format!("id: \"{id}\"")), "{id} missing in app.js");
         }
         assert_eq!(css.matches(":root[data-theme=").count(), THEMES.len(), "themes.css has a theme not in THEMES");
-        for token in ["--accent:", "--accent-2:", "--accent-3:", "--accent-2-ink:", "--accent-3-ink:"] {
+        for token in [
+            "--accent:", "--accent-2:", "--accent-3:", "--accent-2-ink:", "--accent-3-ink:",
+            "--accent-text:", "--accent-2-text:", "--accent-3-text:",
+        ] {
             assert_eq!(css.matches(token).count(), THEMES.len(), "every theme defines {token}");
         }
         // Old profiles without a theme still load, and none is written back.
