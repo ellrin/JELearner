@@ -1,0 +1,111 @@
+---
+title: {{ lesson.title | tojson }}
+language: {{ lang }}
+level: {{ level }}
+date: {{ date }}
+{% if url %}
+source: {{ url | tojson }}
+{% endif %}
+engine: {{ engine }}
+course: {{ course_id | tojson }}
+course_lesson: {{ plan.number }}
+course_role: {{ role }}
+units: {{ units_summary | tojson }}
+---
+
+# {{ lesson.title }}
+
+> {{ language_label }}・{{ level }}・{{ date }}・{{ course_name }} 第 {{ plan.number }}／{{ total }} 課{{ ("・" ~ source) if source else "" }}
+
+{% if url %}
+原文：<{{ url }}>
+{% endif %}
+
+## 本課安排
+
+| 單元 | 時間 | 數量 |
+| --- | --- | --- |
+{% for u in units %}
+| {{ u.kind }} | {{ u.minutes }} 分鐘 | {{ u.items }} |
+{% endfor %}
+
+{% if plan.review %}
+複習字：{{ plan.review | join("、") }}
+{% endif %}
+
+## 摘要
+
+{{ lesson.summary }}
+
+## 今日課文
+
+{{ text }}
+
+## 單字
+
+| 單字 | 讀音 | 詞性 | 意思 |
+| --- | --- | --- | --- |
+{% for v in lesson.vocabulary %}
+| {{ v.term }} | {{ v.reading }} | {{ v.part_of_speech }} | {{ v.meaning }} |
+{% endfor %}
+
+{% for v in lesson.vocabulary if v.example %}
+- **{{ v.term }}**：{{ v.example }}
+  <br>{{ v.example_translation }}
+{% endfor %}
+
+## 文法
+
+{% for g in lesson.grammar %}
+### {{ loop.index }}. {{ g.pattern }}
+
+**意思**：{{ g.meaning }}
+
+{{ g.explanation }}
+
+- {{ g.example }}
+  <br>{{ g.example_translation }}
+
+{% endfor %}
+## 問答
+
+{% for q in lesson.questions %}
+{{ loop.index }}. {{ q.question }}
+{% for o in q.options %}
+   - {{ "ABCDEFG"[loop.index0] }}. {{ o }}
+{% endfor %}
+{% endfor %}
+
+{% if output %}
+## 輸出練習
+
+{% for o in output %}
+{{ loop.index }}. （{{ o.kind }}）{{ o.prompt }}{{ ("　提示：" ~ o.hint) if o.hint else "" }}
+{% endfor %}
+
+{% endif %}
+## 對話
+
+**主題**：{{ conversation.topic }}
+
+> {{ conversation.opening }}
+
+{% if conversation.target_words %}
+目標字：{{ conversation.target_words | join("、") }}
+{% endif %}
+
+<details>
+<summary>解答</summary>
+
+{% for q in lesson.questions %}
+{{ loop.index }}. {{ q.answer }}：{{ q.explanation }}
+{% endfor %}
+{% if output %}
+
+輸出練習：
+{% for o in output %}
+{{ loop.index }}. {{ o.answer }}
+{% endfor %}
+{% endif %}
+
+</details>

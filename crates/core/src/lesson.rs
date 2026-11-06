@@ -148,7 +148,7 @@ pub enum LessonError {
     Invalid(String),
 }
 
-fn native_name(code: &str) -> &str {
+pub(crate) fn native_name(code: &str) -> &str {
     match code {
         "zh-TW" | "zh-Hant" => "Traditional Chinese (Taiwan)",
         "zh-CN" | "zh-Hans" => "Simplified Chinese",
@@ -158,7 +158,7 @@ fn native_name(code: &str) -> &str {
     }
 }
 
-fn render(name: &str, template: &str, ctx: Value) -> Result<String, LessonError> {
+pub(crate) fn render(name: &str, template: &str, ctx: Value) -> Result<String, LessonError> {
     let mut env = Environment::new();
     env.set_trim_blocks(true);
     env.set_lstrip_blocks(true);
@@ -262,9 +262,10 @@ const DATA_MARK: &str = "<!-- jelearner:lesson ";
 
 /// Append the lesson's data to its Markdown as an HTML comment (invisible
 /// when rendered), so the database can be rebuilt from the workspace files
-/// on another machine.
-pub fn embed_data(markdown: &str, lesson: &Lesson) -> String {
-    let json = serde_json::to_string(lesson).unwrap_or_default().replace("-->", "--\\u003e");
+/// on another machine. `data` is a [`Lesson`] or a superset of it (a course
+/// lesson adds fields; [`extract_data`] ignores what it does not know).
+pub fn embed_data<T: Serialize>(markdown: &str, data: &T) -> String {
+    let json = serde_json::to_string(data).unwrap_or_default().replace("-->", "--\\u003e");
     format!("{}\n\n{DATA_MARK}{json} -->\n", markdown.trim_end())
 }
 
