@@ -4,7 +4,9 @@
 // review notebook (one page per lesson or conversation, notes and pictures).
 // Little text; one primary button = the next step.
 
-const STATUS_LABEL = { planned: "未開始", generated: "進行中", done: "完成" };
+// Only a lesson in progress gets a word; planned and done lessons show it by
+// their number circle and step dots.
+const STATUS_LABEL = { generated: "進行中" };
 const ROLE_LABEL = { background: "背景", article: "文章", review: "複習", regular: "", conversation: "對話", check: "檢核" };
 const ANGLE_LABEL = { technical: "技術", social: "社會", "personal life": "生活", background: "背景", review: "複習", work: "職場" };
 
@@ -44,7 +46,7 @@ function courseCard(c, primary) {
   const card = el("div", `course-card${c.status === "finished" ? " finished" : ""}${primary ? " next" : ""}`);
   const top = el("div", "cc-top");
   top.append(kindTag(c.kind, c.kind_label));
-  if (c.status === "finished") top.append(el("span", "tag ok", "完成"));
+  if (c.status === "finished") top.append(el("span", "tag acc2", "完成"));
   card.append(top);
   card.append(el("h3", c.lang === "ja" ? "ja" : null, c.name));
   if (c.summary) card.append(el("div", "sum", c.summary));
@@ -53,7 +55,7 @@ function courseCard(c, primary) {
   card.append(prog);
   const foot = el("div", "cc-foot");
   if (c.next != null) {
-    foot.append(elr("span", "nx", `第 ${c.next} 課・${c.next_title ?? ""}`, c.lang));
+    foot.append(elr("span", "nx", lessonLabel(c.next, c.next_title), c.lang));
     const b = el("button", primary ? "primary small" : "ghost", c.done || c.next > 1 ? "繼續" : "開始");
     b.onclick = (e) => { e.stopPropagation(); go("courses", { course: c.id, courseLesson: c.next, step: null }); };
     foot.append(b);
@@ -119,6 +121,8 @@ function drawTopicCreate(box) {
   const ta = el("textarea", "big-input");
   ta.rows = 4;
   ta.placeholder = state.lang === "ja" ? "例：日本の音楽、旅行\n或貼上網址、文章" : "例：AI chips, space travel\n或貼上網址、文章";
+  // From a news card: its address is already in the box.
+  if (state.topicPrefill) { ta.value = state.topicPrefill; state.topicPrefill = null; }
   const detected = el("div", "detected");
   const chips = el("div", "topic-chips suggest");
   const help = el("button", "help", "?");
@@ -138,16 +142,13 @@ function drawTopicCreate(box) {
     create.disabled = !(p.keywords.length || p.urls.length || p.pasted);
   };
   ta.oninput = update;
-  // The learner's interests as one-tap keywords.
-  api("/api/progress?lang=" + state.lang).then((p) => {
-    const ints = (p.interests ?? []).map((x) => x.name).concat((state.status?.user?.interests ?? []));
-    const uniq = [...new Set(ints)].slice(0, 8);
-    for (const k of uniq) {
-      const c = el("span", null, k);
-      c.onclick = () => { ta.value = ta.value.trim() ? `${ta.value.trim()}, ${k}` : k; update(); ta.focus(); };
-      chips.append(c);
-    }
-  }).catch(() => {});
+  // The learner's own interests (interests.csv) as one-tap keywords.
+  const ints = (state.status?.user?.interests ?? []).filter((i) => !i.lang || i.lang === state.lang).map((i) => i.keyword);
+  for (const k of [...new Set(ints)].slice(0, 8)) {
+    const c = el("span", null, k);
+    c.onclick = () => { ta.value = ta.value.trim() ? `${ta.value.trim()}, ${k}` : k; update(); ta.focus(); };
+    chips.append(c);
+  }
   create.onclick = () => busy(create, async () => {
     const p = parseTopicInput(ta.value);
     const sources = p.urls.map((u) => ({ url: u }));
@@ -167,9 +168,20 @@ function drawTopicCreate(box) {
     } catch (e) {
       out.className = "note err"; out.textContent = e.message;
       create.textContent = "建立課程";
+      // A site that does not allow fetching: one tap to paste the text instead.
+      if (/不允許自動抓取/.test(e.message)) {
+        const paste = ghostButton("pen", "改貼文章", () => {
+          ta.value = ta.value.split("\n").filter((l) => !/^https?:\/\//i.test(l.trim())).join("\n").trim();
+          ta.placeholder = "把文章文字貼在這裡";
+          out.textContent = ""; out.className = "note";
+          update(); ta.focus();
+        });
+        out.append(document.createElement("br"), paste);
+      }
     } finally { sk.remove(); }
   });
   box.append(ta, detected, chips, row, out);
+  update();
   setTimeout(() => ta.focus(), 50);
 }
 
@@ -188,7 +200,7 @@ async function drawFixedCreate(box) {
   const create = primaryButton("建立課程", null);
   create.disabled = true;
   const help = el("button", "help", "?");
-  help.dataset.tip = "依程度把單字分課（英文 B1 每課 10 個字），每第 5 課是複習課。檔案存進工作區的 vocab/ 或 grammar/，不會覆蓋同名檔案。上課時才產生課文：有含這些字的新聞就改寫，沒有就寫一篇短文。";
+  help.dataset.tip = "依程度把單字分課（英文 B1 每課 10 個字），每第 5 課是複習課。上傳的清單存在 recipes/lists/（不覆蓋同名檔案），打開哪一課，那一課的字才進複習。上課時才產生課文：有含這些字的新聞就改寫，沒有就寫一篇短文。";
   row.append(create, help);
   const out = el("div", "note");
   const refresh = () => {
@@ -207,7 +219,8 @@ async function drawFixedCreate(box) {
     const text = await f.text();
     const kind = /(^|,|\t)\s*(pattern|文法)\s*(,|\t|$)/im.test(text.split("\n")[0] ?? "") ? "grammar" : "vocab";
     upload = { name: f.name, text, kind };
-    if (!name.value) name.placeholder = f.name.replace(/\.[^.]+$/, "");
+    // The same name the server gives the course when this is left empty.
+    if (!name.value) name.placeholder = f.name.replace(/\.[^.]+$/, "").replace(/-(en|ja)$/i, "") || f.name;
     refresh();
   };
   drop.onclick = () => file.click();
@@ -238,7 +251,7 @@ async function drawFixedCreate(box) {
   } catch { /* lists are optional */ }
   box.append(name, row, out);
   create.onclick = () => busy(create, async () => {
-    const vocab = [...picked].filter((p) => p.includes("/vocab/"));
+    const vocab = [...picked].filter((p) => !p.includes("/grammar/"));
     const grammar = [...picked].filter((p) => p.includes("/grammar/"));
     const body = { kind: "fixed", lang: state.lang, name: name.value.trim(), vocab, grammar, describe: !!state.status?.engine_ready };
     if (upload) { body[upload.kind === "grammar" ? "grammar_text" : "vocab_text"] = upload.text; body.file_name = upload.name; }
@@ -266,7 +279,8 @@ function planningSkeleton() {
 async function renderCourseOutline(page) {
   const c = await api(`/api/courses/${encodeURIComponent(state.course)}`);
   const back = ghostButton("back", "課程", () => go("courses", { course: null }));
-  viewbar(c.name, null, back);
+  // The name is on the card below (once).
+  viewbar("", null, back);
   const head = el("div", "outline-head");
   const ring = levelRing(92, `${c.done}/${c.total}`, c.total ? c.done / c.total : 0, "課", c.status === "finished");
   const info = el("div", "oh-info");
@@ -308,9 +322,10 @@ async function renderCourseOutline(page) {
     const num = el("span", "num", l.status === "done" ? "" : String(l.number));
     if (l.status === "done") num.append(icon("check"));
     const body = el("div", "ll-body");
-    const t = elr("div", "t", l.title, c.lang);
+    const t = elr("div", "t", l.title.replace(/^第\s*\d+\s*課\s*[：:・]\s*/, "") || `第 ${l.number} 課`, c.lang);
     body.append(t);
     const meta = el("div", "meta");
+    if (l.has_article) { const a = el("span", "tag acc3 art"); a.append(icon("book"), document.createTextNode("你的文章")); meta.append(a); }
     if (ROLE_LABEL[l.role]) meta.append(el("span", `tag role-${l.role}`, ROLE_LABEL[l.role]));
     if (l.angle && ANGLE_LABEL[l.angle] && ANGLE_LABEL[l.angle] !== ROLE_LABEL[l.role]) meta.append(el("span", "tag", ANGLE_LABEL[l.angle]));
     if (l.words.length) meta.append(el("span", null, `${l.words.length} 個新字`));
@@ -319,7 +334,7 @@ async function renderCourseOutline(page) {
     const dots = el("div", "udots");
     dots.title = `${l.units_done} / ${l.units.length} 個單元`;
     for (const u of l.units) { const d = el("i", u.done ? "on" : ""); d.title = unitTitle(u.kind, c.lang); dots.append(d); }
-    const chip = el("span", `chip-status s-${l.status}`, STATUS_LABEL[l.status] ?? l.status);
+    const chip = STATUS_LABEL[l.status] ? el("span", `chip-status s-${l.status}`, STATUS_LABEL[l.status]) : el("span");
     li.append(num, body, dots, chip);
     li.onclick = () => go("courses", { course: c.id, courseLesson: l.number, step: null });
     ul.append(li);
@@ -331,8 +346,11 @@ async function renderCourseOutline(page) {
 
 async function renderCourseLesson(page) {
   const id = state.course, n = state.courseLesson;
-  const back = ghostButton("back", "課程大綱", () => go("courses", { course: id, courseLesson: null }));
-  viewbar(`第 ${n} 課`, null, back);
+  // A daily lesson belongs to today: back goes to today (and the nav lights 今日).
+  const backFor = (daily) => (daily
+    ? ghostButton("back", "今日", () => go("today"))
+    : ghostButton("back", "課程大綱", () => go("courses", { course: id, courseLesson: null })));
+  viewbar(`第 ${n} 課`, null, backFor(state.fromToday && state.cl?.course?.id === id ? state.cl.course.kind === "daily" : false));
   const sk = el("div", "lesson-wait");
   sk.append(planningSkeleton(), el("div", "note", "正在準備這一課…"));
   page.append(sk);
@@ -349,12 +367,15 @@ async function renderCourseLesson(page) {
   }
   sk.remove();
   state.cl = o;
+  const daily = o.course.kind === "daily";
+  state.inDaily = daily;
+  markNav();
   const lang = o.course.lang;
-  const extra = [back];
+  const extra = [backFor(daily)];
   if (lang === "ja") extra.unshift(furiganaButton());
   viewbar("", null, ...extra);
   const h = $("#viewbar h1");
-  h.append(elr("span", null, `第 ${n} 課・${o.plan.title}`, lang));
+  h.append(elr("span", null, daily ? o.plan.title : lessonLabel(n, o.plan.title), lang));
   h.title = o.course.name;
   const units = o.plan.units;
   const firstOpen = units.findIndex((u) => !u.done);
@@ -392,44 +413,57 @@ function lessonDoneBanner(o) {
   b.append(icon("check"), el("b", null, "這一課完成了"));
   const next = o.course.next;
   const row = el("div", "actions-row");
-  if (next != null) row.append(primaryButton(`第 ${next} 課`, () => go("courses", { course: o.course.id, courseLesson: next, step: null }), true));
-  else row.append(primaryButton("回到課程", () => go("courses", { course: o.course.id, courseLesson: null }), true));
+  // The main button is today's next task (or back to today).
+  const main = primaryButton("回到今日", () => go("today"), true);
+  row.append(main);
+  nextTodayStep().then((st) => { main.textContent = st.label; main.onclick = st.onclick; });
+  if (o.course.kind !== "daily" && next != null) row.append(ghostButton("layers", `第 ${next} 課`, () => go("courses", { course: o.course.id, courseLesson: next, step: null })));
   if (o.notebook) row.append(ghostButton("notebook", "筆記本", () => go("notebook", { nbPage: { lang: o.course.lang, stem: o.notebook } })));
   b.append(row);
   return b;
 }
 
+/** 「先做 AI 對話」／「先做中翻英」: a space only before Latin letters. */
+const doFirst = (t) => `先做${/^[A-Za-z]/.test(t) ? " " : ""}${t}`;
+
 /** Send a unit result, then the result card with the next step. */
-async function reportUnit(box, o, u, body, title) {
+async function reportUnit(box, o, u, body, title, total) {
   let r;
   try {
     r = await api(`/api/courses/${encodeURIComponent(o.course.id)}/lessons/${o.number}/units/${u.index}`, body);
   } catch (e) { flash(e.message, true); return; }
   u.done = u.done || r.passed;
   paintMe(r.summary);
-  refreshStatus();
   const nx = r.next ?? {};
   const lang = o.course.lang;
+  const daily = o.course.kind === "daily";
   const next = [];
-  if (nx.lesson === o.number && nx.unit != null) {
-    next.push({ label: `下一步：${unitTitle(nx.kind, lang)}`, primary: true, onclick: () => { state.step = nx.unit; render(); } });
-  } else if (nx.lesson != null) {
-    next.push({ label: r.lesson_done ? `第 ${nx.lesson} 課` : `下一步`, primary: true, onclick: () => go("courses", { course: o.course.id, courseLesson: nx.lesson, step: null }) });
-  } else {
-    next.push({ label: "回到課程", primary: true, onclick: () => go("courses", { course: o.course.id, courseLesson: null }) });
-  }
   if (!r.passed) {
     // Positive and forward: redo is the main step, moving on is possible.
     const units = o.plan.units;
     const later = units.find((x) => x.index > u.index && !x.done) ?? units.find((x) => x.index !== u.index && !x.done);
-    next.length = 0;
     next.push({ label: "再做一次", primary: true, onclick: () => { state.step = u.index; render(); } });
-    if (later) next.push({ label: `先做${unitTitle(later.kind, lang)}`, onclick: () => { state.step = later.index; render(); } });
-  } else next.push({ label: "回到今日", onclick: () => go("today") });
+    if (later) next.push({ label: doFirst(unitTitle(later.kind, lang)), onclick: () => { state.step = later.index; render(); } });
+  } else if (r.lesson_done || daily) {
+    // The lesson is done, or it is today's daily lesson: today's next task.
+    next.push(await nextTodayStep());
+    if (!daily && nx.lesson != null && nx.lesson !== o.number) next.push({ label: `第 ${nx.lesson} 課`, onclick: () => go("courses", { course: o.course.id, courseLesson: nx.lesson, step: null }) });
+  } else if (nx.lesson === o.number && nx.unit != null) {
+    next.push({ label: `下一步：${unitTitle(nx.kind, lang)}`, primary: true, onclick: () => { state.step = nx.unit; render(); } });
+    next.push({ label: "回到今日", onclick: () => go("today") });
+  } else if (nx.lesson != null) {
+    next.push({ label: "下一步", primary: true, onclick: () => go("courses", { course: o.course.id, courseLesson: nx.lesson, step: null }) });
+    next.push({ label: "回到今日", onclick: () => go("today") });
+  } else {
+    next.push({ label: "回到課程", primary: true, onclick: () => go("courses", { course: o.course.id, courseLesson: null }) });
+  }
+  const gradable = u.kind !== "review";
   const card = resultCard({
     points: r.points,
-    title: r.course_finished ? "整個課程完成了！" : r.lesson_done ? "這一課完成了！" : r.passed ? title : "差一點，再試一次",
+    title: r.course_finished ? "整個課程完成了！" : r.lesson_done ? "這一課完成了！" : r.passed ? title : "差一點",
     score: r.score,
+    total: gradable ? total : null,
+    mistakes: gradable && r.score != null && r.score < 1,
     already: r.already,
     levelUp: r.level_up,
     difficulty: r.ask_difficulty ? { lang } : null,
@@ -440,6 +474,7 @@ async function reportUnit(box, o, u, body, title) {
   // Steps bar: light up the finished step.
   const li = $$(".steps-bar li")[u.index];
   if (li && r.passed) { li.classList.add("done"); const c = $(".c", li); c.innerHTML = ""; c.append(icon("check")); }
+  refreshStatus().then(greet);
 }
 
 // Step 1: the review round (due cards, then the lesson's words).
@@ -476,27 +511,50 @@ function stepReview(box, o, u) {
     const g = el("div", "grades");
     if (!shown) {
       const b = el("button", "primary", "顯示答案");
-      b.onclick = () => { shown = true; draw(); };
+      b.append(el("small", null, "空白鍵"));
+      b.onclick = show;
       g.append(b);
       setTimeout(() => b.focus(), 30);
     } else {
-      for (const [grade, label] of [[1, "忘了"], [3, "模糊"], [4, "記得"], [5, "很熟"]]) {
-        const b = el("button", grade >= 4 ? "primary" : "ghost", label);
-        b.onclick = async () => {
-          if (it.item_id != null) {
-            try { await api("/api/review", { kind: it.item_kind, id: it.item_id, grade, in_course: true }); } catch (e) { flash(e.message, true); return; }
-          }
-          if (grade >= 3) good += 1;
-          i += 1; shown = false; draw();
-        };
+      // Only 記得 is the main button; each grade has its own soft tint and key.
+      [[1, "忘了"], [3, "模糊"], [4, "記得"], [5, "很熟"]].forEach(([grade, label], k) => {
+        const b = el("button", `grade g${grade}${grade === 4 ? " primary" : ""}`);
+        b.append(el("span", null, label), el("small", null, String(k + 1)));
+        b.onclick = () => rate(grade);
         g.append(b);
-      }
+      });
     }
     fc.append(g);
     stage.append(fc);
   };
+  let busyRate = false;
+  const show = () => { if (!shown && i < cards.length) { shown = true; draw(); } };
+  const rate = async (grade) => {
+    if (!shown || busyRate || i >= cards.length) return;
+    const it = cards[i];
+    busyRate = true;
+    try {
+      if (it.item_id != null) await api("/api/review", { kind: it.item_kind, id: it.item_id, grade, in_course: true });
+    } catch (e) { flash(e.message, true); busyRate = false; return; }
+    busyRate = false;
+    if (grade >= 3) good += 1;
+    i += 1; shown = false; draw();
+  };
+  // Keyboard: space shows the answer, 1–4 grade it (while this step is on screen).
+  reviewKeys = (e) => {
+    if (!stage.isConnected) { reviewKeys = null; return; }
+    if (e.key === " ") { e.preventDefault(); show(); }
+    const map = { 1: 1, 2: 3, 3: 4, 4: 5 };
+    if (map[e.key]) rate(map[e.key]);
+  };
   draw();
 }
+
+let reviewKeys = null;
+document.addEventListener("keydown", (e) => {
+  if (!reviewKeys || state.view !== "courses" || e.target.closest?.("input, textarea, select, dialog") || e.metaKey || e.ctrlKey || e.altKey) return;
+  reviewKeys(e);
+});
 
 // Step 2: today's text, words, grammar and the reading quiz.
 function stepReading(box, o, u) {
@@ -505,7 +563,7 @@ function stepReading(box, o, u) {
   box.append(paper);
   const quiz = {
     id: o.lesson_id, lang: o.course.lang, total: o.lesson.questions?.length ?? 0, answers: {}, done: false, after: paper,
-    onDone: (answers) => reportUnit(box, o, u, { answers }, "閱讀完成"),
+    onDone: (answers) => reportUnit(box, o, u, { answers }, "閱讀完成", o.lesson.questions?.length ?? 0),
   };
   const words = [...(o.plan.words ?? []).map((w) => w.term), ...(o.plan.review ?? [])];
   lessonPaper(paper, o.lesson, o.row, { quiz, highlight: words });
@@ -563,7 +621,7 @@ function stepOutput(box, o, u) {
       q.classList.add(v ? "right" : "wrong");
       row.append(el("span", `tag ${v ? "ok" : "bad"}`, v ? "對了" : "記進錯題本"));
       if (marks.every((m) => m !== null)) {
-        reportUnit(box, o, u, { items: items.map((x, j) => ({ prompt: x.prompt, answer: answers[j], model: x.answer, hint: x.hint, correct: marks[j] })) }, "輸出完成");
+        reportUnit(box, o, u, { items: items.map((x, j) => ({ prompt: x.prompt, answer: answers[j], model: x.answer, hint: x.hint, correct: marks[j] })) }, "輸出完成", items.length);
       }
     };
     row.append(check);
@@ -677,7 +735,7 @@ async function renderNotebookPage(page) {
   const sheet = el("div", "paper nb-sheet");
   sheet.lang = lang;
   const meta = el("div", "meta");
-  meta.append(el("span", null, p.kind === "conversation" ? "對話" : "課"), el("span", null, p.date), el("span", null, langLabel(lang)), el("span", null, p.path));
+  meta.append(el("span", null, p.kind === "conversation" ? "對話" : "課"), el("span", null, p.date), el("span", null, langLabel(lang)), infoButton([p.path]));
   sheet.append(meta);
   if (d.summary) sheet.append(elr("div", "summary", d.summary, lang));
   const h2 = (t, n, cls) => { const h = el("h2", cls, t); if (n != null) h.append(el("span", "c", String(n))); return h; };

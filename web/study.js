@@ -103,19 +103,62 @@ function setAvatar(node, u) {
   }
 }
 
+/** The pass line and the bonus line (config/progress.toml, via the summary). */
+const passRules = () => state.summary?.rules ?? { pass_score: 0.7, bonus_score: 0.95, bonus: 0.5 };
+
 /**
- * The card shown when something is finished: +points, a word of praise,
- * a level-up banner, the early difficulty question, one or two next steps.
+ * A score that did not pass: a bar with a tick at the pass line and how
+ * many more right answers it takes (`total` items), encouraging, no "+0".
  */
-function resultCard({ points = 0, title, score, levelUp, already, difficulty, notebook, next = [] }) {
-  const card = el("div", "result");
+function scoreMeter(score, total, mistakes) {
+  const pass = passRules().pass_score;
+  const box = el("div", "meter");
+  const bar = el("div", "meter-bar");
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", `${pct(score)}，過關 ${pct(pass)}`);
+  const fill = el("i");
+  const tick = el("b", "tick");
+  tick.style.left = `${pass * 100}%`;
+  tick.title = `過關 ${pct(pass)}`;
+  bar.append(fill, tick);
+  requestAnimationFrame(() => requestAnimationFrame(() => (fill.style.width = `${Math.max(0, Math.min(1, score)) * 100}%`)));
+  box.append(bar);
+  const lines = [];
+  if (total) {
+    const need = Math.max(1, Math.ceil(pass * total - 1e-9) - Math.round(score * total));
+    lines.push(`${Math.round(score * total)} / ${total} 題・再 ${need} 題就過關`);
+  } else lines.push(`${pct(score)}・差一點就過關`);
+  box.append(el("div", "meter-t", lines.join("")));
+  if (mistakes) {
+    const m = el("div", "meter-m");
+    m.append(icon("alert"), document.createTextNode("錯的題目已收進錯題本"));
+    box.append(m);
+  }
+  return box;
+}
+
+/**
+ * The card shown when something is finished: +points (with a small label
+ * when the bonus came), a word of praise, a level-up banner, the early
+ * difficulty question, one or two next steps. A score that did not pass
+ * shows a meter with the pass line instead of a big "+0".
+ */
+function resultCard({ points = 0, title, score, total, mistakes, bonusLabel, levelUp, already, difficulty, notebook, next = [] }) {
+  const card = el("div", `result${points > 0 || already ? "" : " missed"}`);
   card.setAttribute("role", "status");
-  const plus = el("div", `plus${points > 0 ? "" : " zero"}`, points > 0 ? `+${fmtPts(points)}` : already ? "✓" : "+0");
-  card.append(plus, el("h3", null, title));
-  const meta = [];
-  if (score != null) meta.push(pct(score));
-  if (already) meta.push("已得過分");
-  if (meta.length) card.append(el("div", "score", meta.join("・")));
+  if (points > 0) {
+    const plus = el("div", "plus", `+${fmtPts(points)}`);
+    card.append(plus);
+    if (points > 1) card.append(el("span", "bonus", bonusLabel ?? (score != null && score >= 0.999 ? "全對加分" : "高分加分")));
+  } else if (already) card.append(el("div", "plus", "✓"));
+  card.append(el("h3", null, title));
+  if (points > 0 || already) {
+    const meta = [];
+    if (score != null) meta.push(pct(score));
+    if (already) meta.push("已得過分");
+    if (meta.length) card.append(el("div", "score", meta.join("・")));
+    if (mistakes) card.append(el("div", "score", "錯的題目已收進錯題本"));
+  } else if (score != null && total) card.append(scoreMeter(score, total, mistakes));
   if (levelUp) {
     const lv = el("div", "levelup");
     lv.append(icon("star"), document.createTextNode(`${levelUp.from} → ${levelUp.to}`));
@@ -159,6 +202,37 @@ function resultCard({ points = 0, title, score, levelUp, already, difficulty, no
   return card;
 }
 
+// ── today's data, shared ───────────────────────────────
+// The profile card, the today page and the secretary all read /api/today;
+// one request serves them when they ask at the same moment.
+let todayCache = null;
+function fetchToday(fresh = false) {
+  const key = `${state.status?.user?.id ?? ""}/${state.lang}`;
+  if (!fresh && todayCache && todayCache.key === key && Date.now() - todayCache.at < 4000) return todayCache.p;
+  const p = api(`/api/today?lang=${state.lang}`);
+  todayCache = { key, at: Date.now(), p };
+  p.catch(() => { if (todayCache?.p === p) todayCache = null; });
+  return p;
+}
+
+/** A task's name for buttons and the secretary (e.g. 中翻英, 訂正錯題). */
+function taskName(task) {
+  return task.id === "mistakes" ? "訂正錯題" : unitTitle(task.kind);
+}
+
+/**
+ * What to do after something is finished: today's next task as the main
+ * button (its name), or back to today when everything is done.
+ */
+async function nextTodayStep() {
+  try {
+    const t = await fetchToday(true);
+    const task = t.next != null ? t.tasks[t.next] : null;
+    if (task) return { label: `下一步：${taskName(task)}`, primary: true, onclick: () => (task.id === "mistakes" ? go("mistakes") : openStep(task)) };
+  } catch { /* fall back to the today page */ }
+  return { label: "回到今日", primary: true, onclick: () => go("today") };
+}
+
 // ── profile card ───────────────────────────────────────
 
 let meBusy = false;
@@ -177,7 +251,7 @@ async function refreshMe() {
   if (meBusy) return;
   meBusy = true;
   try {
-    const t = await api(`/api/today?lang=${state.lang}`);
+    const t = await fetchToday();
     paintMe(t.summary);
   } catch { /* the card keeps its last numbers */ } finally { meBusy = false; }
 }
@@ -233,23 +307,31 @@ function squareImage(file, size, quality) {
 // ── today: the task list ───────────────────────────────
 
 async function renderToday(page) {
-  if (state.todayMode === "review") return renderReview(page);
   viewbar("今日", null);
   if (!state.status?.user) { page.append(el("div", "empty", "請先選擇使用者")); return; }
-  const t = await api(`/api/today?lang=${state.lang}`);
+  const t = await fetchToday();
   const sum = t.summary;
   paintMe(sum);
 
-  const head = el("div", "today-head");
-  head.append(levelRing(96, sum.level, sum.points_since / (sum.step_points || 1), sum.next ? `→ ${sum.next}` : null, sum.eligible));
-  const pts = el("div", "pts");
-  const big = el("div", "big", fmtPts(sum.today));
-  big.append(el("small", null, ` / ${fmtPts(sum.goal)}`));
-  pts.append(el("div", "k", "今日積分"), big, ptsBar(sum.today / (sum.goal || 1), sum.today >= sum.goal ? "ok" : ""));
+  // The big ring counts today's points towards the daily goal; the level
+  // is a thin bar beside it. Reaching the goal turns the ring -3 with a check.
+  const reached = sum.goal > 0 && sum.today >= sum.goal;
+  const head = el("div", `today-head${reached ? " reached" : ""}`);
+  const ring = levelRing(132, fmtPts(sum.today), sum.today / (sum.goal || 1), `/ ${fmtPts(sum.goal)} 分`, reached);
+  ring.classList.add("goal-ring");
+  ring.title = `今日積分 ${fmtPts(sum.today)} / ${fmtPts(sum.goal)}`;
+  if (reached) { const ck = el("span", "goal-check"); ck.append(icon("check")); ring.append(ck); }
+  const mid = el("div", "pts");
+  mid.append(el("div", "goal-line", reached ? "今天的目標達成了！" : `還差 ${fmtPts(Math.max(0, sum.goal - sum.today))} 分`));
+  const lv = el("div", "lv-row");
+  lv.append(el("b", null, sum.level), el("span", null, sum.next ? `→ ${sum.next}` : ""));
+  const lvBar = ptsBar(sum.points_since / (sum.step_points || 1), `thin${sum.eligible ? " ok" : ""}`);
+  lvBar.title = sum.next ? `下一階 ${sum.next}：${fmtPts(sum.points_since)} / ${fmtPts(sum.step_points)} 分` : "";
+  mid.append(lv, lvBar);
   const streak = el("div", "streak");
   streak.title = "連續天數";
   streak.append(icon("flame"), el("b", null, String(sum.streak)), el("span", null, "天"));
-  head.append(pts, streak);
+  head.append(ring, mid, streak);
   page.append(head);
 
   const ready = !!state.status?.engine_ready;
@@ -264,18 +346,18 @@ async function renderToday(page) {
   });
   for (const g of groups) {
     const box = el("div", "today-lesson");
-    const first = g.tasks[0][0];
     if (g.key !== "other") {
       const les = g.key === "daily" ? null : t.lessons.find((l) => `${l.course}#${l.number}` === g.key);
       const hd = el("div", "tl-head");
       const kind = g.key === "daily" ? "每日課程" : les?.kind_label ?? "";
       hd.append(el("span", `tag ${g.key === "daily" || les?.kind === "daily" ? "acc2" : "acc"}`, kind));
-      const title = g.key === "daily" ? (t.daily?.topic?.name ?? "今日課程") : les?.kind === "daily" ? les.title : `第 ${les?.number} 課・${les?.title ?? ""}`;
+      const title = g.key === "daily" ? (t.daily?.topic?.name ?? "今日課程") : les?.kind === "daily" ? les.title : lessonLabel(les?.number, les?.title);
       hd.append(elr("b", null, title, state.lang));
       if (les && les.kind !== "daily") hd.append(el("span", "sub", les.course_name));
+      // Steps of the lesson (the ring above counts points).
       const doneN = g.tasks.filter(([x]) => x.done).length;
       const mins = g.key === "daily" ? t.daily?.minutes : les?.minutes;
-      const meta = el("span", "n", `${doneN} / ${g.tasks.length}${mins ? `・${mins} 分` : ""}`);
+      const meta = el("span", "n", `${doneN} / ${g.tasks.length} 步${mins ? `・${mins} 分鐘` : ""}`);
       hd.append(meta);
       box.append(hd);
     }
@@ -295,6 +377,12 @@ async function renderToday(page) {
   }
 }
 
+/** 第 3 課・Title, without repeating 第 3 課 when the title already starts with it. */
+function lessonLabel(n, title) {
+  const t = String(title ?? "").replace(/^第\s*\d+\s*課\s*[：:・]\s*/, "");
+  return t ? `第 ${n} 課・${t}` : `第 ${n} 課`;
+}
+
 const UNIT_TITLE = { review: "複習卡片", reading: "課文與閱讀", translation: "翻譯", "sentence-making": "造句", cloze: "填空", paraphrase: "換句話說", conversation: "AI 對話", quiz: "測驗", listening: "聽力", dictation: "聽寫", shadowing: "跟讀" };
 const UNIT_ICON = { review: "cards", reading: "book", translation: "pen", "sentence-making": "pen", cloze: "pen", paraphrase: "pen", conversation: "chat", quiz: "check" };
 const unitTitle = (k, lang = state.lang) => (k === "translation" ? (lang === "ja" ? "中翻日" : "中翻英") : UNIT_TITLE[k] ?? k);
@@ -304,11 +392,11 @@ async function openStep(task) {
   if (task.daily) {
     try {
       const d = await api("/api/daily", { lang: state.lang });
-      go("courses", { course: d.id, courseLesson: d.next ?? 1, step: task.unit });
+      go("courses", { course: d.id, courseLesson: d.next ?? 1, step: task.unit, fromToday: true });
     } catch (e) { flash(e.message, true); }
     return;
   }
-  go("courses", { course: task.course, courseLesson: task.number, step: task.unit });
+  go("courses", { course: task.course, courseLesson: task.number, step: task.unit, fromToday: true });
 }
 
 function taskCard(task, isNext, engineReady) {
@@ -316,17 +404,15 @@ function taskCard(task, isNext, engineReady) {
   card.dataset.task = task.kind ?? task.id;
   const ic = el("div", "ic");
   const body = el("div");
-  let title, sub, action, label = "開始";
+  let title, sub, action, label = "開始", reward = null;
   if (task.id === "unit") {
     ic.append(icon(UNIT_ICON[task.kind] ?? "book"));
     title = unitTitle(task.kind);
-    const bits = [];
-    if (task.kind === "review") bits.push(task.due ? `${task.due} 張到期` : `${task.items} 張`);
-    else if (task.kind === "reading") bits.push(`${task.items} 題`);
-    else if (task.kind === "conversation") bits.push(`${task.items} 回合`);
-    else bits.push(`${task.items} 題`);
-    bits.push(`${task.minutes} 分`);
-    sub = task.done ? "完成" : bits.join("・");
+    if (task.kind === "review") sub = task.due ? `${task.due} 張到期` : `${task.items} 張`;
+    else if (task.kind === "conversation") sub = `${task.items} 回合`;
+    else sub = `${task.items} 題`;
+    // Each step passed = 1 point (more with a high score).
+    reward = `+1・約 ${task.minutes} 分鐘`;
     action = () => openStep(task);
     if (task.unit > 0 && !task.done) label = "繼續";
   } else {
@@ -339,10 +425,15 @@ function taskCard(task, isNext, engineReady) {
     action = () => openSettings(3);
     label = "連接 Claude";
   }
-  body.append(el("div", "t", title), el("div", "s", sub));
+  const s = el("div", "s", sub);
+  if (reward && !task.done) s.append(el("span", "rw", reward));
+  body.append(el("div", "t", title), s);
   card.append(ic, body);
   if (task.done) {
-    const m = el("span", "mark"); m.append(icon("check")); card.append(m);
+    const m = el("span", "mark");
+    if (task.points != null) m.append(el("b", null, `+${fmtPts(task.points)}`));
+    m.append(icon("check"));
+    card.append(m);
   } else if (isNext) {
     const b = primaryButton(label, (e) => { e.stopPropagation(); action(); });
     b.classList.add("go");
@@ -363,22 +454,28 @@ async function quizAnswered(quiz, index, answer, correct) {
   if (quiz.onDone) return quiz.onDone(Object.values(quiz.answers));
   try {
     const r = await api(`/api/lessons/${quiz.id}/finish`, { answers: Object.values(quiz.answers) });
+    paintMe(r.summary);
+    // Each lesson scores once, so a miss is not "try again": the wrong
+    // answers are in the mistakes book, and correcting them is the next step.
+    const wrong = Object.values(quiz.answers).some((a) => a.correct === false);
+    const next = [];
+    if (!r.passed && !r.already && wrong) next.push({ label: "訂正錯題", primary: true, onclick: () => go("mistakes") });
+    else next.push(await nextTodayStep());
+    next.push({ label: "練習對話", onclick: () => go("conversation", { conv: null }) });
     const card = resultCard({
       points: r.points,
-      title: r.already ? "又完成一次" : r.passed ? "測驗完成" : "再試一次就好",
+      title: r.already ? "又完成一次" : r.passed ? "測驗完成" : "差一點",
       score: r.score,
+      total: quiz.total,
+      mistakes: wrong,
       already: r.already,
       levelUp: r.level_up,
       difficulty: r.ask_difficulty && !r.already ? { lang: quiz.lang } : null,
-      next: [
-        { label: "回到今日", primary: true, onclick: () => go("today") },
-        { label: "練習對話", onclick: () => go("conversation", { conv: null }) },
-      ],
+      next,
       notebook: r.notebook ? { lang: quiz.lang, stem: r.notebook } : null,
     });
     quiz.after.after(card);
-    paintMe(r.summary);
-    refreshStatus();
+    refreshStatus().then(greet);
   } catch (e) { flash(e.message, true); }
 }
 
@@ -495,7 +592,12 @@ function drawConv(page, newlyUsed = []) {
   // Head: topic, dot progress (last 3 highlighted), target words.
   const head = el("div", "conv-head");
   const top = el("div", "ch-top");
-  top.append(el("b", null, c.topic.name), el("span", `tag${c.topic.kind === "interest" ? " acc" : ""}`, c.topic.kind === "interest" ? "興趣" : "通識"), el("span", "n", `${v.turns_done} / ${v.turns_limit}`));
+  // In a course lesson the tag names the course (not 興趣／通識).
+  const courseName = c.course ? (state.cl?.course?.id === c.course.course ? state.cl.course.name : "課程") : null;
+  const tag = c.course
+    ? el("span", "tag acc2", c.course.lesson ? `${courseName}・第 ${c.course.lesson} 課` : courseName)
+    : el("span", `tag${c.topic.kind === "interest" ? " acc" : ""}`, c.topic.kind === "interest" ? "興趣" : "通識");
+  top.append(el("b", null, c.topic.name), tag, el("span", "n", `${v.turns_done} / ${v.turns_limit}`));
   const dots = el("div", "dots");
   dots.setAttribute("aria-label", `${v.turns_done} / ${v.turns_limit} 回合`);
   for (let i = 0; i < v.turns_limit; i++) {
@@ -634,14 +736,10 @@ function composer(v, tr, ja) {
 }
 
 function drawConvEnd(page, v) {
-  const lock = el("div", "locked");
-  lock.append(icon("lock"), document.createTextNode("完成"));
-  const p = v.conversation.points;
-  lock.append(el("span", "plus", v.status === "done" ? `+${fmtPts(p)}` : "+1"));
-  page.append(lock);
   if (v.status === "locked") {
-    const wait = el("div", "empty", "評估中…");
+    const wait = el("div", "conv-done wait");
     wait.id = "convWait";
+    wait.append(el("span", "spin"), document.createTextNode("評估中…"));
     page.append(wait);
     return;
   }
@@ -649,25 +747,29 @@ function drawConvEnd(page, v) {
   const res = v.result ?? { points: c.points, score: c.score, passed: c.passed, review: c.review, used: v.used };
   const nb = res.notebook ? { lang: c.lang, stem: res.notebook } : null;
   if (v.justFinished) {
+    // One card: the points, the praise and the next step (no separate bar).
     const course = res.course;
+    const daily = c.course && state.cl?.course?.id === c.course.course && state.cl.course.kind === "daily";
+    const next = [];
+    if (c.course && (course?.lesson_done || daily)) next.push(v.nextToday ?? { label: "回到今日", primary: true, onclick: () => go("today") });
+    else if (c.course) next.push({ label: "回到這一課", primary: true, onclick: () => backToLesson(c.course) });
+    else if (v.nextToday && v.nextToday.label !== "回到今日") next.push(v.nextToday, { label: "再一段", onclick: () => { state.conv = null; render(); } });
+    else next.push({ label: "再一段", primary: true, onclick: () => { state.conv = null; render(); } }, { label: "回到今日", onclick: () => go("today") });
+    if (c.course && course?.next?.lesson && course.next.lesson !== c.course.lesson && !daily) next.push({ label: "下一課", onclick: () => go("courses", { course: c.course.course, courseLesson: course.next.lesson, step: null }) });
     page.append(resultCard({
       points: res.points,
       title: course?.lesson_done ? "這一課完成了！" : res.passed ? (res.excellent ? "說得真好！" : "完成這段對話") : "完成了，下次再多說一點",
-      score: res.score,
+      score: res.passed ? res.score : null,
+      bonusLabel: "表現優秀加分",
       levelUp: res.level_up,
       notebook: nb,
-      next: c.course
-        ? [
-          course?.next?.lesson && course.next.lesson !== c.course.lesson
-            ? { label: `下一課`, primary: true, onclick: () => go("courses", { course: c.course.course, courseLesson: course.next.lesson, step: null }) }
-            : { label: "回到這一課", primary: true, onclick: () => backToLesson(c.course) },
-          { label: "回到今日", onclick: () => go("today") },
-        ]
-        : [
-          { label: "再一段", primary: true, onclick: () => { state.conv = null; render(); } },
-          { label: "回到今日", onclick: () => go("today") },
-        ],
+      next,
     }));
+  } else {
+    const done = el("div", "conv-done");
+    done.append(el("b", null, "完成"));
+    if (c.points != null) done.append(el("span", "plus", `+${fmtPts(c.points)}`));
+    page.append(done);
   }
   if (c.review) page.append(feedbackCard(c, v.used));
   if (!v.justFinished) {
@@ -687,10 +789,11 @@ async function finishConversation() {
   try {
     const r = await api(`/api/conversations/${state.conv.id}/finish?user=${encodeURIComponent(state.status?.user?.id ?? "")}`, {});
     r.justFinished = true;
+    if (r.summary) paintMe(r.summary);
+    r.nextToday = await nextTodayStep();
     state.conv = r;
     drawConv($("#page"));
-    if (r.summary) paintMe(r.summary);
-    refreshStatus();
+    refreshStatus().then(greet);
   } catch (e) {
     const w = $("#convWait");
     if (w) {
@@ -822,8 +925,23 @@ async function renderProgress(page) {
   g.append(days);
   page.append(g);
 
+  // Two different things, kept apart: the learner's interests
+  // (interests.csv) and the topics their conversations were about.
+  const mine = (state.status?.user?.interests ?? []).filter((i) => !i.lang || i.lang === state.lang);
+  if (mine.length) {
+    const ic = el("div", "card");
+    ic.append(el("h3", null, "我的興趣"));
+    const chips = el("div", "topic-chips");
+    for (const i of mine) chips.append(el("span", "on", i.keyword));
+    ic.append(chips);
+    page.append(ic);
+  }
   const topics = el("div", "card");
-  topics.append(el("h3", null, "主題"));
+  const th = el("h3", null, "對話聊過的主題");
+  const thelp = el("button", "help", "?");
+  thelp.dataset.tip = "AI 對話用過的主題與次數（興趣主題與通識主題）。選題時會挑最久沒聊的。";
+  th.append(el("span", "grow"), thelp);
+  topics.append(th);
   const chips = el("div", "topic-chips");
   for (const t of [...p.interests, ...p.topics]) {
     const c = el("span", t.count ? "on" : "", t.name);
@@ -867,6 +985,16 @@ $("#impDrop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.p
 $("#impFiles").onchange = (e) => { importFiles([...e.target.files]); e.target.value = ""; };
 $("#asideDrop").onclick = () => { $("#impResults").innerHTML = ""; openImport(); };
 $("#asideDrop").onkeydown = (e) => { if (e.key === "Enter") $("#asideDrop").click(); };
+// A word list template to start from (UTF-8 with BOM so spreadsheets read it).
+$("#impTemplate").onclick = (e) => {
+  e.preventDefault();
+  const csv = "\ufeffterm,reading,meaning,example\nresilient,/rɪˈzɪliənt/,有韌性的,The team stayed resilient.\n締め切り,しめきり,截止日期,締め切りは金曜日です。\n";
+  const a = el("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = "vocab-template.csv";
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
 
 /** Empty states point straight at importing. */
 function emptyImport(text) {
@@ -878,7 +1006,9 @@ function emptyImport(text) {
   return e;
 }
 
-const KIND_LABEL = { vocab: "單字", grammar: "文法", materials: "每週素材" };
+const KIND_LABEL = { vocab: "單字", grammar: "文法", materials: "每週素材", text: "筆記", pdf: "PDF", image: "圖片" };
+/** Kept as files in materials/ (read in a later stage), not imported into review. */
+const isMaterialFile = (f) => /\.(md|markdown|txt|pdf|png|jpe?g|webp|gif)$/i.test(f.name) || f.type.startsWith("image/");
 async function importFiles(files) {
   if (!files.length) return;
   openImport();
@@ -890,6 +1020,24 @@ async function importFiles(files) {
     const info = el("span", "f", "");
     li.append(mark, what, info);
     ul.prepend(li);
+    if (isMaterialFile(f)) {
+      try {
+        // The same limits as the server: text 2 MB, pictures 10 MB, PDF 20 MB.
+        const max = /\.pdf$/i.test(f.name) ? 20 : /\.(md|markdown|txt)$/i.test(f.name) ? 2 : 10;
+        if (f.size > max * 1024 * 1024) throw new Error(`檔案太大（上限 ${max} MB）`);
+        const r = await fetch(`/api/import/file?${new URLSearchParams({ name: f.name })}`, { method: "POST", body: f });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error ?? (r.status === 413 ? "檔案太大" : `${r.status}`));
+        mark.className = "ok"; mark.textContent = "✓";
+        what.textContent = `${KIND_LABEL[d.kind] ?? d.kind}・存進素材`;
+        info.textContent = f.name;
+        info.title = d.file;
+      } catch (e) {
+        mark.className = "bad"; mark.textContent = "✕";
+        info.textContent = e.message; info.title = e.message;
+      }
+      continue;
+    }
     try {
       const text = await f.text();
       const q = new URLSearchParams({ kind: "auto", name: f.name, lang: state.lang });
@@ -897,8 +1045,8 @@ async function importFiles(files) {
       const rep = r.report;
       mark.className = "ok"; mark.textContent = "✓";
       what.textContent = `${KIND_LABEL[r.kind] ?? r.kind}　+${rep.words + rep.grammar}${rep.articles ? `・文章 ${rep.articles}` : ""}`;
-      info.textContent = r.file;
-      info.title = rep.warnings.join("\n");
+      info.textContent = f.name;
+      info.title = [r.file, ...rep.warnings].join("\n");
       $("#impOut").className = "note ok";
       $("#impOut").textContent = `✓ ${f.name}`;
     } catch (e) {
