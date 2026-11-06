@@ -327,6 +327,9 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
                 if !url.is_empty() {
                     match fetch_source(&s, url, lang).await {
                         Ok(t) => sources.push(t),
+                        // A site that does not allow fetching: say what to do
+                        // instead (the page offers a paste box), not the URL again.
+                        Err(e) if e.1.contains("robots.txt") => warnings.push(ROBOTS_BLOCKED.to_string()),
                         Err(e) => warnings.push(format!("{url}：{}", e.1)),
                     }
                 } else if !src.text.trim().is_empty() {
@@ -334,6 +337,7 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
                     sources.push(SourceText { title, url: String::new(), source: "貼上".into(), text: src.text.trim().chars().take(MAX_ARTICLE_CHARS).collect() });
                 }
             }
+            warnings.dedup();
             if keywords.is_empty() && sources.is_empty() && !b.sources.is_empty() {
                 return Err(bad(warnings.join("；")));
             }
@@ -392,6 +396,9 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
     out["warnings"] = json!(warnings);
     Ok(Json(out))
 }
+
+/// The message for a URL whose site does not allow automatic fetching.
+pub(crate) const ROBOTS_BLOCKED: &str = "這個網站不允許自動抓取，直接貼上文章文字吧";
 
 // ── extend ──────────────────────────────────────────────
 

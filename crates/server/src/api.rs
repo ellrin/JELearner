@@ -765,6 +765,8 @@ async fn news_list(State(s): State<Shared>, Query(q): Query<LangQuery>) -> R<Val
         v["blocked"] = json!(blocked);
         out.push(v);
     }
+    // The ones that can be used first; blocked pages last (stable order).
+    out.sort_by_key(|v| v["blocked"] == json!(true));
     Ok(Json(json!({ "articles": out, "fetched": fetched, "errors": errors })))
 }
 

@@ -665,6 +665,11 @@ async fn news_blocked_by_robots_is_marked() {
     let blocked = |t: &str| arts.iter().find(|a| a["title"] == t).map(|a| a["blocked"].clone());
     assert_eq!(blocked("Open story"), Some(json!(false)));
     assert_eq!(blocked("Members only"), Some(json!(true)));
+    assert_eq!(arts.last().unwrap()["title"], "Members only", "blocked pages are listed last");
+    // A topic course from a blocked page: what to do instead, not the URL again.
+    let (code, e) = c.post("/api/courses", json!({ "kind": "topic", "lang": "en", "sources": [{ "url": format!("{url}/private/b.html") }] })).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "{e}");
+    assert_eq!(e["error"], "這個網站不允許自動抓取，直接貼上文章文字吧");
 }
 
 /// The Claude subscription (fake Claude Code CLI) creates a course too.
