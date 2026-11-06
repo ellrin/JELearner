@@ -232,7 +232,7 @@ units_done = [0, 1]            # 已通過的單元（從 0 起）
 | `POST /api/courses/:id/lessons/:n/open` | `needs_search(plan)` 為真時才依 `plan.search` 從資料庫新聞挑候選並抓全文 → `pick_article`；然後 `open_lesson`。`generated` 有值時照 `api.rs` 產生教材的做法寫入資料庫：`insert_lesson` 與新字、文法 `upsert`。`recent_accuracy` 由 A 階段的 `units` 表計算 |
 | `POST /api/courses/:id/lessons/:n/units/:u` | `{passed, score}` → `mark_unit` → `store::save_progress`；`UnitResult.points > 0` 時交給 A 階段的積分模組寫 `records/points/`（`unit`＝`UnitKind::code`、`skill`＝`Skill::code`、`detail`＝教材檔路徑） |
 | `POST /api/courses/:id/extend` | 記下原本最後的課號 → `extend_topic_course` → `store::append_lessons(ws, &course, 原課號 + 1, today)` |
-| 今日頁 | `Learner::lessons_per_day()` 為 2 時，今日任務排兩課 |
+| 今日頁 | `Learner::lessons_per_day()` 為 2 時，今日任務排兩課；每個單元附上已得的分數（`units` 表的課程單元與課程對話），結算卡用來顯示「+1.5 ✓」 |
 
 資料庫（第 3 個 migration 已加）：
 

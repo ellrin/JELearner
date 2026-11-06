@@ -79,6 +79,10 @@ term,reading,meaning,pos,example,tags,note
 - `word`、`grammar` 加入資料庫與複習；`article` 出現在「新聞」頁（可以做成教材）；`note` 只保存。
 - 從 App 上傳時會存成 `materials/<week>/<檔名>.json`，同名時自動加 `-2`。
 
+## `materials/*.md`、`*.txt`、`*.pdf`、圖片：留著之後用的素材
+
+匯入視窗（或拖放到視窗）收到 Markdown、文字檔、PDF 或圖片（PNG、JPEG、WebP、GIF）時，原樣存進 `materials/`，檔名取自上傳的檔名（只留字母、數字、中日文與 `-`，小寫），同名時加 `-2`，從不覆蓋。類型依副檔名＋檔頭檢查（PDF 要以 `%PDF-` 開頭、圖片要有該格式的檔頭、文字檔要是 UTF-8）；上限：文字 2 MB、圖片 10 MB、PDF 20 MB。這些檔案不進複習、不讀進資料庫；C 階段的照片判讀與教材製作再讀它們（第二版規劃 §13、§20）。
+
 ## `sources.toml`：新聞來源
 
 ```toml
