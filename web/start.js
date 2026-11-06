@@ -47,6 +47,11 @@ function startWizard(mode) {
   wiz.chips = new Set();
   if (wiz.creating) $("#stColor").value = freeColor();
   $$("#stTabs button").forEach((b) => { b.hidden = !wiz.flow.includes(b.dataset.step); b.tabIndex = -1; });
+  // Number the steps of this flow from 1 (the last one keeps its check mark).
+  wiz.flow.forEach((step, i) => {
+    const c = $(`#stTabs button[data-step="${step}"] .c`);
+    if (c && step !== "done") c.textContent = String(i + 1);
+  });
   wizShow();
   if (!dlgStart.open) dlgStart.showModal();
   tabsInView($("#stTabs"));

@@ -467,7 +467,7 @@ per_day = 10                # 每天帶入幾個新字
 
 - **daidai 的電腦是 Windows、記憶體小** → 那台預設用**作業系統內建語音**（Windows 語音合成與語音辨識；日文需要安裝日文語言套件），不跑本機模型。
 - **作者的 Mac** → 先用 **macOS 內建語音**，之後換 Whisper（辨識）與 Kokoro（合成）。
-- **跟讀分數**用「辨識出的文字與原句比對」，是近似分數。
+- **跟讀分數**用「辨識出的文字與原句比對」，是近似分數。縮寫與全寫（I'm／I am）、複合字分合（chipmakers／chip makers）、日文漢字與假名混寫都會讓分數偏低；英文 0–20 的數字字與阿拉伯數字視為相同。
 - **雲端發音評分現在不做**，只有在便宜又方便時才考慮；設計上留一個語音 provider trait 的位置（`SpeechProvider`：`synthesize`、`transcribe`、可選的 `assess_pronunciation`），讓系統內建、Whisper／Kokoro、雲端評分都能換上去，上層不直接指名引擎（和 `LlmProvider` 同樣的做法）。這次不實作，D 階段再做。
 
 - **語音合成**（朗讀、聽力、聽寫）：先用瀏覽器／作業系統內建（macOS 有英日語音）；Mac 到貨後換 Kokoro。

@@ -499,7 +499,10 @@ details.fmt pre { font: 13.5px/1.55 var(--mono); background: var(--surface); pad
   .brand { font-size: 14px; }
   .user-chip { max-width: 120px; }
   table.grid { display: block; overflow-x: auto; }
-  .page { overflow-x: hidden; }
+  /* clip, not hidden: hidden turns .page into a scroll box and the sticky
+     composer then sticks to it, covering the last message. */
+  .page { overflow-x: clip; }
+  .page:has(> .composer) { margin-bottom: 0; }
   .dialog { height: calc(100vh - 24px); width: calc(100vw - 16px); }
   .dlg-head { overflow-x: auto; }
 }

@@ -71,12 +71,12 @@ function paintIcons(root = document) {
 // they are never clipped by scrolling panels; inside a modal they go into the
 // dialog, which sits above everything else.
 (() => {
-  let hint, timer;
+  let hint, timer, keyed = false;
   const hide = () => { clearTimeout(timer); hint?.remove(); hint = null; };
   document.addEventListener("mouseover", (e) => {
     const b = e.target.closest?.(".ico[aria-label]");
     // Buttons with a hover menu show their label as the menu title instead.
-    if (!b || b.dataset.menu || b.contains(e.relatedTarget)) return;
+    if (!b || keyed || b.dataset.menu || b.contains(e.relatedTarget)) return;
     hide();
     timer = setTimeout(() => {
       // The button may be gone (a card graded with the keyboard).
@@ -97,7 +97,10 @@ function paintIcons(root = document) {
     if (b && !b.contains(e.relatedTarget)) hide();
   });
   document.addEventListener("mousedown", hide);
-  document.addEventListener("keydown", hide);
+  // A redraw after a key press can put a new button under a still mouse;
+  // only a real mouse move brings the labels back.
+  document.addEventListener("keydown", () => { keyed = true; hide(); });
+  document.addEventListener("mousemove", () => { keyed = false; });
 })();
 
 /** An icon-only button with a hover label. */

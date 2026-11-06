@@ -218,7 +218,7 @@ const Speech = (() => {
     return { tokens, score };
   }
   // A period after these (or after a single capital letter, as in "J. Smith") does not end a sentence.
-  const ABBR = /(?:^|[\s("“'‘])(?:[Mm]rs?|[Mm]s|[Dd]r|[Ss]t|vs|etc|e\.g|i\.e|U\.S|[A-Z])\.$/u;
+  const ABBR = /(?:^|[\s("“'‘])(?:[Mm]rs?|[Mm]s|[Dd]r|[Ss]t|[Pp]rof|[Mm]t|[Jj]r|[Nn]o|vs|etc|e\.g|i\.e|U\.S|[ap]\.m|[A-Z])\.$/u;
   function splitEnglish(t) {
     const out = [];
     const re = /[.!?…]+["'”’)\]]*\s+(?=\S)/gu;
