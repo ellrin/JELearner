@@ -117,7 +117,7 @@ scripts/            開發啟動與 Git hooks
 
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
-| GET | `/api/status` | 工作區、結構（v1／v2）、使用者清單、目前使用者與等級、資料庫位置、引擎、各語言統計 |
+| GET | `/api/status` | 工作區、結構（v1／v2）、使用者清單、目前使用者與等級（含 `interests.csv` 的興趣）、資料庫位置、引擎、各語言統計 |
 | POST | `/api/users` `{ name, color, languages, majors, daily_minutes, interests }` | 新增使用者並以他進入 |
 | POST | `/api/users/select` `{ id }` | 切換使用者（記在這台電腦） |
 | PUT | `/api/user` `{ name, color, languages, majors, daily_minutes, report_email, seconds_per_turn, turns, interest_ratio, interests }` | 修改目前使用者的 profile.toml |
@@ -138,9 +138,10 @@ scripts/            開發啟動與 Git hooks
 | GET / POST | `/api/mistakes`、`/api/mistakes/{id}/resolve` | 錯題本 |
 | GET | `/api/materials` | 每週素材 |
 | POST | `/api/import?kind=vocab\|grammar\|materials\|auto&name=&lang=`（本文為檔案內容） | 匯入並存進工作區；`auto` 自動判斷類型（拖放） |
-| GET | `/api/today?lang=` | 今日課程的步驟（正在上的課程的下一課，沒有課程時是每日課程；每日目標超過 60 分鐘時兩課）、錯題任務、等級、今日積分、連續天數 |
+| POST | `/api/import/file?name=`（本文為檔案） | Markdown／文字檔、PDF、圖片（PNG、JPEG、WebP、GIF）存進 `materials/`（安全檔名、不覆蓋；依副檔名與檔頭檢查類型；文字 2 MB、圖片 10 MB、PDF 20 MB），之後的階段再讀 |
+| GET | `/api/today?lang=` | 今日課程的步驟（正在上的課程的下一課，沒有課程時是每日課程；每日目標超過 60 分鐘時兩課；完成的步驟附得到的分數）、錯題任務、等級、今日積分、連續天數、過關與加分門檻 |
 | GET / POST | `/api/courses?lang=`（POST `{ kind: topic, lang, keywords, sources: [{ url? , text?, title? }], lessons? }` 或 `{ kind: fixed, lang, name, vocab: [path], grammar: [path], vocab_text?, grammar_text?, file_name?, describe? }`） | 課程列表／建立主題課程（網址先檢查 robots.txt）或固定課程（上傳的清單先存進工作區） |
-| GET | `/api/courses/lists?lang=` | 工作區裡可做成固定課程的單字表與文法表 |
+| GET | `/api/courses/lists?lang=` | 工作區裡可做成固定課程的單字表與文法表（`vocab/`、`grammar/`，以及為課程上傳、還沒進複習的 `recipes/lists/`，`course_only`） |
 | GET | `/api/courses/{id}` | 課程大綱：每課狀態、單元與完成情形 |
 | POST | `/api/courses/{id}/lessons/{n}/open` | 打開一課：第一次打開才產生內容（存進 lessons/ 與資料庫），回傳課文、題目、複習卡片 |
 | POST | `/api/courses/{id}/lessons/{n}/units/{u}` `{ cards, score }`／`{ answers }`／`{ items }` | 單元結果 → 積分紀錄（分技能）、進度檔、錯題、筆記本 |

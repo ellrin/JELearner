@@ -808,12 +808,46 @@ fn daily_topic(ws: &Workspace, lang: Lang) -> Option<(String, String, &'static s
     }
 }
 
-fn lesson_entry(c: &Course, lp: &LessonPlan, lesson_id: Option<i64>, today: &str) -> Value {
-    json!({
+/// Points earned by each unit of a course lesson (index → best points), from
+/// the unit attempts linked to the course and the lesson's conversation.
+async fn unit_points(l: &Loaded, course: &str, number: u32) -> Result<std::collections::HashMap<u32, f64>, ApiError> {
+    let mut out = std::collections::HashMap::new();
+    let rows: Vec<(i64, f64)> = sqlx::query_as("SELECT unit_index, MAX(points) FROM units WHERE course = ? AND course_lesson = ? AND unit_index IS NOT NULL GROUP BY unit_index")
+        .bind(course)
+        .bind(number)
+        .fetch_all(l.db.pool())
+        .await?;
+    for (i, p) in rows {
+        out.insert(i as u32, p);
+    }
+    let conv: Vec<(i64, Option<f64>)> = sqlx::query_as(
+        "SELECT json_extract(data, '$.course.unit'), points FROM conversations
+         WHERE status = 'done' AND json_extract(data, '$.course.course') = ? AND json_extract(data, '$.course.lesson') = ?",
+    )
+    .bind(course)
+    .bind(number)
+    .fetch_all(l.db.pool())
+    .await
+    .unwrap_or_default();
+    for (i, p) in conv {
+        let e = out.entry(i as u32).or_insert(0.0);
+        *e = e.max(p.unwrap_or(0.0));
+    }
+    Ok(out)
+}
+
+async fn lesson_entry(l: &Loaded, c: &Course, lp: &LessonPlan, lesson_id: Option<i64>, today: &str) -> Result<Value, ApiError> {
+    let pts = unit_points(l, &c.id, lp.number).await?;
+    let mut units = unit_json(lp);
+    for u in units.iter_mut() {
+        let i = u["index"].as_u64().unwrap_or(0) as u32;
+        u["points"] = json!(pts.get(&i).copied());
+    }
+    Ok(json!({
         "course": c.id, "course_name": c.name, "kind": c.kind, "kind_label": c.kind.label(), "number": lp.number,
         "total": c.lessons.len(), "title": lp.title, "status": lp.status, "lesson_id": lesson_id,
-        "units": unit_json(lp), "minutes": sizing::total_minutes(&lp.units), "done_today": lp.done.as_deref() == Some(today),
-    })
+        "units": units, "minutes": sizing::total_minutes(&lp.units), "done_today": lp.done.as_deref() == Some(today),
+    }))
 }
 
 /// Today's lessons (one, or two when the daily goal is over 60 minutes):
@@ -830,7 +864,7 @@ pub(crate) async fn today_lessons(l: &Loaded, lang: Lang) -> Result<Value, ApiEr
     let mut entries: Vec<Value> = vec![];
     for c in &all {
         for lp in c.lessons.iter().filter(|x| x.done.as_deref() == Some(today.as_str())) {
-            entries.push(lesson_entry(c, lp, l.db.course_lesson_id(&c.id, lp.number).await?, &today));
+            entries.push(lesson_entry(l, c, lp, l.db.course_lesson_id(&c.id, lp.number).await?, &today).await?);
         }
     }
     let mut active: Vec<&Course> = all.iter().filter(|c| c.status == CourseStatus::Active && c.next_lesson().is_some() && c.kind != CourseKind::Daily).collect();
@@ -858,7 +892,7 @@ pub(crate) async fn today_lessons(l: &Loaded, lang: Lang) -> Result<Value, ApiEr
         }
     }
     for (c, lp) in picked {
-        entries.push(lesson_entry(c, lp, l.db.course_lesson_id(&c.id, lp.number).await?, &today));
+        entries.push(lesson_entry(l, c, lp, l.db.course_lesson_id(&c.id, lp.number).await?, &today).await?);
     }
     let mut suggestion = Value::Null;
     if entries.is_empty() && sources.is_empty() {

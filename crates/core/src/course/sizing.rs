@@ -172,10 +172,12 @@ fn part_minutes(daily_minutes: u32) -> Vec<(Part, u32)> {
 fn items_for(kind: UnitKind, minutes: u32) -> u32 {
     match kind {
         UnitKind::Review => minutes * 4,                          // 5 min → 20 cards
-        UnitKind::Reading | UnitKind::Quiz => (minutes / 2).clamp(3, 8), // 10 min → 5 questions
+        // Gradable units have at least 4 items, so one miss is not a fail
+        // at the 70% pass line (3/4 = 75%; docs/plan.md §20).
+        UnitKind::Reading | UnitKind::Quiz => (minutes / 2).clamp(4, 8), // 10 min → 5 questions
         UnitKind::Conversation => (minutes * 2).clamp(6, 30),      // 10 min → 20 turns
         UnitKind::Cloze => minutes.clamp(4, 12),
-        _ => (minutes * 3 / 5).clamp(2, 6),                         // 5 min → 3 items
+        _ => (minutes * 3 / 5).clamp(4, 6),                         // 5 min → 4 items
     }
 }
 
@@ -281,7 +283,7 @@ mod tests {
             vec![
                 (UnitKind::Review, 5, 20),
                 (UnitKind::Reading, 10, 5),
-                (UnitKind::Translation, 5, 3),
+                (UnitKind::Translation, 5, 4),
                 (UnitKind::Conversation, 10, 20),
             ]
         );
@@ -298,7 +300,14 @@ mod tests {
             assert_eq!(unit_plan(LessonRole::Regular, goal, 1), u, "deterministic");
         }
         let short = unit_plan(LessonRole::Regular, 15, 1);
-        assert_eq!(kinds(&short), vec![(UnitKind::Review, 3, 12), (UnitKind::Reading, 7, 3), (UnitKind::Conversation, 5, 10)]);
+        assert_eq!(kinds(&short), vec![(UnitKind::Review, 3, 12), (UnitKind::Reading, 7, 4), (UnitKind::Conversation, 5, 10)]);
+        for goal in [10, 15, 30, 45, 60] {
+            for u in unit_plan(LessonRole::Regular, goal, 1).iter().chain(&unit_plan(LessonRole::Regular, goal, 2)) {
+                if !matches!(u.kind, UnitKind::Review | UnitKind::Conversation) {
+                    assert!(u.items >= 4, "{goal}: {:?} has {} items", u.kind, u.items);
+                }
+            }
+        }
         let long = unit_plan(LessonRole::Regular, 45, 1);
         assert_eq!(long.len(), 5, "a second output task from 45 minutes");
         assert_eq!(long[4].kind, UnitKind::Cloze);
