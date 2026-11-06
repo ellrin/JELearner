@@ -491,18 +491,23 @@ async fn fixed_course_from_uploaded_csv() {
     assert_eq!(course["total"], 4, "{course}");
     assert_eq!(course["lessons"][3]["role"], "review");
     assert_eq!(course["lessons"][0]["title"], "第 1 課：Office day 1", "titles from the model");
-    assert_eq!(course["vocab"], json!(["profiles/ellrin/vocab/toeic-en.csv"]));
-    assert!(ws_path.join("profiles/ellrin/vocab/toeic-en.csv").exists());
+    assert_eq!(course["name"], "toeic", "the name the create page shows as its placeholder");
+    assert_eq!(course["vocab"], json!(["profiles/ellrin/recipes/lists/vocab/toeic-en.csv"]));
+    assert!(ws_path.join("profiles/ellrin/recipes/lists/vocab/toeic-en.csv").exists());
+    assert!(!ws_path.join("profiles/ellrin/vocab/toeic-en.csv").exists(), "not a review list");
     // Uploading the same name again never overwrites the first file.
     let (code, again) = c.post("/api/courses", json!({ "kind": "fixed", "lang": "en", "vocab_text": csv, "file_name": "toeic.csv", "describe": false })).await;
     assert_eq!(code, StatusCode::OK, "{again}");
-    assert_eq!(again["vocab"], json!(["profiles/ellrin/vocab/toeic-en-2.csv"]));
+    assert_eq!(again["vocab"], json!(["profiles/ellrin/recipes/lists/vocab/toeic-en-2.csv"]));
     assert!(again["lessons"][0]["title"].as_str().unwrap().starts_with("第 1 課"));
     assert_ne!(again["id"], course["id"]);
-    // From a list already in the workspace.
+    // From a list already in the workspace (an uploaded course list, or the learner's own vocab list).
     let (_, lists) = c.get("/api/courses/lists?lang=en").await;
-    assert!(lists.as_array().unwrap().iter().any(|l| l["path"] == "profiles/ellrin/vocab/toeic-en.csv" && l["items"] == 25), "{lists}");
-    let (code, from_ws) = c.post("/api/courses", json!({ "kind": "fixed", "lang": "en", "name": "My words", "vocab": ["profiles/ellrin/vocab/toeic-en.csv"], "describe": false })).await;
+    assert!(lists.as_array().unwrap().iter().any(|l| l["path"] == "profiles/ellrin/recipes/lists/vocab/toeic-en.csv" && l["items"] == 25 && l["course_only"] == true), "{lists}");
+    std::fs::write(ws_path.join("profiles/ellrin/vocab/office-en.csv"), &csv).unwrap();
+    let (_, lists) = c.get("/api/courses/lists?lang=en").await;
+    assert!(lists.as_array().unwrap().iter().any(|l| l["path"] == "profiles/ellrin/vocab/office-en.csv" && l["course_only"] == false), "{lists}");
+    let (code, from_ws) = c.post("/api/courses", json!({ "kind": "fixed", "lang": "en", "name": "My words", "vocab": ["profiles/ellrin/vocab/office-en.csv"], "describe": false })).await;
     assert_eq!(code, StatusCode::OK, "{from_ws}");
     assert_eq!(from_ws["name"], "My words");
     let (code, e) = c.post("/api/courses", json!({ "kind": "fixed", "lang": "en", "vocab": ["../../etc/passwd"] })).await;
@@ -512,6 +517,62 @@ async fn fixed_course_from_uploaded_csv() {
     let (code, opened) = c.post(&format!("/api/courses/{id}/lessons/1/open"), json!({})).await;
     assert_eq!(code, StatusCode::OK, "{opened}");
     assert!(opened["lesson"]["text"].as_str().unwrap().contains("officeword0"));
+}
+
+/// A fixed course's word list is scheduled lesson by lesson: creating a
+/// 300-word course leaves today's due cards as they were; opening lesson 1
+/// adds only its words; a rebuild from the files schedules the same words.
+#[tokio::test]
+async fn fixed_course_words_wait_until_taught() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws_dir = tempfile::tempdir().unwrap();
+    let ws_path = ws_dir.path().join("JELearner-private");
+    let (c, _calls) = setup(app_dir.path(), &ws_path).await;
+    let (_, before) = c.get("/api/today?lang=en").await;
+    let due0 = before["due"].as_i64().unwrap();
+    let (_, words0) = c.get("/api/words?lang=en").await;
+    let n0 = words0.as_array().unwrap().len();
+
+    let mut csv = String::from("term,reading,meaning\n");
+    for i in 0..300 {
+        csv.push_str(&format!("listword{i:03},,清單單字 {i}\n"));
+    }
+    let (code, course) = c.post("/api/courses", json!({ "kind": "fixed", "lang": "en", "vocab_text": csv, "file_name": "toeic-words.csv", "describe": false })).await;
+    assert_eq!(code, StatusCode::OK, "{course}");
+    assert_eq!(course["name"], "toeic-words");
+    assert!(course["id"].as_str().unwrap().ends_with("-toeic-words"), "{course}");
+    let (_, after) = c.get("/api/today?lang=en").await;
+    assert_eq!(after["due"].as_i64().unwrap(), due0, "nothing scheduled at creation");
+    let (_, words) = c.get("/api/words?lang=en&q=listword").await;
+    assert_eq!(words.as_array().unwrap().len(), 0, "{words}");
+    // A workspace re-read does not import the course list either.
+    let (code, r) = c.post("/api/workspace/reindex", json!({})).await;
+    assert_eq!(code, StatusCode::OK, "{r}");
+    let (_, words) = c.get("/api/words?lang=en&q=listword").await;
+    assert_eq!(words.as_array().unwrap().len(), 0, "{words}");
+
+    let id = course["id"].as_str().unwrap().to_string();
+    let (code, opened) = c.post(&format!("/api/courses/{id}/lessons/1/open"), json!({})).await;
+    assert_eq!(code, StatusCode::OK, "{opened}");
+    let planned: Vec<String> = course["lessons"][0]["words"].as_array().unwrap().iter().map(|w| w["term"].as_str().unwrap().to_string()).collect();
+    assert_eq!(planned.len(), 10);
+    let (_, words) = c.get("/api/words?lang=en&q=listword").await;
+    let mut got: Vec<String> = words.as_array().unwrap().iter().map(|w| w["term"].as_str().unwrap().to_string()).collect();
+    got.sort();
+    assert_eq!(got, planned, "only lesson 1's words");
+    let (_, all) = c.get("/api/words?lang=en").await;
+    assert_eq!(all.as_array().unwrap().len(), n0 + 10);
+
+    // Another computer rebuilds the database from the files: the same ten words.
+    let other = tempfile::tempdir().unwrap();
+    let mut s2 = Settings::for_tests(Paths::from_repo(), other.path().to_path_buf());
+    s2.workspace = Some(ws_path.clone());
+    let app2 = jl_server::router(s2, Options { provider: None }).await;
+    let c2 = Client { base: serve(app2).await, http: reqwest::Client::new() };
+    let (_, words2) = c2.get("/api/words?lang=en&q=listword").await;
+    let mut got2: Vec<String> = words2.as_array().unwrap().iter().map(|w| w["term"].as_str().unwrap().to_string()).collect();
+    got2.sort();
+    assert_eq!(got2, planned, "a rebuild schedules only opened lessons' words");
 }
 
 /// Today's tasks come from today's lesson: the daily lesson when there is no

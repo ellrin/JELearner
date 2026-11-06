@@ -16,7 +16,7 @@ use jl_core::conversation::CourseLink;
 use jl_core::course::outline::{self, FixedRequest, TopicRequest};
 use jl_core::course::plan::{self, CourseLesson, LessonContext, SourceText};
 use jl_core::course::{fixed, sizing, store, topics as ctopics, Course, CourseError, CourseKind, CourseStatus, CourseTemplates, Learner, LessonPlan, LessonRole, LessonStatus, UnitKind};
-use jl_core::db::{NewGrammar, NewMistake, NewWord};
+use jl_core::db::NewMistake;
 use jl_core::lesson::{self, MAX_ARTICLE_CHARS};
 use jl_core::notebook::{self, NoteBetter, NoteGrammar, NoteMistake, NoteWord, PageData};
 use jl_core::points::{self, PointRecord, Skill};
@@ -183,7 +183,9 @@ async fn word_lists(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value>
     let l = ws(&s).await?;
     let lang = parse_lang(&q.lang)?;
     let mut out = vec![];
-    for (kind, dir) in [("vocab", l.ws.vocab_dir()), ("grammar", l.ws.grammar_dir())] {
+    // `course_only`: uploaded for a course (`recipes/lists/`), not in review.
+    let lists = store::lists_dir(&l.ws);
+    for (kind, dir, course_only) in [("vocab", l.ws.vocab_dir(), false), ("grammar", l.ws.grammar_dir(), false), ("vocab", lists.join("vocab"), true), ("grammar", lists.join("grammar"), true)] {
         for path in jl_core::workspace::files_with_ext(&dir, &["csv", "tsv"]) {
             let flang = jl_core::import::lang_from_path(&path, l.ws.profile.languages.first().copied().unwrap_or(Lang::En));
             if lang.is_some_and(|x| x != flang) {
@@ -191,7 +193,7 @@ async fn word_lists(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value>
             }
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             let n = if kind == "vocab" { fixed::read_word_list(&text).len() } else { fixed::read_grammar_list(&text).len() };
-            out.push(json!({ "kind": kind, "path": l.ws.relative(&path), "name": path.file_name().map(|f| f.to_string_lossy().to_string()), "items": n, "lang": flang }));
+            out.push(json!({ "kind": kind, "path": l.ws.relative(&path), "name": path.file_name().map(|f| f.to_string_lossy().to_string()), "items": n, "lang": flang, "course_only": course_only }));
         }
     }
     Ok(Json(json!(out)))
@@ -271,22 +273,29 @@ async fn fetch_source(s: &Shared, url: &str, lang: Lang) -> Result<SourceText, A
     Ok(SourceText { title: a.title, url: a.url, source: a.source, text: a.body.chars().take(MAX_ARTICLE_CHARS).collect() })
 }
 
-/// Save an uploaded word or grammar list into the workspace (free name) and
-/// import it, like the import dialog does. Returns the relative path.
-async fn save_list(l: &Loaded, kind: &str, text: &str, name: &str, lang: Lang) -> Result<String, ApiError> {
-    let dir = if kind == "vocab" { l.ws.vocab_dir() } else { l.ws.grammar_dir() };
+/// Save an uploaded word or grammar list for a fixed course under a free
+/// name in `recipes/lists/<vocab|grammar>/`. It is **not** imported: the
+/// course's words enter review only when their lesson is opened, so a
+/// 300-word list does not put 300 cards on today (docs/courses.md §6).
+/// Returns the workspace-relative path.
+fn save_list(l: &Loaded, kind: &str, text: &str, name: &str, lang: Lang) -> Result<String, ApiError> {
+    let dir = store::lists_dir(&l.ws).join(if kind == "vocab" { "vocab" } else { "grammar" });
     std::fs::create_dir_all(&dir).map_err(|e| fail(e.to_string()))?;
+    let stem = format!("{}-{}", list_stem(name, kind), lang.code());
+    let path = crate::api::free_path(&dir, &stem, "csv");
+    std::fs::write(&path, text).map_err(|e| fail(e.to_string()))?;
+    Ok(l.ws.relative(&path))
+}
+
+/// A list's display stem from a file name, without a trailing language
+/// code (`toeic-en.csv` → `toeic`).
+pub(crate) fn list_stem(name: &str, kind: &str) -> String {
     let stem_src = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
     let base = slug(if stem_src.is_empty() { if kind == "vocab" { "course-words" } else { "course-grammar" } } else { &stem_src }, 40);
-    let stem = if base.ends_with(&format!("-{}", lang.code())) { base } else { format!("{base}-{}", lang.code()) };
-    let path = crate::api::free_path(&dir, &stem, "csv");
-    let origin = l.ws.relative(&path);
-    std::fs::write(&path, text).map_err(|e| fail(e.to_string()))?;
-    let r = if kind == "vocab" { jl_core::import::import_vocab_csv(&l.db, text, lang, &origin).await } else { jl_core::import::import_grammar_csv(&l.db, text, lang, &origin).await };
-    // A one-term-per-line list is fine for a course even when it is not a
-    // CSV the review import understands; the course reads it either way.
-    let _ = r;
-    Ok(origin)
+    match base.strip_suffix("-en").or_else(|| base.strip_suffix("-ja")) {
+        Some(t) if !t.is_empty() => t.to_string(),
+        _ => base,
+    }
 }
 
 fn read_workspace_list(ws: &Workspace, rel: &str) -> Result<String, ApiError> {
@@ -344,10 +353,10 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
                 let mut grammar_files = b.grammar.clone();
                 let name = b.file_name.clone().unwrap_or_default();
                 if let Some(text) = b.vocab_text.as_deref().map(|t| t.trim_start_matches('\u{feff}')).filter(|t| !t.trim().is_empty()) {
-                    vocab_files.push(save_list(&l, "vocab", text, &name, lang).await?);
+                    vocab_files.push(save_list(&l, "vocab", text, &name, lang)?);
                 }
                 if let Some(text) = b.grammar_text.as_deref().map(|t| t.trim_start_matches('\u{feff}')).filter(|t| !t.trim().is_empty()) {
-                    grammar_files.push(save_list(&l, "grammar", text, &name, lang).await?);
+                    grammar_files.push(save_list(&l, "grammar", text, &name, lang)?);
                 }
                 let mut words = vec![];
                 for f in &vocab_files {
@@ -360,7 +369,7 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
                 (learner(&l, lang, true).await?, templates(&l.ws), words, grammar, vocab_files, grammar_files)
             };
             let name = if b.name.trim().is_empty() {
-                vocab_files.iter().chain(&grammar_files).next().and_then(|f| Path::new(f).file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+                vocab_files.iter().chain(&grammar_files).next().map(|f| list_stem(f, "vocab")).unwrap_or_default()
             } else {
                 b.name.clone()
             };
@@ -474,32 +483,7 @@ async fn index_lesson(l: &Loaded, course: &Course, number: u32, file: &str, mark
     let lang = course.lang;
     let id = l.db.insert_lesson(lang, &cl.lesson.title, &level, None, &url, file, markdown, &raw, engine).await?;
     l.db.set_lesson_course(id, &course.id, number).await?;
-    for v in &cl.lesson.vocabulary {
-        let w = NewWord {
-            lang: Some(lang),
-            term: v.term.clone(),
-            reading: v.reading.clone(),
-            meaning: v.meaning.clone(),
-            pos: v.part_of_speech.clone(),
-            example: format!("{}｜{}", plan::strip_furigana(&v.example), v.example_translation),
-            source: file.to_string(),
-            ..Default::default()
-        };
-        l.db.upsert_word(&w, lang).await?;
-    }
-    for g in &cl.lesson.grammar {
-        let x = NewGrammar {
-            lang: Some(lang),
-            pattern: g.pattern.clone(),
-            meaning: g.meaning.clone(),
-            explanation: g.explanation.clone(),
-            example: format!("{}｜{}", plan::strip_furigana(&g.example), g.example_translation),
-            level: level.clone(),
-            source: file.to_string(),
-            ..Default::default()
-        };
-        l.db.upsert_grammar(&x, lang).await?;
-    }
+    jl_core::import::index_lesson_items(&l.db, &cl.lesson, lang, &level, file).await.map_err(|e| fail(e.to_string()))?;
     Ok(id)
 }
 
