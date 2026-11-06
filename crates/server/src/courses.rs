@@ -298,6 +298,13 @@ pub(crate) fn list_stem(name: &str, kind: &str) -> String {
     }
 }
 
+/// `TOEIC words-en.csv` → `TOEIC words` (as the create page's placeholder).
+fn display_stem(file: &str) -> String {
+    let stem = Path::new(file.trim()).file_stem().and_then(|s| s.to_str()).unwrap_or("").trim().to_string();
+    let lower = stem.to_lowercase();
+    if (lower.ends_with("-en") || lower.ends_with("-ja")) && stem.len() > 3 { stem[..stem.len() - 3].to_string() } else { stem }
+}
+
 fn read_workspace_list(ws: &Workspace, rel: &str) -> Result<String, ApiError> {
     let p = ws.root.join(rel);
     let canon = p.canonicalize().map_err(|_| bad(format!("找不到 {rel}")))?;
@@ -372,8 +379,11 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
                 }
                 (learner(&l, lang, true).await?, templates(&l.ws), words, grammar, vocab_files, grammar_files)
             };
+            // Left empty: the uploaded file's name without extension and
+            // language code (the create page shows the same as placeholder).
+            let uploaded = b.file_name.as_deref().map(display_stem).filter(|n| !n.is_empty());
             let name = if b.name.trim().is_empty() {
-                vocab_files.iter().chain(&grammar_files).next().map(|f| list_stem(f, "vocab")).unwrap_or_default()
+                uploaded.unwrap_or_else(|| vocab_files.iter().chain(&grammar_files).next().map(|f| list_stem(f, "vocab")).unwrap_or_default())
             } else {
                 b.name.clone()
             };
