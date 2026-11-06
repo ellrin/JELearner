@@ -15,6 +15,8 @@ profiles/<id>/
   profile.toml          這位使用者的設定
   interests.csv         興趣關鍵字
   vocab/ grammar/ materials/ lessons/ conversations/ records/
+  recipes/              課程（大綱＋進度，docs/courses.md §8）
+  notebook/<lang>/      復習筆記本（一課一頁、一段對話一頁）
 ```
 
 以下各節中的 `vocab/`、`grammar/`、`materials/`、`lessons/`、`records/` 都是指 `profiles/<id>/` 底下。
@@ -163,6 +165,8 @@ group = "生活"
 
 App 產生，YAML front matter（title、language、level、date、source、engine）＋ Markdown 本文，最後一行是內嵌資料的 HTML 註解（`<!-- jelearner:lesson {…} -->`），用來在其他電腦重建資料庫。可以手動修改本文；內嵌資料只在資料庫還沒有這份教材時讀取。
 
+課程的課（`<日期>-<課程>-<課號>.md`）front matter 多 `course`、`course_lesson`、`course_role`、`units`，內嵌資料多課文（`text`，日文以 `{漢字|かんじ}` 標音）、輸出題與對話計畫；重建資料庫時整份讀回，並記下它屬於哪個課程（docs/courses.md §8.2）。
+
 ## `records/`：紀錄匯出
 
 - `progress.csv`：`kind,lang,key,reading,ease,interval_days,reps,lapses,due_at,last_reviewed_at`（以文字對應單字／文法，不用資料庫 id）。
@@ -181,14 +185,52 @@ time,lang,unit,skill,points,score,detail
 2026-11-06T10:00:00+08:00,en,reading,reading,1,,50 min
 ```
 
-- `unit`：`conversation`（對話）、`quiz`（教材測驗）、`review`（一輪複習卡片）、`reading`／`listening`（被動時間，`score` 空白）。
+- `unit`：`conversation`（對話）、`quiz`（教材測驗）、`review`（一輪複習卡片）、`reading`／`listening`（被動時間，`score` 空白）；課程的單元另有 `reading`（閱讀理解，有 `score`）、`translation`、`sentence-making`、`cloze`、`paraphrase`。
 - `skill`：`listening`、`reading`、`speaking`、`writing`、`vocab`（單字文法；也接受 `grammar`）。打字版對話記為 `writing`。
 - `points`：未通過＝0（照樣記錄，作為近期表現）；通過＝1；正確率 ≥ 95% 或對話評估優秀再 +0.5。
-- `detail`：相對於 `profiles/<id>/` 的檔案路徑，或 `50 min`、`20 張`。
+- `detail`：相對於 `profiles/<id>/` 的檔案路徑，或 `50 min`、`20 張`。課程單元是 `<教材檔>#<單元序號>`（例如 `lessons/en/2026-11-06-ai-chips-02.md#1`），資料庫的 `units` 表從這裡補上 `course`、`course_lesson`、`unit_index`，換電腦也一樣。
 
 ## `conversations/<lang>/*.md`：對話紀錄
 
 完成（評估過）的對話存成 `<日期>-<主題>.md`（不覆蓋，同名加 `-2`）：front matter（title、language、level、topic、date、turns、engine）、逐回合對話（AI 的換句話說以 `> ↺` 標示）、回饋（評分、可以說得更好的句子、目標字、建議加入的字、關鍵字），最後一行是內嵌資料 `<!-- jelearner:conversation {…} -->`，用來在其他電腦重建資料庫（含目標字的主動使用次數與主題紀錄）。版面模板是 `prompts/conversation.md.j2`。
+
+## `notebook/<lang>/*.md`：復習筆記本
+
+一課一頁、一段對話一頁，檔名與教材（或對話）檔同名；頁面以 front matter 的 `source` 對應它的教材或對話。分兩部分，**App 重新產生時只換第一部分**：
+
+```markdown
+---
+title: "Inside the fab"
+kind: lesson            # lesson | conversation
+lang: en
+date: 2026-11-06
+source: "profiles/ellrin/lessons/en/2026-11-06-ai-chips-02.md"
+---
+
+# Inside the fab
+
+<!-- jelearner:auto 這一段由 App 產生，重新產生時會整段取代；自己的筆記請寫在「我的筆記」下面 -->
+## 錯題（1）            答錯的題目、你的答案、正確答案與解析
+## 可以這樣說           對話的「原句 → 建議」
+## 新單字／新文法       這一課的字與文法（日文的漢字加 <ruby> 標音）
+<!-- /jelearner:auto -->
+
+## 我的筆記
+
+自己寫的內容……
+
+![](jl-image:3f9c0a1b2c3d4e5f6a7b8c9d)
+
+<!-- jelearner:notebook {…App 的資料…} -->
+```
+
+- 課的單元每次結算、對話完成時，App 建立或更新這一頁的 App 區段；「我的筆記」只有在你於 App 儲存（或自己用編輯器改）時才會變。
+- 自己把 `jelearner:auto` 標記刪掉的頁面，App 就不再改寫它。
+- **圖片不在工作區、不會同步**：`![](jl-image:<id>)` 只是參照，圖片檔存在加圖片那台電腦的 `<config dir>/JELearner/notebook-images/<工作區 id>/<使用者 id>/<id>.jpg`（或 `.webp`／`.png`），與大頭貼一樣不進 Git。瀏覽器先壓縮（長邊 ≤ 1600 px、WebP 或 JPEG 約 0.8），上限 3 MB。在別台電腦打開同一頁會顯示「圖片只在原本的電腦上」。
+
+## `recipes/*.toml`：課程
+
+課程的大綱檔與進度檔（`<課程 id>.toml`、`<課程 id>.progress.toml`）格式見 [`courses.md`](courses.md) §8。大綱檔建立後 App 不再改寫（延伸主題課程時只在檔尾加課）；進度檔由 App 寫。每日課程（`kind = "daily"`）也存在這裡，一天一個。
 
 ## `progress.toml`：積分、等級、難度規則（可選）
 

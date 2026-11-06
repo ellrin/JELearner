@@ -220,7 +220,7 @@ units_done = [0, 1]            # 已通過的單元（從 0 起）
 | `topics::pick_topic(day, ratio, interests, general, lang)` | 每日課程的主題 |
 | `sizing::content_size(lang, difficulty)`、`sizing::unit_plan(role, minutes, number)` | 份量表與單元配置 |
 
-## 10. 整合步驟（伺服器／介面，尚未做）
+## 10. 整合步驟（B 階段已完成，`crates/server/src/courses.rs`、`web/courses.js`）
 
 伺服器需要的端點（handler 照現有慣例寫成 `Shared` 上的 async fn）：
 
@@ -234,7 +234,7 @@ units_done = [0, 1]            # 已通過的單元（從 0 起）
 | `POST /api/courses/:id/extend` | 記下原本最後的課號 → `extend_topic_course` → `store::append_lessons(ws, &course, 原課號 + 1, today)` |
 | 今日頁 | `Learner::lessons_per_day()` 為 2 時，今日任務排兩課 |
 
-資料庫（之後由整合步驟改 `db.rs`，這次沒有動）：
+資料庫（第 3 個 migration 已加）：
 
 - `lessons` 表加 `course`、`course_lesson` 欄（plan.md §17 已列 `recipe`，可用同一欄）；重建時從教材 front matter 讀。
 - 不需要新的課程表：課程以檔案為準，列表直接讀檔即可；若要加快，可加 `courses(id, kind, lang, name, status, file, updated_at)` 快取表，從 `recipes/*.toml` 重建。
@@ -252,4 +252,4 @@ units_done = [0, 1]            # 已通過的單元（從 0 起）
 ## 12. 尚未決定
 
 1. 弱項、每日、檢核課程的大綱產生與每日組合介面留待 B 階段。
-2. 一天兩課時，兩課是否來自不同課程（例如一課主題、一課固定），還是同一課程連上兩課。目前核心只提供每課分鐘數，由每日組合決定。
+2. ~~一天兩課時兩課的來源~~：已決定（B 階段）——有第二個進行中的課程就各上一課，否則同一課程連上兩課（plan.md §11）。

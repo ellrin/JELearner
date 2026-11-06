@@ -2,7 +2,7 @@
 
 本機運作的英文／日文學習秘書：自動抓英日新聞、整理成單字與文法教材、排複習、記錯題、寄週報、排行事曆。之後加上即時語音對話與數位人像，並包成 Mac app。
 
-> 開發初期（第一版：文字管線）。已完成：私人工作區、SQLite（生字／文法／複習進度／錯題本）、英日新聞爬蟲（遵守 robots.txt）、新聞 → Markdown 教材（模板可替換）、Claude 兩種連線方式（訂閱／API key）、Gmail／Calendar 介面與模擬實作、本機網頁、離線端到端測試。
+> 開發中（第二版 B 階段：課程、每日課程、復習筆記本）。已完成：私人工作區、SQLite（生字／文法／複習進度／錯題本）、英日新聞爬蟲（遵守 robots.txt）、新聞 → Markdown 教材（模板可替換）、Claude 兩種連線方式（訂閱／API key）、Gmail／Calendar 介面與模擬實作、本機網頁、離線端到端測試。
 > 尚未完成：向量庫與 RAG、Google OAuth、本機模型（等 Mac）、語音、Tauri 打包、數位人像。見 [`docs/roadmap.md`](docs/roadmap.md)。
 > 第二版進行中：**0-1 起始流程與多使用者、A 階段（積分、等級、難度調整、打字版 AI 對話、今日任務與進度頁）已完成**。完整規劃（多使用者、積分與等級、AI 對話、每日課程、課程配方、語音、學習群組）：[`docs/plan.md`](docs/plan.md)。
 
@@ -98,7 +98,7 @@ JELearner 是非營利的個人專案，不代付、不轉售任何 Claude 用�
 cargo test
 ```
 
-全部離線：核心邏輯的單元測試，加上 [`crates/server/tests/e2e.rs`](crates/server/tests/e2e.rs) 的端到端測試——用模擬的新聞網站（含 robots.txt）、Claude API、Gmail 與 Calendar，透過 HTTP 走完「連接工作區 → 抓新聞 → 被 robots.txt 擋下 → 產生教材 → 測驗與錯題 → 匯入 CSV／JSON → 複習 → 匯出紀錄 → 週報與排課 → 重新啟動 → 第二台電腦還原」。
+全部離線：核心邏輯的單元測試，加上 [`crates/server/tests/e2e.rs`](crates/server/tests/e2e.rs) 的端到端測試——用模擬的新聞網站（含 robots.txt）、Claude API、Gmail 與 Calendar，透過 HTTP 走完「連接工作區 → 抓新聞 → 被 robots.txt 擋下 → 產生教材 → 測驗與錯題 → 匯入 CSV／JSON → 複習 → 匯出紀錄 → 週報與排課 → 重新啟動 → 第二台電腦還原」。[`crates/server/tests/courses_e2e.rs`](crates/server/tests/courses_e2e.rs) 走完課程：建立主題課程 → 大綱 → 開課 → 各單元結果 → 積分與進度檔 → 筆記本與圖片 → 延伸；固定課程、每日課程、robots.txt 擋下的新聞標示。
 
 ## 專案結構
 
@@ -128,23 +128,33 @@ scripts/            開發啟動與 Git hooks
 | POST | `/api/setup/clone` `{ url, parent }` | clone 自己的 private repo |
 | GET / POST | `/api/git/status`、`/api/git/pull`、`/api/git/sync` | 同步私人工作區 |
 | GET | `/api/sources` | 新聞來源 |
-| GET | `/api/news?lang=&refresh=` | 新聞列表（refresh 時先抓 feed） |
+| GET | `/api/news?lang=&refresh=` | 新聞列表（refresh 時先抓 feed）；robots.txt 不允許擷取的標 `blocked` |
 | GET / POST | `/api/articles`（POST `{ url, lang }`） | 文章；POST 抓單一網址 |
 | GET / POST | `/api/lessons`（POST `{ article_id \| url \| text, lang, level }`） | 教材列表／產生教材 |
 | GET | `/api/lessons/{id}` | 教材內容 |
 | POST | `/api/lessons/{id}/answers` `{ answers: [{ index, answer, correct? }] }` | 作答；答錯進錯題本 |
 | GET / POST / DELETE | `/api/words`、`/api/grammar`（`?lang=&q=`） | 生字與文法；手動新增會寫進工作區 CSV |
-| GET / POST | `/api/review`（POST `{ kind, id, grade }`） | 到期卡片／評分（1–5） |
+| GET / POST | `/api/review`（POST `{ kind, id, grade, in_course? }`） | 到期卡片／評分（1–5）；課程複習單元的卡片不另算一輪 |
 | GET / POST | `/api/mistakes`、`/api/mistakes/{id}/resolve` | 錯題本 |
 | GET | `/api/materials` | 每週素材 |
 | POST | `/api/import?kind=vocab\|grammar\|materials\|auto&name=&lang=`（本文為檔案內容） | 匯入並存進工作區；`auto` 自動判斷類型（拖放） |
-| GET | `/api/today?lang=` | 今日任務（複習、對話、教材測驗、錯題）與等級、今日積分、連續天數 |
+| GET | `/api/today?lang=` | 今日課程的步驟（正在上的課程的下一課，沒有課程時是每日課程；每日目標超過 60 分鐘時兩課）、錯題任務、等級、今日積分、連續天數 |
+| GET / POST | `/api/courses?lang=`（POST `{ kind: topic, lang, keywords, sources: [{ url? , text?, title? }], lessons? }` 或 `{ kind: fixed, lang, name, vocab: [path], grammar: [path], vocab_text?, grammar_text?, file_name?, describe? }`） | 課程列表／建立主題課程（網址先檢查 robots.txt）或固定課程（上傳的清單先存進工作區） |
+| GET | `/api/courses/lists?lang=` | 工作區裡可做成固定課程的單字表與文法表 |
+| GET | `/api/courses/{id}` | 課程大綱：每課狀態、單元與完成情形 |
+| POST | `/api/courses/{id}/lessons/{n}/open` | 打開一課：第一次打開才產生內容（存進 lessons/ 與資料庫），回傳課文、題目、複習卡片 |
+| POST | `/api/courses/{id}/lessons/{n}/units/{u}` `{ cards, score }`／`{ answers }`／`{ items }` | 單元結果 → 積分紀錄（分技能）、進度檔、錯題、筆記本 |
+| POST | `/api/courses/{id}/extend` | 全部完成的主題課程再延伸 5 課 |
+| POST | `/api/daily` `{ lang }` | 建立（或取得）今天的每日課程 |
+| GET | `/api/notebook?lang=` | 復習筆記本頁面（依日期） |
+| GET / PUT | `/api/notebook/{lang}/{stem}`（PUT `{ notes }`） | 一頁筆記／儲存「我的筆記」（App 區段不受影響） |
+| POST / GET / DELETE | `/api/notebook/images`、`/api/notebook/images/{id}` | 筆記圖片（≤ 3 MB，只存在這台電腦） |
 | GET | `/api/progress?lang=` | 進度頁：升級條件 1–3、分技能積分、最近 14 天、主題、最近得分 |
 | POST | `/api/progress/assess` `{ lang }` | 立即檢查升級（每個單元結束後也會自動檢查） |
 | POST | `/api/difficulty/feedback` `{ lang, feedback: too_easy\|right\|too_hard }` | 前 5 課的難度回饋（±15） |
 | POST | `/api/passive` `{ lang, kind: reading\|listening, seconds }` | App 內閱讀／聆聽時間（每 50 分鐘 1 分，無法手動登記） |
 | POST | `/api/lessons/{id}/finish` `{ answers }` | 教材測驗結算：積分（每份教材一次）、難度與升級 |
-| GET / POST | `/api/conversations`（POST `{ lang, topic_id? }`） | 對話列表／開始一段對話（選題、目標字、AI 開場） |
+| GET / POST | `/api/conversations`（POST `{ lang, topic_id?, course?: { course, lesson, unit } }`） | 對話列表／開始一段對話（選題、目標字、AI 開場）；課程的對話單元用課文的主題與開場，已開始的會接續 |
 | GET | `/api/conversations/next?lang=&skip=` | 下一段對話的主題（不呼叫模型） |
 | GET | `/api/conversations/{id}` | 對話內容 |
 | POST | `/api/conversations/{id}/turns` `{ text }` | 一回合：換句話說＋下一個問題；最後一回合後鎖定 |
