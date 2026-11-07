@@ -3,7 +3,7 @@
   "note": "Local models for the Mac. Brains run in llama-server from the shared folder LOCAL_LLM_HOME (docs/decisions.md §15); files are found by repo and suffix under <home>/gguf/<repo>/. Ears and mouth are macOS built-in (decisions §14) and take no model memory. Add a brain by adding an entry. Speeds measured on an M6 32 GB Mac (tokens/s, no thinking).",
   "budget_gb": 20,
   "defaults": {
-    "brain": "gemma-4-12b-q4",
+    "brain": "gemma-4-12b-q8",
     "ears": "apple-speech",
     "mouth": "macos-voices"
   },
@@ -21,9 +21,9 @@
   "models": [
     { "id": "qwen3.5-4b-q8", "role": "brain", "name": "Qwen3.5 4B", "variant": "Q8_0", "summary": "最快（每秒約 31 字詞）；適合對話與簡單題目", "repo": "unsloth/Qwen3.5-4B-GGUF", "file_suffix": "Qwen3.5-4B-Q8_0.gguf", "mmproj_suffix": "mmproj-BF16.gguf", "approx_gb": 5.2, "min_memory_gb": 12, "context": 32768, "runtime": "llama-server", "license": "Apache-2.0" },
     { "id": "gemma-4-e4b-q8", "role": "brain", "name": "Gemma 4 E4B", "variant": "Q8_0", "summary": "很快（每秒約 28 字詞）", "repo": "unsloth/gemma-4-E4B-it-GGUF", "file_suffix": "gemma-4-E4B-it-Q8_0.gguf", "mmproj_suffix": "mmproj-BF16.gguf", "approx_gb": 9.2, "min_memory_gb": 14, "context": 32768, "runtime": "llama-server", "license": "Apache-2.0" },
-    { "id": "gemma-4-12b-q4", "role": "brain", "name": "Gemma 4 12B", "variant": "UD-Q4_K_XL", "summary": "預設：品質與速度平衡（每秒約 18 字詞）", "repo": "unsloth/gemma-4-12b-it-GGUF", "file_suffix": "UD-Q4_K_XL.gguf", "mmproj_suffix": "mmproj-BF16.gguf", "approx_gb": 7.6, "min_memory_gb": 16, "context": 32768, "runtime": "llama-server", "license": "Apache-2.0" },
+    { "id": "gemma-4-12b-q4", "role": "brain", "name": "Gemma 4 12B", "variant": "UD-Q4_K_XL", "summary": "省記憶體版（每秒約 18 字詞），16 GB 的電腦用這個", "repo": "unsloth/gemma-4-12b-it-GGUF", "file_suffix": "UD-Q4_K_XL.gguf", "mmproj_suffix": "mmproj-BF16.gguf", "approx_gb": 7.6, "min_memory_gb": 16, "context": 32768, "runtime": "llama-server", "license": "Apache-2.0" },
     { "id": "qwen3.5-9b-q8", "role": "brain", "name": "Qwen3.5 9B", "variant": "Q8_0", "summary": "中（每秒約 17 字詞）", "repo": "unsloth/Qwen3.5-9B-GGUF", "file_suffix": "Qwen3.5-9B-Q8_0.gguf", "mmproj_suffix": "mmproj-BF16.gguf", "approx_gb": 10.5, "min_memory_gb": 20, "context": 32768, "runtime": "llama-server", "license": "Apache-2.0" },
-    { "id": "gemma-4-12b-q8", "role": "brain", "name": "Gemma 4 12B", "variant": "Q8_0", "summary": "接近原版品質（每秒約 12 字詞）", "repo": "unsloth/gemma-4-12b-it-GGUF", "file_suffix": "gemma-4-12b-it-Q8_0.gguf", "mmproj_suffix": "mmproj-BF16.gguf", "approx_gb": 12.9, "min_memory_gb": 24, "context": 32768, "runtime": "llama-server", "license": "Apache-2.0" },
+    { "id": "gemma-4-12b-q8", "role": "brain", "name": "Gemma 4 12B", "variant": "Q8_0", "summary": "預設：接近原版品質（每秒約 12 字詞）", "repo": "unsloth/gemma-4-12b-it-GGUF", "file_suffix": "gemma-4-12b-it-Q8_0.gguf", "mmproj_suffix": "mmproj-BF16.gguf", "approx_gb": 12.9, "min_memory_gb": 24, "context": 32768, "runtime": "llama-server", "license": "Apache-2.0" },
     { "id": "qwen3.8-27b-q4", "role": "brain", "name": "Qwen3.8 27B", "variant": "UD-Q4_K_XL", "summary": "最聰明但慢（每秒約 8 字詞），記憶體會滿", "repo": "unsloth/Qwen3.8-27B-GGUF", "file_suffix": "Qwen3.8-27B-UD-Q4_K_XL.gguf", "mmproj_suffix": "mmproj-BF16.gguf", "approx_gb": 18.5, "min_memory_gb": 32, "context": 16384, "runtime": "llama-server", "license": "Apache-2.0" },
     { "id": "apple-speech", "role": "ears", "name": "Apple 語音辨識", "variant": "SpeechTranscriber", "summary": "macOS 內建，英、日；模型由系統下載", "repo": "", "file_suffix": "", "approx_gb": 0, "min_memory_gb": 0, "runtime": "macos", "license": "macOS" },
     { "id": "macos-voices", "role": "mouth", "name": "macOS 系統聲音", "variant": "Premium／加強版", "summary": "瀏覽器朗讀使用；Premium 聲音在系統設定免費下載", "repo": "", "file_suffix": "", "approx_gb": 0, "min_memory_gb": 0, "runtime": "macos", "license": "macOS" }

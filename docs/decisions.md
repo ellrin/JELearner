@@ -30,7 +30,7 @@
 
 - 總預算 ≤ 20 GB，留給系統與 KV cache。macOS 預設只讓 GPU 用約 2/3（36 GB 以下）到 3/4 的統一記憶體，32 GB 約 21 GB。
 - 預設用 Q4_K_XL；確認 KV cache 與語音同時執行還有餘裕後再評估 Q8_0。`catalog::plan` 會算總和並檢查兩個上限（**估算，尚未實機測試**）。
-- **2026-11 更新（Mac 到貨）**：耳朵與嘴巴改用 macOS 內建（第 14 節），不再佔模型預算；大腦可選 Gemma 4 或 Qwen（第 15 節）。實測 M6 32 GB 的 Metal 可用上限（`recommendedMaxWorkingSetSize`）是 26.8 GB，比上面的估算寬。
+- **2026-11 更新（Mac 到貨）**：耳朵與嘴巴改用 macOS 內建（第 14 節），不再佔模型預算，所以預設大腦改為 **Gemma 4 12B Q8_0**（12.9 GB，作者已下載；Q4_K_XL 留給 16 GB 的電腦）；大腦可選 Gemma 4 或 Qwen（第 15 節）。實測 M6 32 GB 的 Metal 可用上限（`recommendedMaxWorkingSetSize`）是 26.8 GB，比上面的估算寬。
 
 ## 5. Gmail／Google Calendar：先 trait，OAuth 之後
 
