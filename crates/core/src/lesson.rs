@@ -59,10 +59,17 @@ pub struct GrammarItem {
 pub struct Question {
     /// `choice` (one of `options`) or `short` (free answer, self-checked).
     pub kind: String,
+    /// In the language studied (plan §12: questions and options in the
+    /// target language; the native-language version is one tap away).
     pub question: String,
     pub options: Vec<String>,
     pub answer: String,
+    /// In the native language.
     pub explanation: String,
+    /// The question and its options in the native language, shown on
+    /// request (the 提示 button). Empty in lessons made before it existed.
+    #[serde(default)]
+    pub question_translation: String,
 }
 
 /// JSON Schema for structured output (all fields required, no extras).
@@ -86,7 +93,8 @@ pub fn lesson_schema() -> Value {
             "question": s,
             "options": { "type": "array", "items": s },
             "answer": s,
-            "explanation": s
+            "explanation": s,
+            "question_translation": s
         })) }
     }))
 }
@@ -350,7 +358,34 @@ pub(crate) mod tests {
         let s = lesson_schema();
         assert_eq!(s["additionalProperties"], false);
         assert_eq!(s["required"].as_array().unwrap().len(), 5);
-        assert_eq!(s["properties"]["questions"]["items"]["required"].as_array().unwrap().len(), 5);
+        assert_eq!(s["properties"]["questions"]["items"]["required"].as_array().unwrap().len(), 6);
+    }
+
+    #[test]
+    fn markdown_folds_the_question_translation() {
+        let mut v: Value = serde_json::from_str(&sample_lesson_json()).unwrap();
+        v["questions"][0]["question"] = json!("How is 半導体 read?");
+        v["questions"][0]["question_translation"] = json!("「半導体」怎麼唸？\nA. はんどうたい\nB. はんとうたい");
+        let l = parse_lesson(&v.to_string()).unwrap();
+        let meta = MarkdownMeta { lang: Lang::Ja, level: "N3".into(), url: "".into(), source: "".into(), date: "2026-11-07".into(), engine: "mock".into() };
+        let md = render_markdown(&Templates::bundled(), &l, &meta).unwrap();
+        assert!(md.contains("1. How is 半導体 read?"), "{md}");
+        assert!(md.contains("<details><summary>中文</summary>「半導体」怎麼唸？<br>A. はんどうたい<br>B. はんとうたい</details>"), "{md}");
+        assert_eq!(md.matches("<summary>中文</summary>").count(), 1, "only questions that have one");
+    }
+
+    #[test]
+    fn older_lessons_without_question_translation_still_parse() {
+        let q: Question = serde_json::from_str(r#"{"kind":"choice","question":"Q?","options":["a","b"],"answer":"a","explanation":"因為"}"#).unwrap();
+        assert_eq!(q.question_translation, "");
+    }
+
+    #[test]
+    fn questions_are_asked_in_the_target_language() {
+        for t in [BUNDLED_SYSTEM, include_str!("../../../prompts/course_lesson_system.md")] {
+            assert!(t.contains("`question` and `options`"), "{t}");
+            assert!(t.contains("`question_translation`"), "{t}");
+        }
     }
 
     #[test]

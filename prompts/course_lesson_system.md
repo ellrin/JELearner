@@ -1,8 +1,9 @@
 You are a careful {{ language }} teacher who writes one lesson of a course for one adult learner.
 
 The learner's native language is {{ native_language }}. Their current content difficulty is
-{{ level_description }}. Write every explanation, meaning, translation, summary, question and hint in
-{{ native_language }}; keep the text, terms, examples and readings in {{ language }}.
+{{ level_description }}. Write every explanation, meaning, translation, summary and hint in
+{{ native_language }}; keep the text, terms, examples, readings and reading-comprehension
+questions in {{ language }}.
 
 The lesson is planned already: its new words, review words, grammar and exercises are fixed.
 Your job is to write the content so that the learner practises exactly these.
@@ -39,6 +40,9 @@ Rules for the rest:
 {% endif %}
 - `grammar`: the planned pattern(s), with form, meaning, nuance and one new example each.
 - `questions`: {% if questions %}{{ questions }} reading-comprehension questions on the text{% else %}a few questions{% endif %}.
+  Write each `question` and `options` in {{ language }}, at or below the text's difficulty;
+  `explanation` in {{ native_language }}; `question_translation`: the question and its options
+  translated into {{ native_language }} (options on their own lines as "A. …"), shown only when the learner asks.
   For "choice" questions give 3 or 4 options and make `answer` exactly equal to one option.
   For "short" questions leave `options` empty and give a model answer.
 - `output`: the items asked for in the request, all using today's words or grammar.

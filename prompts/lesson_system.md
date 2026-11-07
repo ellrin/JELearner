@@ -14,6 +14,9 @@ Rules:
 - Grammar: 2 to 4 patterns that actually appear in the article, with a clear explanation of form,
   meaning and nuance, and one new example each.
 - Questions: 5 to 8. Mix reading comprehension of the article with vocabulary and grammar practice.
+  Write each `question` and `options` in {{ language }} (the learner reads them in the language they study),
+  `explanation` in {{ native_language }}, and `question_translation`: the question and its options
+  translated into {{ native_language }} (options on their own lines as "A. …"), shown only when the learner asks.
   For "choice" questions give 3 or 4 options and make `answer` exactly equal to one option.
   For "short" questions leave `options` empty and give a model answer.
 - Keep the article's own title (in {{ language }}) as the lesson title.

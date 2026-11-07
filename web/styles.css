@@ -268,6 +268,10 @@ input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent-text
 .paper .gram p { margin: 4px 0; }
 .paper .q { margin: 0 0 18px; padding: 12px 14px; border: 1px solid #e3e1dc; border-radius: 4px; }
 .paper .q .qt { font-weight: 600; margin-bottom: 8px; }
+/* 中: the question in Chinese, on request. */
+.q .q-hint { margin-left: 8px; width: 22px; height: 22px; padding: 0; border-radius: 50%; vertical-align: 1px; border: 1px solid color-mix(in srgb, var(--paper-ink, var(--text)) 30%, transparent); background: none; color: color-mix(in srgb, var(--paper-ink, var(--text)) 60%, transparent); font: 600 11.5px/20px var(--sans); }
+.q .q-hint:hover, .q .q-hint.on { color: var(--accent-text); border-color: var(--accent-text); }
+.q .q-tr { white-space: pre-line; font-size: 14px; color: color-mix(in srgb, var(--paper-ink, var(--text)) 65%, transparent); margin: -2px 0 8px; padding-left: 10px; border-left: 2px solid var(--accent-2-text, var(--accent-text)); }
 .paper .q .opts { display: flex; flex-direction: column; gap: 4px; }
 .paper .q .opt { text-align: left; background: #faf9f6; border: 1px solid #e3e1dc; border-radius: 4px; padding: 6px 10px; font: inherit; color: inherit; }
 .paper .q .opt:hover:not(:disabled) { border-color: var(--accent-text); }

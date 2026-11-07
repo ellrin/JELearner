@@ -74,6 +74,9 @@ units: {{ units_summary | tojson }}
 {% for o in q.options %}
    - {{ "ABCDEFG"[loop.index0] }}. {{ o }}
 {% endfor %}
+{% if q.question_translation %}
+   <details><summary>中文</summary>{{ q.question_translation | replace("\n", "<br>") }}</details>
+{% endif %}
 {% endfor %}
 
 {% if output %}

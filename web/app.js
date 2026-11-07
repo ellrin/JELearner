@@ -757,7 +757,23 @@ function markWords(node, terms, lang) {
 
 function questionCard(lessonId, q, index, quiz, lang = state.lang) {
   const box = el("div", "q");
-  box.append(elr("div", "qt", `${index + 1}. ${q.question}`, lang));
+  const qt = elr("div", "qt", `${index + 1}. ${q.question}`, lang);
+  box.append(qt);
+  // The question is in the language studied; its Chinese is one tap away.
+  if (q.question_translation) {
+    const tr = el("div", "q-tr", q.question_translation);
+    tr.hidden = true;
+    const hint = el("button", "q-hint", "中");
+    hint.setAttribute("aria-label", "看中文");
+    hint.setAttribute("aria-expanded", "false");
+    hint.onclick = () => {
+      tr.hidden = !tr.hidden;
+      hint.classList.toggle("on", !tr.hidden);
+      hint.setAttribute("aria-expanded", String(!tr.hidden));
+    };
+    qt.append(hint);
+    box.append(tr);
+  }
   const fb = el("div", "fb");
   const showFeedback = (correct, answer) => {
     if (quiz && correct !== null && correct !== undefined) quizAnswered(quiz, index, answer, correct);
