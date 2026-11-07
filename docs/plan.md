@@ -483,6 +483,12 @@ per_day = 10                # 每天帶入幾個新字
 - **核心**：`jl_core::speech::SpeechProvider`（`synthesize`、`transcribe`）先放位置與測試用的 `MockSpeech`；macOS／Windows 內建、Whisper／Kokoro 的實作之後再做（**尚未在實機測試**）。
 - 15 秒錄音倒數、聽寫、聽力題、被動聆聽時間、語音對話記為「說」留到 D 階段後續。
 
+**作者決定（2026-11，Mac 到貨）**：作者的 Mac 不用 Whisper 與 Kokoro，改用 macOS 內建（decisions.md 第 14 節）：
+
+- **辨識**：Apple 的 `SpeechTranscriber`（英、日，本機執行，模型由系統下載）。網頁錄成 WAV 上傳給伺服器，伺服器經 `jl-speech` 小工具辨識。有本機辨識時麥克風與跟讀**預設出現**（錄音不離開電腦，不必再提醒隱私）；沒有時才用瀏覽器的雲端辨識，仍需在設定打開。
+- **合成**：系統聲音，優先 Premium、其次加強版；設定頁說明怎麼免費下載 Premium 聲音並提供連結。
+- **D 階段第二步（2026-11）**：上面兩項、15 秒錄音倒數（時間到自動送出，可提前送出）、本機模型改用共用資料夾（`LOCAL_LLM_HOME`，decisions.md 第 15 節）並加上 Qwen。
+
 ## 16. 家庭成員與學習群組
 
 ### 16.1 角色
@@ -696,8 +702,9 @@ per_day = 10                # 每天帶入幾個新字
 ### 第 D 階段：瀏覽器語音
 
 - [x] 第一步（第 15 節）：瀏覽器朗讀（生字、複習卡、課文、例句、對話 AI 的話、自動朗讀）、設定 → 08 語音（聲音、速度、試聽、語音辨識開關與隱私說明）、對話麥克風填入輸入框、課文逐句跟讀與逐字比對；`SpeechProvider` trait 與 mock
+- [ ] 第二步（第 15 節，Mac 到貨）：`jl-speech`（Swift：status／install／transcribe）與 `MacSpeech`；`/api/speech/*`；網頁錄 WAV、15 秒倒數、本機辨識預設開啟、瀏覽器雲端辨識改為備案；聲音優先 Premium、設定頁的下載說明；本機模型用共用資料夾、伺服器自己啟動 llama-server、目錄加 Qwen；測試（假的 `jl-speech`、`say` 產生的語音實機辨識）
 - [ ] 語音合成：聽力題
-- [ ] 語音辨識：15 秒錄音對話（語音回合記為「說」）
+- [ ] 語音辨識：語音回合記為「說」
 - [ ] 聽寫；跟讀達標計分
 - [ ] 被動聆聽時間累積（閒置不算）
 - [ ] 測試：比對與計分（文字層級）；瀏覽器實際錄音需人工測試（第一步的比對以 Playwright 在頁面中檢查，瀏覽器語音以假的 `speechSynthesis`／`SpeechRecognition` 測介面；真實聲音與麥克風**尚未在實機測試**）
@@ -724,8 +731,8 @@ per_day = 10                # 每天帶入幾個新字
 
 ### Mac 到貨後
 
-- [ ] 本機 Whisper（語音辨識）、Kokoro（語音合成）取代瀏覽器
-- [ ] Gemma 4（llama-server）作為引擎選項；照片判讀
+- [x] ~~本機 Whisper（語音辨識）、Kokoro（語音合成）取代瀏覽器~~ → 改用 macOS 內建（第 15 節、D 階段第二步）
+- [ ] Gemma 4／Qwen（llama-server，共用模型資料夾）作為引擎選項（D 階段第二步）；照片判讀
 - [ ] 向量庫與 RAG（見 roadmap 第二階段）
 - [ ] 實測：Claude Code 每位使用者登入隔離、記憶體預算
 

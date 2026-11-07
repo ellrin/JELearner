@@ -1155,3 +1155,62 @@ async fn conversation_through_claude_code_passes_the_transcript() {
     let args = std::fs::read_to_string(cli_dir.path().join("last-args")).unwrap();
     assert!(args.contains("recast") && args.contains("--safe-mode"), "turn schema passed: {args}");
 }
+
+/// A WAV for the fake `jl-speech`: a 44-byte header, then the "speech" as text.
+fn fake_wav(said: &str) -> Vec<u8> {
+    let mut b = b"RIFF\0\0\0\0WAVEfmt ".to_vec();
+    b.resize(44, 0);
+    b.extend_from_slice(said.as_bytes());
+    b
+}
+
+/// On-device recognition (decisions §14) through a fake `jl-speech`: status,
+/// a recording per language, the model download, and the refusals.
+#[cfg(unix)]
+#[tokio::test]
+async fn speech_recognition_through_the_helper() {
+    let app_dir = tempfile::tempdir().unwrap();
+    // Default test settings: no engine (the helper path does not exist).
+    let c = start(Settings::for_tests(Paths::from_repo(), app_dir.path().to_path_buf())).await;
+    let (st, s) = c.get("/api/speech").await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(s["engine"], Value::Null, "{s}");
+
+    let fake_dir = tempfile::tempdir().unwrap();
+    let mut settings = Settings::for_tests(Paths::from_repo(), app_dir.path().to_path_buf());
+    settings.speech_bin = Some(jl_core::speech::fake::write(fake_dir.path()));
+    let c = start(settings).await;
+    let (_, s) = c.get("/api/speech").await;
+    assert_eq!(s["engine"], "macos");
+    assert_eq!(s["langs"][0], json!({"lang": "en", "locale": "en-US", "supported": true, "installed": true}));
+    assert_eq!(s["langs"][1]["installed"], false);
+
+    let send = |lang: &str, body: Vec<u8>| {
+        let url = format!("{}/api/speech/transcribe?lang={lang}", c.base);
+        let http = c.http.clone();
+        async move {
+            let r = http.post(url).header("content-type", "audio/wav").body(body).send().await.unwrap();
+            (StatusCode::from_u16(r.status().as_u16()).unwrap(), r.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let (st, t) = send("en", fake_wav("I am planning to buy three books")).await;
+    assert_eq!(st, StatusCode::OK, "{t}");
+    assert_eq!(t["text"], "I am planning to buy three books");
+    assert_eq!(t["confidence"], 0.9);
+    assert!(std::fs::read_to_string(fake_dir.path().join("last-args")).unwrap().starts_with("transcribe en-US "));
+
+    // Japanese model missing → 409, the page offers the download.
+    let (st, e) = send("ja", fake_wav("こんにちは")).await;
+    assert_eq!(st, StatusCode::CONFLICT, "{e}");
+    let (st, s) = c.post("/api/speech/install", json!({"lang": "ja"})).await;
+    assert_eq!(st, StatusCode::OK, "{s}");
+    assert_eq!(s["langs"][1]["installed"], true);
+    let (st, t) = send("ja", fake_wav("こんにちは")).await;
+    assert_eq!((st, t["text"].as_str()), (StatusCode::OK, Some("こんにちは")));
+
+    // Refusals: no language, not a WAV, empty, too large.
+    assert_eq!(send("", fake_wav("x")).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(send("en", b"not a wav at all".to_vec()).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(send("en", vec![]).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(send("en", vec![0; jl_server::speech::AUDIO_MAX_BYTES + 1]).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+}

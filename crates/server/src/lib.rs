@@ -16,6 +16,7 @@ pub mod git;
 pub mod notebook;
 pub mod secrets;
 pub mod settings;
+pub mod speech;
 pub mod study;
 
 use axum::http::StatusCode;

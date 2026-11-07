@@ -96,6 +96,10 @@ pub struct Settings {
     /// The user this computer last entered, per workspace id.
     pub active_users: std::collections::BTreeMap<String, String>,
     pub llama: LlamaServerConfig,
+    /// The `jl-speech` helper (`JELEARNER_SPEECH_BIN` or `[speech] bin`);
+    /// None = look next to the app and in the checkout's build folder.
+    /// Tests point it at a path that does not exist, or at a fake.
+    pub speech_bin: Option<PathBuf>,
     pub google: GoogleSettings,
     pub crawler_delay_ms: u64,
     pub user_agent: Option<String>,
@@ -117,6 +121,13 @@ struct ConfigFile {
     google: GoogleSection,
     #[serde(default)]
     crawler: CrawlerSection,
+    #[serde(default)]
+    speech: SpeechSection,
+}
+
+#[derive(Deserialize, Default)]
+struct SpeechSection {
+    bin: Option<PathBuf>,
 }
 
 #[derive(Deserialize, Default)]
@@ -208,6 +219,7 @@ impl Settings {
                 url: env("JELEARNER_LLAMA_URL").or(cfg.llama.url).unwrap_or_else(|| "http://127.0.0.1:8080/v1".into()),
                 model: env("JELEARNER_LLAMA_MODEL").or(cfg.llama.model).unwrap_or_else(|| catalog.defaults.brain.clone()),
             },
+            speech_bin: env("JELEARNER_SPEECH_BIN").map(PathBuf::from).or(cfg.speech.bin),
             google: GoogleSettings {
                 mode: google_mode,
                 gmail_base: env("JELEARNER_GMAIL_BASE_URL").unwrap_or_else(|| "https://gmail.googleapis.com".into()),
@@ -246,6 +258,8 @@ impl Settings {
             claude_bin: Some(PathBuf::from("/nonexistent/claude")),
             active_users: cfg.active_users,
             llama: LlamaServerConfig { url: "http://127.0.0.1:9/v1".into(), model: catalog.defaults.brain.clone() },
+            // Never Apple's engine in tests; a test that wants one sets a fake.
+            speech_bin: Some(PathBuf::from("/nonexistent/jl-speech")),
             google: GoogleSettings {
                 mode: GoogleMode::Mock,
                 gmail_base: "http://127.0.0.1:9".into(),

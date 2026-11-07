@@ -73,6 +73,7 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .merge(crate::study::routes())
         .merge(crate::courses::routes())
         .merge(crate::notebook::routes())
+        .merge(crate::speech::routes())
         .fallback_service(ServeDir::new(web))
 }
 

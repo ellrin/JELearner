@@ -30,6 +30,7 @@
 
 - 總預算 ≤ 20 GB，留給系統與 KV cache。macOS 預設只讓 GPU 用約 2/3（36 GB 以下）到 3/4 的統一記憶體，32 GB 約 21 GB。
 - 預設用 Q4_K_XL；確認 KV cache 與語音同時執行還有餘裕後再評估 Q8_0。`catalog::plan` 會算總和並檢查兩個上限（**估算，尚未實機測試**）。
+- **2026-11 更新（Mac 到貨）**：耳朵與嘴巴改用 macOS 內建（第 14 節），不再佔模型預算；大腦可選 Gemma 4 或 Qwen（第 15 節）。實測 M6 32 GB 的 Metal 可用上限（`recommendedMaxWorkingSetSize`）是 26.8 GB，比上面的估算寬。
 
 ## 5. Gmail／Google Calendar：先 trait，OAuth 之後
 
@@ -90,3 +91,19 @@ tokio、axum 0.8、reqwest（rustls）、sqlx 0.8（SQLite，執行期查詢，�
 - **決定**：積分以 `records/points/YYYY-MM-DD.csv` 為準（一天一檔、只新增，未通過也記 0 分），資料庫只是索引、每次開啟都從檔案補齊；規則數值放 `config/progress.toml`，工作區可覆蓋；等級只升不降、小階由條件 1–3 自動判斷、跨大級等 B 階段的檢核；教材難度與等級分開調整；`LlmProvider` 加 `chat`（多回合），Claude 訂閱把整段對話寫進提示詞；對話完成後存成 Markdown＋內嵌資料；大頭貼只存在本機。細節與理由見 `plan.md` 第 20 節「實作時決定的細節」。
 - **原因**：多台電腦同步不衝突、資料庫可重建；門檻需要實際使用後校準，所以放設定檔；介面三原則（完成感、正向回饋、不說「你錯了」）。
 - **尚未實測**：真實 Claude（API 與訂閱）的對話品質與回覆格式；目前以 mock 伺服器與假的 Claude Code 測試。
+
+## 14. Mac 的語音：Apple 內建辨識與系統聲音（第二版 D 階段，2026-11）
+
+- **決定**：作者的 Mac 上，語音辨識用 macOS 的 `SpeechAnalyzer`／`SpeechTranscriber`（英、日，模型由系統下載與管理，錄音不離開電腦），取代原定的 Whisper；語音合成用系統聲音（瀏覽器 `speechSynthesis` 本來就用它們），優先選 Premium／加強版，取代原定的 Kokoro。
+  - Rust 透過小工具 `jl-speech`（`tools/macos-speech/`，Swift）呼叫 Apple 的 API：`status`（語言是否支援、是否已安裝）、`install`（下載語言模型）、`transcribe`（WAV → JSON）。`jl_core::speech::MacSpeech` 實作 `SpeechProvider`，上層不指名引擎。
+  - 網頁錄成 16 kHz 單聲道 WAV（Web Audio，不用 `MediaRecorder`：Chrome 錄出 WebM，Apple 的 API 讀不了），上傳給伺服器辨識；15 秒倒數、時間到自動送出。
+  - 有本機辨識時，麥克風與跟讀預設就出現；瀏覽器的雲端辨識改為沒有本機引擎時的備案（daidai 的 Windows），仍需在設定打開。
+- **原因**：Apple 的辨識不必另外下載大模型、幾乎不佔記憶體、很快，不會和本機 LLM 搶 GPU；Kokoro 的日文明顯弱於英文，系統 Premium 聲音英日品質一致且免費。兩者都在本機，符合「錄音不離開電腦」。
+- **取捨**：只有 macOS 26 以上能用；Windows 仍走系統內建或瀏覽器。辨識引擎會自動修正口音，跟讀分數仍是近似值（第 15 節）。
+- **測試**：`cargo test` 用假的 `jl-speech`（寫成 shell script）測參數、錯誤與 JSON；實機以 `say` 產生英、日語音檔再辨識，驗證整條路。**麥克風錄音需人工測試。**
+
+## 15. 共用模型資料夾與本機引擎（2026-11）
+
+- **決定**：本機模型與 llama.cpp 放在所有專案共用的資料夾，位置由環境變數 `LOCAL_LLM_HOME` 決定（或 `config.toml` 的 `[llama] home`，從 Finder 開啟的 App 讀不到 shell 變數）；模型在 `<home>/gguf/<owner>/<repo>/<檔名>`，與 `hf download --local-dir` 相同，和 PaperComposer 共用同一份檔案。`[engine] kind = "llama-server"` 時，伺服器自己用 `<home>/runtimes/llama.cpp` 的 `llama-server` 啟動 `[llama] model` 指定的模型（`--reasoning-budget 0`：Gemma 4 與 Qwen 不先思考，教材與對話都要固定 JSON）；`[llama] url` 有填時改連那台已經在跑的伺服器。
+- **目錄**：`models/catalog.json` 的大腦加上 Qwen（3.5 4B、3.5 9B、3.8 27B）；abliterated（移除拒答）版本標 `uncensored`，不當預設。
+- **原因**：模型動輒十幾 GB，每個專案各存一份浪費空間；作者在 PaperComposer 的實測（M6 32 GB）：Qwen3.5 4B 每秒 30.8 token、Gemma 4 12B Q8 11.5、Qwen3.8 27B 8.2，關掉思考後一次回覆從數分鐘降到 10–30 秒。
