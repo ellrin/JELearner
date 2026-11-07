@@ -1,13 +1,15 @@
-// Browser speech (docs/plan.md §15, stage D step 1): the Web Speech API,
-// which speaks with the operating system's own voices (macOS, Windows) and
-// needs nothing installed. Later the same buttons will use the native or
-// local engines behind core's `SpeechProvider` (Whisper, Kokoro).
+// Speech (docs/plan.md §15): speaking with the operating system's voices,
+// listening on this computer when it can.
 //
-// - Speaking: `speechSynthesis`, a voice per language (local voices first),
-//   chosen with the rate in Settings → 語音. Kept per user on this computer.
-// - Listening: `SpeechRecognition` only when the browser has it AND the user
-//   turned it on (default off): Chrome / Edge / Safari send the audio to the
-//   browser vendor's cloud service.
+// - Speaking: `speechSynthesis`, a voice per language (Premium, then
+//   Enhanced, then the rest; novelty voices last), chosen with the rate in
+//   Settings → 語音. Kept per user on this computer.
+// - Listening, stage D step 2 (decisions §14): when the server has on-device
+//   recognition (`GET /api/speech`, Apple's on the Mac), the page records a
+//   16 kHz mono WAV with a 15-second countdown and the server transcribes
+//   it; nothing leaves the computer, so it is on by default. Otherwise the
+//   browser's `SpeechRecognition`, only when the user turned it on (default
+//   off): Chrome / Edge / Safari send the audio to the vendor's cloud.
 // - Shadowing: listen → say it → the transcript compared with the sentence
 //   word by word (Japanese: character by character), an approximate score.
 //   No points for now (plan §20).
@@ -19,7 +21,8 @@ const Speech = (() => {
   const PREFERRED = { en: ["en-US", "en-GB"], ja: ["ja-JP"] };
   const SAMPLE = { en: "Nice to meet you. Let's practise together.", ja: "はじめまして。いっしょに練習しましょう。" };
   const key = () => `jl.speech.${state.status?.user?.id ?? "_"}`;
-  const prefs = () => ({ voice: {}, rate: 1, recognition: false, autoRead: false, ...store.get(key(), {}) });
+  // recognition: the browser's cloud service (opt-in); localRecognition: on-device (opt-out).
+  const prefs = () => ({ voice: {}, rate: 1, recognition: false, localRecognition: true, autoRead: false, ...store.get(key(), {}) });
   const setPref = (k, v) => store.set(key(), { ...prefs(), [k]: v });
 
   let voices = [];
@@ -34,16 +37,37 @@ const Speech = (() => {
   }
 
   const normTag = (t) => String(t ?? "").replace("_", "-");
-  /** Voices for a language: preferred regions first, local voices before cloud ones. */
+  /**
+   * Voice quality from its name or URI (macOS: `com.apple.voice.premium.…`,
+   * `….enhanced.…`, `….compact.…`; `com.apple.eloquence.…` and the old
+   * `com.apple.speech.synthesis.voice.…` novelty voices sound worst).
+   * 0 Premium, 1 Enhanced, 2 standard, 3 Eloquence, 4 novelty.
+   */
+  // Chrome reports the bare name as voiceURI, so the macOS families are also known by name.
+  const ELOQUENCE = new Set(["Eddy", "Flo", "Grandma", "Grandpa", "Reed", "Rocko", "Sandy", "Shelley"]);
+  const NOVELTY = new Set(["Albert", "Bad News", "Bahh", "Bells", "Boing", "Bubbles", "Cellos", "Good News", "Jester", "Organ", "Superstar", "Trinoids", "Whisper", "Wobble", "Zarvox", "Fred", "Junior", "Kathy", "Ralph"]);
+  function quality(v) {
+    const id = `${v.name} ${v.voiceURI ?? ""}`.toLowerCase();
+    const base = String(v.name ?? "").replace(/\s*\(.*$/, "");
+    if (id.includes("premium")) return 0;
+    if (id.includes("enhanced")) return 1;
+    if (id.includes("eloquence") || ELOQUENCE.has(base)) return 3;
+    if (id.includes("speech.synthesis.voice") || NOVELTY.has(base)) return 4;
+    return 2;
+  }
+  const TIER = ["Premium", "加強版", "", "", ""];
+  /** Voices for a language: on this computer first, then by quality, then preferred region. */
   function voicesFor(lang) {
     const pre = PREFERRED[lang] ?? [lang];
     const rank = (v) => {
       const tag = normTag(v.lang);
       const i = pre.findIndex((p) => tag.toLowerCase() === p.toLowerCase());
-      return (v.localService ? 0 : 100) + (i < 0 ? 50 : i);
+      return (v.localService ? 0 : 1000) + quality(v) * 100 + (i < 0 ? 50 : i);
     };
     return voices.filter((v) => normTag(v.lang).toLowerCase().startsWith(lang)).sort((a, b) => rank(a) - rank(b));
   }
+  /** True when this language has only standard-or-worse voices: worth suggesting a Premium download. */
+  const lacksGoodVoice = (lang) => !voicesFor(lang).some((v) => quality(v) <= 1);
   function voiceFor(lang) {
     const list = voicesFor(lang);
     const want = prefs().voice?.[lang];
@@ -51,8 +75,25 @@ const Speech = (() => {
   }
   const hasVoices = () => voices.length > 0;
   const canSpeak = (lang) => !!synth && voicesFor(lang).length > 0;
+
+  // On-device recognition offered by the server: { engine, langs: { en: { supported, installed } } }.
+  let local = { engine: null, langs: {} };
+  const canRecord = () => !!(navigator.mediaDevices?.getUserMedia && (window.AudioContext || window.webkitAudioContext));
+  async function loadLocal() {
+    try {
+      const r = await api("/api/speech");
+      local = { engine: r.engine, langs: Object.fromEntries((r.langs ?? []).map((l) => [l.lang, l])) };
+    } catch { local = { engine: null, langs: {} }; }
+    refreshButtons();
+    onVoices.forEach((f) => f());
+    return local;
+  }
+  /** The server can recognise `lang` on this computer (model may still need downloading). */
+  const hasLocal = (lang) => !!local.engine && !!local.langs[lang]?.supported && canRecord();
+  const usesLocal = (lang) => hasLocal(lang) && prefs().localRecognition !== false;
   const hasRecognition = () => !!Rec;
-  const canListen = () => !!Rec && prefs().recognition === true;
+  /** Whether a microphone shows for `lang`: on-device (default on) or the browser's (opt-in). */
+  const canListen = (lang) => usesLocal(lang) || (!!Rec && prefs().recognition === true);
 
   /** Text as spoken: Japanese ruby `{漢字|かな}` → 漢字, markup characters dropped. */
   const plain = (text) => plainRuby(text).replace(/[*_#`>]/g, "").replace(/\s+/g, " ").trim();
@@ -92,7 +133,7 @@ const Speech = (() => {
   // asynchronously): hidden until a voice for their language exists.
   function refreshButtons(root = document) {
     root.querySelectorAll?.(".spk[data-lang]").forEach((b) => (b.hidden = !canSpeak(b.dataset.lang)));
-    root.querySelectorAll?.(".mic-btn").forEach((b) => (b.hidden = !canListen()));
+    root.querySelectorAll?.(".mic-btn").forEach((b) => (b.hidden = !canListen(b.dataset.lang)));
   }
   /** A small speaker button that reads `text` (a string or a function returning one). */
   function speakerButton(text, lang, label = "朗讀") {
@@ -104,12 +145,117 @@ const Speech = (() => {
     return b;
   }
 
+  // ── on-device recognition: record a WAV, the server transcribes ──
+  const MAX_SECONDS = 15;
+  const RATE = 16000;
+  /** 16-bit PCM mono WAV from Float32 samples. */
+  function wav(samples, rate) {
+    const buf = new ArrayBuffer(44 + samples.length * 2);
+    const v = new DataView(buf);
+    const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+    str(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); str(8, "WAVE");
+    str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, "data"); v.setUint32(40, samples.length * 2, true);
+    samples.forEach((x, i) => v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, x)) * 0x7fff, true));
+    return new Blob([buf], { type: "audio/wav" });
+  }
+  /** Average neighbouring samples down to `to` Hz (when the browser would not record at 16 kHz). */
+  function downsample(x, from, to) {
+    if (from === to) return x;
+    const ratio = from / to;
+    const out = new Float32Array(Math.floor(x.length / ratio));
+    for (let i = 0; i < out.length; i++) {
+      const a = Math.floor(i * ratio), b = Math.min(x.length, Math.floor((i + 1) * ratio));
+      let s = 0;
+      for (let j = a; j < b; j++) s += x[j];
+      out[i] = s / Math.max(1, b - a);
+    }
+    return out;
+  }
+  let recording = null; // { finish(send), lang }
+  /**
+   * Record up to 15 s, then send the WAV to the server. `onTick(secondsLeft)`
+   * each second; `onBusy()` while the server transcribes; `onText(text, true)`
+   * and `onEnd(text)` with the result ("" on failure, with a flash).
+   * Returns a stop function that sends what was recorded.
+   */
+  function recordLocal(lang, { onText, onEnd, onTick, onBusy } = {}) {
+    let stream = null, ctx = null, node = null, timer = null, done = false;
+    const chunks = [];
+    let startedAt = 0;
+    const cleanup = () => {
+      clearInterval(timer);
+      try { node?.disconnect(); } catch {}
+      stream?.getTracks().forEach((t) => t.stop());
+      try { ctx?.close(); } catch {}
+      if (recording?.lang === lang) recording = null;
+    };
+    const finish = async (send) => {
+      if (done) return;
+      done = true;
+      const rate = ctx?.sampleRate ?? RATE;
+      cleanup();
+      if (!send) { onEnd?.(""); return; }
+      const total = chunks.reduce((n, c) => n + c.length, 0);
+      if (total < rate * 0.3) { flash("沒有聽到聲音", true); onEnd?.(""); return; }
+      const all = new Float32Array(total);
+      let o = 0;
+      for (const c of chunks) { all.set(c, o); o += c.length; }
+      onBusy?.();
+      try {
+        const r = await fetch(`/api/speech/transcribe?lang=${lang}`, { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav(downsample(all, rate, RATE), RATE) });
+        const data = await r.json().catch(() => null);
+        if (r.status === 409) { flash(`${data?.error ?? "還沒下載語音辨識模型"}：到「設定 → 08 語音」下載`, true); onEnd?.(""); return; }
+        if (!r.ok) throw new Error(data?.error ?? `${r.status}`);
+        const text = String(data?.text ?? "").trim();
+        if (!text) flash("沒有聽到聲音", true);
+        onText?.(text, true);
+        onEnd?.(text);
+      } catch (e) {
+        flash(`語音辨識失敗：${e.message}`, true);
+        onEnd?.("");
+      }
+    };
+    recording = { lang, finish };
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      } catch (e) {
+        flash(e?.name === "NotAllowedError" ? "麥克風沒有權限" : "找不到麥克風", true);
+        done = true; cleanup(); onEnd?.(""); return;
+      }
+      if (done) { cleanup(); return; } // stopped before the microphone opened
+      const AC = window.AudioContext || window.webkitAudioContext;
+      try { ctx = new AC({ sampleRate: RATE }); } catch { ctx = new AC(); }
+      const src = ctx.createMediaStreamSource(stream);
+      // ScriptProcessor: deprecated but in every browser, and needs no module file.
+      node = ctx.createScriptProcessor(4096, 1, 1);
+      node.onaudioprocess = (e) => { if (!done) chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+      src.connect(node);
+      node.connect(ctx.destination);
+      startedAt = Date.now();
+      onTick?.(MAX_SECONDS);
+      timer = setInterval(() => {
+        const left = MAX_SECONDS - Math.floor((Date.now() - startedAt) / 1000);
+        if (left <= 0) finish(true); else onTick?.(left);
+      }, 250);
+    })();
+    return () => finish(true);
+  }
+
   // ── recognition ──────────────────────────────────────
   let rec = null;
-  /** Listen once in `lang`; `onText(text, final)` gets interim and final text. Returns a stop function. */
-  function listen(lang, { onText, onEnd } = {}) {
-    if (!canListen()) return () => {};
+  /**
+   * Listen once in `lang`: on this computer when it can, else the browser's
+   * service. `onText(text, final)` gets interim and final text; `onTick`
+   * and `onBusy` only fire for on-device recording. Returns a stop function
+   * (on-device: stop and send).
+   */
+  function listen(lang, { onText, onEnd, onTick, onBusy } = {}) {
+    if (!canListen(lang)) return () => {};
     stopListening();
+    if (usesLocal(lang)) return recordLocal(lang, { onText, onEnd, onTick, onBusy });
     const r = new Rec();
     r.lang = PREFERRED[lang]?.[0] ?? lang;
     r.interimResults = true;
@@ -134,29 +280,46 @@ const Speech = (() => {
     try { r.start(); } catch { rec = null; onEnd?.(""); }
     return () => { try { r.stop(); } catch { /* ignore */ } };
   }
+  /** Stop listening without a result (on-device: the recording is dropped). */
   function stopListening() {
+    recording?.finish(false);
     if (!rec) return;
     try { rec.abort(); } catch { /* ignore */ }
     rec = null;
   }
   /**
    * A microphone button: press to talk, the text goes to `onText` (interim
-   * and final); press again to stop. Hidden unless recognition is on.
+   * and final); press again to stop. On this computer it records up to 15 s
+   * with the seconds left on the button, then sends; while the server
+   * transcribes the button shows a busy state. Hidden unless recognition
+   * is available for `lang`.
    */
   function micButton(lang, onText, label = "用說的") {
     const b = iconButton("mic", label);
     b.classList.add("mic-btn");
-    b.hidden = !canListen();
+    b.dataset.lang = lang;
+    b.hidden = !canListen(lang);
     let stopFn = null;
+    const reset = () => {
+      stopFn = null;
+      b.classList.remove("listening", "busy");
+      delete b.dataset.left;
+      b.disabled = false;
+      b.setAttribute("aria-pressed", "false");
+      b.setAttribute("aria-label", label);
+    };
     b.onclick = (e) => {
       e.preventDefault();
+      if (b.classList.contains("busy")) return;
       if (stopFn) { stopFn(); return; }
       stop();
       b.classList.add("listening");
       b.setAttribute("aria-pressed", "true");
       stopFn = listen(lang, {
         onText,
-        onEnd: () => { stopFn = null; b.classList.remove("listening"); b.setAttribute("aria-pressed", "false"); },
+        onTick: (left) => { b.dataset.left = String(left); b.setAttribute("aria-label", `錄音中，剩 ${left} 秒，按一下送出`); },
+        onBusy: () => { delete b.dataset.left; b.classList.add("busy"); b.setAttribute("aria-label", "辨識中"); },
+        onEnd: reset,
       });
     };
     return b;
@@ -324,7 +487,8 @@ const Speech = (() => {
   function shadowButton(text, lang, anchor) {
     const b = iconButton("mic", "跟讀");
     b.classList.add("mic-btn");
-    b.hidden = !canListen();
+    b.dataset.lang = lang;
+    b.hidden = !canListen(lang);
     b.onclick = (e) => {
       e.stopPropagation();
       const open = anchor.nextElementSibling?.classList.contains("shadow") ? anchor.nextElementSibling : null;
@@ -335,10 +499,12 @@ const Speech = (() => {
   }
 
   loadVoices();
+  loadLocal();
   return {
     available: () => !!synth, hasVoices, canSpeak, canListen, hasRecognition, voicesFor, voiceFor, prefs, setPref,
     speak, stop, speakerButton, micButton, shadowButton, listen, stopListening, compare, sentences, plain,
-    refreshButtons, onVoices, SAMPLE, loadVoices,
+    refreshButtons, onVoices, SAMPLE, loadVoices, loadLocal, hasLocal, usesLocal, local: () => local,
+    quality, TIER, lacksGoodVoice, wav, downsample, MAX_SECONDS,
   };
 })();
 
@@ -368,7 +534,9 @@ function renderSpeechSettings(box) {
       sel.dataset.lang = lang;
       const chosen = Speech.voiceFor(lang)?.name;
       for (const v of list) {
-        const o = el("option", null, `${v.name}${v.localService ? "" : "・雲端"}`);
+        const tier = Speech.TIER[Speech.quality(v)];
+        const named = /premium|enhanced/i.test(v.name); // Chrome already writes "(Premium)"
+        const o = el("option", null, `${v.name}${tier && !named ? `・${tier}` : ""}${v.localService ? "" : "・雲端"}`);
         o.value = v.name;
         if (v.name === chosen) o.selected = true;
         sel.append(o);
@@ -396,19 +564,71 @@ function renderSpeechSettings(box) {
     ac.onchange = () => Speech.setPref("autoRead", ac.checked);
     auto.append(ac, el("span", null, "對話時自動朗讀 AI 的話"));
     form.append(auto);
+    // Better voices are a free download on the Mac; say so only while a language lacks one.
+    const langsShown = langs.filter((l) => Speech.voicesFor(l).length);
+    if (/Mac/.test(navigator.userAgent) && langsShown.some(Speech.lacksGoodVoice)) {
+      const tip = el("div", "voice-tip");
+      tip.append(
+        el("div", "note", "想要更自然的聲音：在「系統設定 → 輔助使用 → 朗讀內容 → 系統聲音 → 管理聲音」免費下載 Premium 聲音（例如英文 Ava、Zoe，日文 Kyoko 加強版），下載後重新整理這一頁。"),
+        ghostButton("external", "打開系統設定", async () => { try { await api("/api/open/voices", {}); } catch (e) { flash(e.message, true); } }),
+      );
+      form.append(tip);
+    }
   }
-  // Recognition: off by default; the audio leaves the computer.
+  box.append(form, recognitionSettings());
+}
+
+/** Recognition settings: on this computer when the server offers it, else the browser's (opt-in). */
+function recognitionSettings() {
   const recBox = el("div", "git-box");
-  const rl = el("label", "check");
-  const rc = el("input"); rc.type = "checkbox"; rc.checked = Speech.canListen(); rc.disabled = !Speech.hasRecognition();
-  rc.onchange = () => { Speech.setPref("recognition", rc.checked); Speech.refreshButtons(); };
-  rl.append(rc, el("span", null, "語音辨識（對話的麥克風、課文跟讀）"));
   const recForm = el("div", "form");
   recBox.append(recForm);
+  const local = Speech.local();
+  const langs = state.status?.user?.languages?.length ? state.status.user.languages : ["en", "ja"];
+  if (local.engine && langs.some(Speech.hasLocal)) {
+    const rl = el("label", "check");
+    const rc = el("input"); rc.type = "checkbox"; rc.checked = Speech.prefs().localRecognition !== false;
+    rc.onchange = () => { Speech.setPref("localRecognition", rc.checked); Speech.refreshButtons(); };
+    rl.append(rc, el("span", null, "語音辨識（對話的麥克風、課文跟讀）"));
+    recForm.append(rl, el("div", "note", "在這台電腦上辨識，錄音不會離開電腦。每次最多 15 秒，按一下麥克風就送出。"));
+    for (const lang of langs.filter(Speech.hasLocal)) {
+      const row = el("div", "speech-model");
+      row.append(el("span", null, `${langLabel(lang)}辨識模型`));
+      if (local.langs[lang].installed) {
+        const ok = el("span", "ok");
+        ok.append(icon("check"), document.createTextNode("已下載"));
+        row.append(ok);
+      } else {
+        const dl = ghostButton("download", "下載（第一次約 2 分鐘）", async () => {
+          dl.disabled = true;
+          dl.lastChild.textContent = "下載中…";
+          try {
+            await api("/api/speech/install", { lang });
+            await Speech.loadLocal();
+            flash(`${langLabel(lang)}辨識模型下載好了`);
+          } catch (e) {
+            flash(e.message, true);
+            dl.disabled = false;
+            dl.lastChild.textContent = "再試一次";
+            return;
+          }
+          recBox.replaceWith(recognitionSettings());
+        });
+        row.append(dl);
+      }
+      recForm.append(row);
+    }
+    return recBox;
+  }
+  // No on-device engine: the browser's service, off by default; the audio leaves the computer.
+  const rl = el("label", "check");
+  const rc = el("input"); rc.type = "checkbox"; rc.checked = Speech.prefs().recognition === true && Speech.hasRecognition(); rc.disabled = !Speech.hasRecognition();
+  rc.onchange = () => { Speech.setPref("recognition", rc.checked); Speech.refreshButtons(); };
+  rl.append(rc, el("span", null, "語音辨識（對話的麥克風、課文跟讀）"));
   recForm.append(rl, el("div", "note", Speech.hasRecognition()
     ? "開啟後，錄音會送到瀏覽器廠商（Google、Microsoft 或 Apple）的雲端服務辨識；不開也可以全部用打字。"
     : "這個瀏覽器不支援語音辨識，可以用打字。"));
-  box.append(form, recBox);
+  return recBox;
 }
 // Voices arrive late in some browsers: redraw the tab when they do.
 Speech.onVoices.add(() => { const b = $("#setSpeech"); if (b && !b.closest(".step").hidden) renderSpeechSettings(b); });

@@ -1499,6 +1499,9 @@ async fn open_page(AxPath(page): AxPath<String>) -> R<Value> {
         "anthropic-keys" => "https://console.anthropic.com/settings/keys",
         "github-new-repo" => "https://github.com/new?visibility=private",
         "claude-code-setup" => jl_core::claude_code::SETUP_PAGE,
+        // System Settings → Accessibility → Spoken Content, where the free
+        // Premium voices are downloaded (Manage Voices).
+        "voices" if cfg!(target_os = "macos") => "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent",
         _ => return Err(bad("unknown page")),
     };
     #[cfg(target_os = "macos")]

@@ -1105,6 +1105,16 @@ ruby rt { font-size: .5em; font-weight: 400; letter-spacing: 0; }
 .ico.mic-btn.listening { color: var(--accent-ink); background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 6px var(--accent-soft); } }
 @media (prefers-reduced-motion: reduce) { .ico.mic-btn.listening { animation: none; } }
+/* On-device recording: seconds left as a badge on the button; a quiet busy state while the server transcribes. */
+.ico.mic-btn { position: relative; }
+.ico.mic-btn[data-left]::after { content: attr(data-left); position: absolute; top: -6px; right: -8px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--panel); border: 1px solid var(--accent-text); color: var(--accent-text); font: 700 10.5px/16px var(--mono); text-align: center; pointer-events: none; }
+.ico.mic-btn.busy { animation: none; color: var(--accent-text); background: var(--accent-soft); cursor: progress; }
+.ico.mic-btn.busy svg { opacity: .55; }
+.speech-model { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 32px; }
+.speech-model > span:first-child { min-width: 8em; color: var(--muted); }
+.speech-model .ok { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-text); }
+.speech-model .ok svg { width: 15px; height: 15px; }
+.voice-tip { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 4px; }
 /* Shadowing panel under a paragraph: listen, say it, matched words light up. */
 .shadow { margin: -4px 0 14px; padding: 10px 12px; border: 1px solid var(--accent-2-text, var(--accent-text)); border-radius: 10px; background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
 .shadow .sh-head { display: flex; align-items: center; gap: 8px; font: 600 12.5px var(--mono); color: var(--muted); }
