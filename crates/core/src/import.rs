@@ -119,10 +119,11 @@ pub(crate) fn field(rec: &csv::StringRecord, map: &HashMap<&'static str, usize>,
 
 pub(crate) fn reader(text: &str) -> csv::Reader<&[u8]> {
     // Tab-separated files (common from Anki / spreadsheets) are detected by
-    // the header line.
-    let first = text.lines().next().unwrap_or("");
+    // the header line. Lines starting with `#` are comments (docs/data-formats.md),
+    // also before the header: a "# Source: …" line on top no longer becomes the header.
+    let first = text.lines().find(|l| !l.trim_start().starts_with('#')).unwrap_or("");
     let delim = if first.matches('\t').count() > first.matches(',').count() { b'\t' } else { b',' };
-    csv::ReaderBuilder::new().delimiter(delim).flexible(true).trim(csv::Trim::All).from_reader(text.as_bytes())
+    csv::ReaderBuilder::new().delimiter(delim).comment(Some(b'#')).flexible(true).trim(csv::Trim::All).from_reader(text.as_bytes())
 }
 
 fn row_lang(rec: &csv::StringRecord, map: &HashMap<&'static str, usize>, default: Lang, origin: &str, line: u64, warnings: &mut Vec<String>) -> Lang {

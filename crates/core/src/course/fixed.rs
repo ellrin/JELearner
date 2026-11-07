@@ -236,4 +236,15 @@ mod tests {
         let g = read_grammar_list("pattern,meaning\n〜に伴って,隨著\n");
         assert_eq!(g[0].pattern, "〜に伴って");
     }
+
+    #[test]
+    fn a_comment_above_the_header_is_skipped() {
+        // Downloaded lists carry their source on the first line (docs/data-formats.md: # lines are comments).
+        let w = read_word_list("# Source: hanabira.org, CC BY-SA 4.0\nterm,reading,meaning\n会う,あう,to meet\n");
+        assert_eq!(w.len(), 1);
+        assert_eq!((w[0].term.as_str(), w[0].reading.as_str()), ("会う", "あう"));
+        let g = read_grammar_list("# Source: hanabira.org\n# second comment\npattern\tmeaning\n〜に伴って\t隨著\n");
+        assert_eq!(g.len(), 1, "tab-separated is still detected below the comments");
+        assert_eq!(g[0].meaning, "隨著");
+    }
 }
