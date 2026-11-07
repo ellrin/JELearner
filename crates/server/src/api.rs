@@ -75,6 +75,7 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .merge(crate::courses::routes())
         .merge(crate::notebook::routes())
         .merge(crate::speech::routes())
+        .merge(crate::setup::routes())
         .fallback_service(ServeDir::new(web))
 }
 
@@ -593,7 +594,7 @@ async fn use_workspace(s: &Shared, path: PathBuf, init: bool) -> Result<Value, A
 /// empty, relative (it would land wherever the app happens to run), the home
 /// folder itself, or inside the JELearner program folder (the public repo,
 /// where personal files must never go).
-fn user_path(s: &settings::Settings, raw: &str) -> Result<PathBuf, ApiError> {
+pub(crate) fn user_path(s: &settings::Settings, raw: &str) -> Result<PathBuf, ApiError> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(bad("請輸入資料夾位置"));
@@ -630,8 +631,18 @@ fn existing_ancestor(path: &Path) -> Option<PathBuf> {
     path.ancestors().find(|a| a.exists()).and_then(|a| a.canonicalize().ok())
 }
 
+/// Refuse a workspace inside another Git repository (it would be committed
+/// into that repo, or nest one clone in another; plan §19.2.3).
+async fn not_nested(path: &Path) -> Result<(), ApiError> {
+    match crate::setup::enclosing_repo(path).await {
+        Some(top) => Err(bad(format!("這個位置在另一個 Git repository（{}）裡面，請換一個位置", top.display()))),
+        None => Ok(()),
+    }
+}
+
 async fn setup_workspace(State(s): State<Shared>, Json(b): Json<WorkspaceBody>) -> R<Value> {
     let path = user_path(&*s.settings.read().await, &b.path)?;
+    not_nested(&path).await?;
     Ok(Json(use_workspace(&s, path, b.init).await?))
 }
 
@@ -648,6 +659,7 @@ async fn setup_new(State(s): State<Shared>, Json(b): Json<NewBody>) -> R<Value> 
     if path.exists() && std::fs::read_dir(&path).map(|mut d| d.next().is_some()).unwrap_or(false) {
         return Err(bad("資料夾不是空的；要使用現有資料夾請選「開啟資料夾」"));
     }
+    not_nested(&path).await?;
     let template = s.settings.read().await.paths.template.clone();
     Root::init(&path, &template).map_err(|e| bad(e.to_string()))?;
     let mut out = use_workspace(&s, path.clone(), true).await?;
@@ -661,7 +673,12 @@ async fn setup_new(State(s): State<Shared>, Json(b): Json<NewBody>) -> R<Value> 
 #[derive(Deserialize)]
 struct CloneBody {
     url: String,
+    /// The folder that holds the clone (`<parent>/<repo name>`)…
+    #[serde(default)]
     parent: String,
+    /// …or the clone's own folder (the setup wizard), see `setup::target_for`.
+    #[serde(default)]
+    path: String,
 }
 
 async fn setup_clone(State(s): State<Shared>, Json(b): Json<CloneBody>) -> R<Value> {
@@ -670,8 +687,14 @@ async fn setup_clone(State(s): State<Shared>, Json(b): Json<CloneBody>) -> R<Val
     if name.is_empty() {
         return Err(bad("repo 網址無效"));
     }
-    let parent = if b.parent.trim().is_empty() { "~" } else { b.parent.trim() };
-    let target = user_path(&*s.settings.read().await, parent)?.join(&name);
+    let settings = s.settings.read().await.clone();
+    let target = if b.path.trim().is_empty() {
+        let parent = if b.parent.trim().is_empty() { "~" } else { b.parent.trim() };
+        user_path(&settings, parent)?.join(&name)
+    } else {
+        crate::setup::target_for("clone", &user_path(&settings, &b.path)?, url)
+    };
+    not_nested(&target).await?;
     git::clone(url, &target).await.map_err(bad)?;
     Ok(Json(use_workspace(&s, target, true).await?))
 }

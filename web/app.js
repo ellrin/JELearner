@@ -87,7 +87,8 @@ let flashTimer;
 function flash(msg, err = false) {
   $(".tip.flash")?.remove();
   const t = el("div", `tip flash${err ? " err" : ""}`, msg);
-  document.body.append(t);
+  // An open modal dialog sits in the top layer: anything outside it is dimmed and covered.
+  ($("dialog[open]") ?? document.body).append(t);
   clearTimeout(flashTimer);
   flashTimer = setTimeout(() => t.remove(), err ? 6000 : 3000);
 }

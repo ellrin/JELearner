@@ -1256,3 +1256,87 @@ async fn local_models_from_the_shared_folder() {
     let (_, m) = c.get("/api/models").await;
     assert_eq!(m["brains"].as_array().unwrap().iter().find(|b| b["chosen"] == true).unwrap()["id"], "qwen3.5-4b-q8");
 }
+
+/// Run git for test fixtures with an author set, so no global config is needed.
+fn git_fixture(dir: &Path, args: &[&str]) {
+    let ok = std::process::Command::new("git")
+        .args(["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "init.defaultBranch=main"])
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "git {args:?}");
+}
+
+/// The setup wizard's checks and guards (plan §19.2.3) against local bare
+/// repos standing in for GitHub: nested folders refused, an existing
+/// workspace downloaded, a non-empty repo flagged for "new", a wrong URL.
+#[tokio::test]
+async fn setup_wizard_checks_and_guards() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let c = start(Settings::for_tests(Paths::from_repo(), app_dir.path().to_path_buf())).await;
+    let check = |plan: &str, url: &str, path: &Path| {
+        let body = json!({"plan": plan, "url": url, "path": path});
+        let c = &c;
+        async move { c.post("/api/setup/check", body).await }
+    };
+    let by_id = |r: &Value, id: &str| r["checks"].as_array().unwrap().iter().find(|x| x["id"] == id).cloned().unwrap_or(Value::Null);
+
+    // An existing workspace in a bare "remote".
+    let seed = root.path().join("seed");
+    std::fs::create_dir_all(&seed).unwrap();
+    std::fs::write(seed.join("workspace.toml"), "id = \"ws-test\"\nname = \"Test\"\nadmins = []\n").unwrap();
+    git_fixture(&seed, &["init", "-q"]);
+    git_fixture(&seed, &["add", "-A"]);
+    git_fixture(&seed, &["commit", "-q", "-m", "seed"]);
+    let full = root.path().join("full.git");
+    git_fixture(root.path(), &["clone", "-q", "--bare", seed.to_str().unwrap(), full.to_str().unwrap()]);
+    let empty = root.path().join("empty.git");
+    git_fixture(root.path(), &["init", "-q", "--bare", empty.to_str().unwrap()]);
+    let (full_url, empty_url) = (full.to_str().unwrap().to_string(), empty.to_str().unwrap().to_string());
+
+    // Inside another repo (the author's nested clone): the check stops there, and so do the actions.
+    let nested = seed.join("JELearner-private");
+    let (st, r) = check("local", "", &nested).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["ready"], false);
+    assert!(by_id(&r, "location")["msg"].as_str().unwrap().contains("另一個 Git repository"), "{r}");
+    let (st, e) = c.post("/api/setup/new", json!({"path": nested})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{e}");
+    assert!(!nested.exists(), "nothing was created");
+    let (st, _) = c.post("/api/setup/clone", json!({"url": full_url, "path": nested})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    // Used it before: the full repo downloads into the chosen folder.
+    let target = root.path().join("mine");
+    let (_, r) = check("clone", &full_url, &target).await;
+    assert_eq!(by_id(&r, "reach")["ok"], true, "{r}");
+    assert_eq!(by_id(&r, "location")["ok"], true, "{r}");
+    assert_eq!(by_id(&r, "private")["ok"], true, "not GitHub: the user is asked to check: {r}");
+    assert!(by_id(&r, "empty").is_null(), "a repo with content is what 'clone' wants: {r}");
+    let (st, r) = c.post("/api/setup/clone", json!({"url": full_url, "path": target})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert!(target.join("workspace.toml").exists());
+    // The same folder again: it is no longer free.
+    let (_, r) = check("clone", &full_url, &target).await;
+    assert_eq!(by_id(&r, "location")["ok"], false, "{r}");
+
+    // New and synced: an empty repo is right, one with content is not.
+    let fresh = root.path().join("fresh");
+    let (_, r) = check("create", &empty_url, &fresh).await;
+    assert_eq!(by_id(&r, "empty")["ok"], true, "{r}");
+    let (_, r) = check("create", &full_url, &fresh).await;
+    assert_eq!(by_id(&r, "empty")["ok"], false, "{r}");
+    // "Used it before" with an empty repo points back to "first time".
+    let (_, r) = check("clone", &empty_url, &root.path().join("x")).await;
+    assert_eq!(by_id(&r, "empty")["ok"], false, "{r}");
+
+    // A URL that does not answer.
+    let (_, r) = check("clone", &root.path().join("nope.git").display().to_string(), &root.path().join("y")).await;
+    assert_eq!(by_id(&r, "reach")["ok"], false, "{r}");
+    assert_eq!(r["ready"], false);
+    let (st, _) = c.post("/api/setup/check", json!({"plan": "nonsense"})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}

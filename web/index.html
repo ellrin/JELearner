@@ -150,24 +150,11 @@
         </section>
 
         <section class="step" data-step="workspace" hidden>
-          <div class="st-head"><h3 class="st-title">資料要放在哪裡？</h3><button class="help" data-tip="生字、文法、教材都存在這個資料夾。建議放在你自己的 GitHub private repo，就能在多台電腦同步；留空 repo 則只存在這台電腦。本機資料庫隨時可以從這裡重建。">?</button></div>
+          <!-- Setup wizard (plan §19.2.3): one question at a time, drawn by start.js. -->
+          <div class="st-head"><h3 class="st-title" id="cwTitle">在別台電腦用過 JELearner 嗎？</h3><button class="help" id="cwHelp" data-tip="生字、文法、教材都存在一個資料夾（你的工作區）。放在你自己的 GitHub private repo，就能在多台電腦同步、讓家人加入；本機資料庫隨時可以從這裡重建。">?</button></div>
           <div class="now" id="stWsNow"></div>
-          <div class="seg wide" id="stWsMode">
-            <button data-v="new">建立新的</button>
-            <button data-v="open">開啟資料夾</button>
-            <button data-v="clone">從 repo 下載</button>
-            <button data-v="demo">先看示範</button>
-          </div>
-          <div class="form" data-mode="new">
-            <label><span>位置</span><input id="stNewPath" value="~/JELearner-private"></label>
-            <label><span>private repo</span><input id="stNewRemote" placeholder="可留空"></label>
-          </div>
-          <div class="form" data-mode="open" hidden><label><span>資料夾</span><input id="stOpenPath" placeholder="~/JELearner-private"></label></div>
-          <div class="form" data-mode="clone" hidden>
-            <label><span>private repo</span><input id="stCloneUrl" placeholder="https://github.com/you/JELearner-private.git"></label>
-            <label><span>放在</span><input id="stCloneParent" placeholder="~/"></label>
-          </div>
-          <div class="note" data-mode="demo" hidden>之後可在 設定 → 工作區與同步 連接你的工作區</div>
+          <div id="cwPane"></div>
+          <ul class="checks cw-checks" id="cwChecks" hidden></ul>
           <div class="note" id="stWsOut"></div>
         </section>
 

@@ -77,6 +77,7 @@ function wizShow() {
   $("#stSkip").hidden = !["welcome", "claude", "interests"].includes(step) && !(step === "workspace");
   $("#stNext").textContent = last ? "開始學習" : step === "migrate" ? "開始升級" : "下一步";
   $("#stClose").hidden = !canLeave();
+  $("#stNext").hidden = false; // the workspace questions hide it while a tile is the answer
   ({ workspace: loadStWorkspace, user: loadStUser, langs: loadStLangs, claude: loadStClaude, interests: loadStInterests, done: loadStDone, migrate: loadStMigrate }[step] ?? (() => {}))();
   // The main button takes the focus (not the step tabs), unless a field asks for it.
   setTimeout(() => {
@@ -95,7 +96,10 @@ function stOut(id, msg, err) {
   o.textContent = msg ?? "";
 }
 
-$("#stPrev").onclick = () => { if (wiz.i > 0) { wiz.i -= 1; wizShow(); } };
+$("#stPrev").onclick = () => {
+  if (wizStep() === "workspace" && cwBack()) return; // back through the setup questions first
+  if (wiz.i > 0) { wiz.i -= 1; wizShow(); }
+};
 $("#stSkip").onclick = () => {
   if (wizStep() === "welcome" || wizStep() === "workspace") {
     // Keep the demo workspace; carry on with the user step when one is missing.
@@ -108,7 +112,7 @@ $("#stSkip").onclick = () => {
 $("#stNext").onclick = () => busy($("#stNext"), async () => {
   const step = wizStep();
   try {
-    if (step === "workspace") await stDoWorkspace();
+    if (step === "workspace") { if (!(await stDoWorkspace())) return; }
     else if (step === "user") { if (!(await stDoUser())) return; }
     else if (step === "langs") await stDoLangs();
     else if (step === "interests") await stDoInterests();
@@ -120,33 +124,214 @@ $("#stNext").onclick = () => busy($("#stNext"), async () => {
   }
 });
 
-// ── workspace ──────────────────────────────────────────
-function setStWsMode(m) {
-  wiz.wsMode = m;
-  segment($("#stWsMode"), m, setStWsMode);
-  $$("#dlgStart [data-step='workspace'] [data-mode]").forEach((n) => (n.hidden = n.dataset.mode !== m));
+// ── workspace: the setup wizard (plan §19.2.3) ─────────
+// One question at a time; the answer picks the next pane. Before creating or
+// downloading, the server checks the path (Git, location not inside another
+// repo, the repo answers, private, empty) and the wizard stops on what fails:
+// only the failing checks show, each with its fix, in the dialog itself.
+const CW_DEFAULT = "~/JELearner-private";
+const cw = { pane: "used", history: [], url: "", path: CW_DEFAULT, drawnAt: 0, done: null };
+
+const CW_PANES = {
+  used: { title: "在別台電腦用過 JELearner 嗎？", question: true },
+  sync: { title: "要同步到 GitHub 嗎？", question: true },
+  clone: { title: "下載你的工作區", plan: "clone", url: true, go: "檢查並下載", did: "已下載" },
+  create: { title: "建立新的工作區", plan: "create", url: true, go: "檢查並建立", did: "已建立" },
+  local: { title: "只存在這台電腦", plan: "local", go: "檢查並建立", did: "已建立" },
+  open: { title: "開啟現有的工作區", go: "開啟", did: "已開啟" },
+  done: { title: "工作區設定好了", go: "下一步" },
+};
+
+/** `/Users/me/x` → `~/x` (the full path stays in the tooltip). */
+const tildePath = (p) => String(p ?? "").replace(/^\/(Users|home)\/[^/]+/, "~");
+
+function cwTo(pane) {
+  cw.history.push(cw.pane);
+  cw.pane = pane;
+  drawCw();
 }
-setStWsMode("new");
+function cwBack() {
+  if (!cw.history.length) return false;
+  cw.pane = cw.history.pop();
+  drawCw();
+  return true;
+}
+
+function cwTile(ic, title, sub, onclick, recommend) {
+  const b = el("button", `pick-tile${recommend ? " rec" : ""}`);
+  const i = el("span", "pi"); i.append(icon(ic));
+  b.append(i, el("b", null, title), el("span", null, sub));
+  if (recommend) b.append(el("span", "rec-pill", "建議"));
+  // A double click must not also answer the next question, drawn in the same place.
+  b.onclick = (e) => { if (e.detail > 1 || Date.now() - cw.drawnAt < 250) return; onclick(); };
+  return b;
+}
+
+function cwField(label, id, value, placeholder) {
+  const l = el("label");
+  const input = el("input"); input.id = id; input.value = value; input.placeholder = placeholder ?? "";
+  input.oninput = () => { $("#cwChecks").hidden = true; stOut("#stWsOut", ""); }; // old results no longer apply
+  input.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); $("#stNext").click(); } };
+  l.append(el("span", null, label), input);
+  return l;
+}
+
+function drawCw() {
+  const p = CW_PANES[cw.pane];
+  cw.drawnAt = Date.now();
+  $("#cwTitle").textContent = p.title;
+  const now = state.status?.workspace && !state.status.demo ? state.status.workspace : "";
+  const nowEl = $("#stWsNow");
+  nowEl.textContent = cw.pane === "used" && now ? `目前：${tildePath(now)}` : "";
+  nowEl.title = now;
+  const box = $("#cwPane");
+  box.innerHTML = "";
+  $("#cwChecks").hidden = true;
+  stOut("#stWsOut", "");
+  if (cw.pane === "used") {
+    const tiles = el("div", "create-pick");
+    tiles.append(
+      cwTile("cloud", "用過", "從 GitHub 下載我的工作區", () => cwTo("clone")),
+      cwTile("plus", "第一次用", "建立新的工作區", () => cwTo("sync")),
+    );
+    const more = el("div", "cw-more");
+    const open = el("button", "linkish", "已經有工作區資料夾？開啟它");
+    open.onclick = () => cwTo("open");
+    more.append(open);
+    box.append(tiles, more);
+  } else if (cw.pane === "sync") {
+    // The recommended answer sits where the pointer already is (under 第一次用).
+    const tiles = el("div", "create-pick");
+    tiles.append(
+      cwTile("folder", "先不要", "只存在這台電腦，之後可以再開", () => cwTo("local")),
+      cwTile("refresh", "要", "換電腦、讓家人加入都需要", () => cwTo("create"), true),
+    );
+    box.append(tiles);
+  } else if (cw.pane === "done") {
+    const d = el("div", "cw-done");
+    const ck = el("span", "big-ok"); ck.append(icon("check"));
+    const path = el("div", "path", tildePath(cw.done?.path)); path.title = cw.done?.path ?? "";
+    const again = el("button", "linkish", "換一個工作區");
+    again.onclick = () => { cw.done = null; cw.history = []; cw.pane = "used"; drawCw(); };
+    d.append(ck, el("b", null, cw.done?.label ?? "已設定"), path, again);
+    box.append(d);
+  } else {
+    const form = el("div", "form");
+    if (cw.pane === "create") {
+      const row = el("div", "cw-gh");
+      row.append(
+        ghostButton("external", "在 GitHub 建立 private repo", () => api("/api/open/github-new-repo", {}).catch((e) => flash(e.message, true))),
+        el("span", "note", "選 Private，不要勾 README，建好後複製網址"),
+      );
+      box.append(row);
+    }
+    if (p.url) form.append(cwField("repo 網址", "cwUrl", cw.url, "https://github.com/你/JELearner-private.git"));
+    form.append(cwField(cw.pane === "open" ? "資料夾" : "放在", "cwPath", cw.pane === "open" ? "" : cw.path, CW_DEFAULT));
+    box.append(form);
+  }
+  // 下一步 only acts on the panes that do something; questions are answered by the tiles.
+  $("#stNext").hidden = !!p.question;
+  $("#stNext").textContent = p.go ?? "下一步";
+  $("#stPrev").hidden = !cw.history.length && wiz.i === 0;
+  // Keyboard: the recommended tile, else the first one, else the first field.
+  const focus = $("#cwPane .pick-tile.rec") ?? $("#cwPane .pick-tile") ?? $("#cwPane input");
+  // After wizShow's own focus handling (which would aim at the hidden 下一步).
+  if (focus) setTimeout(() => focus.focus(), 30);
+}
 
 function loadStWorkspace() {
+  // Back from 使用者 after setting one up: show what was set, not the first question.
   const s = state.status;
-  $("#stWsNow").textContent = s?.workspace && !s.demo ? `目前：${s.workspace}` : "";
-  stOut("#stWsOut", "");
+  if (cw.done && s?.workspace === cw.done.path) { cw.pane = "done"; cw.history = []; }
+  else { cw.done = null; cw.pane = "used"; cw.history = []; }
+  drawCw();
 }
 
-async function stDoWorkspace() {
-  let r;
-  // Nothing typed: stay on this step (the server refuses it as well).
-  const need = { open: "#stOpenPath", new: "#stNewPath", clone: "#stCloneUrl" }[wiz.wsMode];
-  if (need && !$(need).value.trim()) { $(need).focus(); throw new Error("請輸入位置"); }
-  if (wiz.wsMode === "open") r = await api("/api/setup/workspace", { path: $("#stOpenPath").value, init: true });
-  else if (wiz.wsMode === "new") r = await api("/api/setup/new", { path: $("#stNewPath").value, remote: $("#stNewRemote").value });
-  else if (wiz.wsMode === "clone") r = await api("/api/setup/clone", { url: $("#stCloneUrl").value, parent: $("#stCloneParent").value || "~/" });
-  if (r) {
-    stOut("#stWsOut", `已開啟 ${r.workspace}${r.git_error ? `；Git：${r.git_error}` : ""}`, !!r.git_error);
-    await refreshStatus();
-    if (state.status?.layout === "v1") { wiz.flow = FLOWS.migrate; wiz.i = -1; wiz.mode = "migrate"; }
+/** Only what needs attention, each with its fix (and a one-tap fix where there is one). */
+function drawChecks(checks) {
+  const ul = $("#cwChecks");
+  ul.innerHTML = "";
+  ul.hidden = false;
+  const passed = checks.filter((c) => c.ok);
+  for (const c of checks.filter((c) => !c.ok)) {
+    const li = el("li");
+    li.append(el("span", "bad", "✗"));
+    const body = el("div");
+    body.append(el("span", null, c.msg));
+    if (c.fix) body.append(el("div", "fix", c.fix));
+    // The repo is not what this path expects: switch to the other path, keeping the URL.
+    if (c.id === "empty" && (cw.pane === "create" || cw.pane === "clone")) {
+      const to = cw.pane === "create" ? "clone" : "create";
+      const b = el("button", "ghost small cw-switch", to === "clone" ? "改成下載這個 repo" : "改成建立新的工作區");
+      b.onclick = () => { cw.url = $("#cwUrl")?.value.trim() ?? cw.url; cw.history = to === "clone" ? ["used"] : ["used", "sync"]; cw.pane = to; drawCw(); };
+      body.append(b);
+    }
+    if (c.id === "identity") {
+      const f = el("div", "cw-id");
+      const n = el("input"); n.placeholder = "名字"; n.autocomplete = "name"; n.setAttribute("aria-label", "Git 作者名字"); n.value = state.status?.user?.name ?? "";
+      const m = el("input"); m.placeholder = "email"; m.type = "email"; m.autocomplete = "email"; m.setAttribute("aria-label", "Git 作者 email");
+      const save = el("button", "primary small", "儲存並繼續");
+      save.onclick = () => busy(save, async () => {
+        try { await api("/api/setup/git-identity", { name: n.value, email: m.value }); if (await stDoWorkspace()) wizNext(); }
+        catch (e) { stOut("#stWsOut", e.message, true); }
+      });
+      [n, m].forEach((i) => (i.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); save.click(); } }));
+      f.append(n, m, save);
+      body.append(f);
+    }
+    li.append(body);
+    ul.append(li);
   }
+  if (passed.length) {
+    const li = el("li", "passed");
+    li.title = passed.map((c) => c.msg).join("\n");
+    li.append(el("span", "ok", "✓"), el("span", null, passed.length === checks.length ? "都沒問題" : `其他 ${passed.length} 項沒問題`));
+    ul.append(li);
+  }
+}
+
+/**
+ * The pane's action: check, then create / download / open. Returns true when
+ * done (the wizard moves on); false to stay, with what went wrong shown in
+ * the dialog (never in a toast behind it).
+ */
+async function stDoWorkspace() {
+  const p = CW_PANES[cw.pane];
+  if (cw.pane === "done") return true;
+  const urlEl = $("#cwUrl"), pathEl = $("#cwPath");
+  const url = urlEl?.value.trim() ?? "";
+  const typed = pathEl?.value.trim() ?? "";
+  if (p.url && !url) { urlEl.focus(); stOut("#stWsOut", "請貼上 repo 網址", true); return false; }
+  if (cw.pane === "open" && !typed) { pathEl.focus(); stOut("#stWsOut", "請輸入工作區資料夾的位置", true); return false; }
+  const path = typed || CW_DEFAULT;
+  cw.url = url; if (cw.pane !== "open") cw.path = path;
+  let r;
+  try {
+    if (cw.pane === "open") {
+      r = await api("/api/setup/workspace", { path, init: true });
+    } else {
+      stOut("#stWsOut", "檢查中…");
+      const c = await api("/api/setup/check", { plan: p.plan, url, path });
+      stOut("#stWsOut", "");
+      drawChecks(c.checks);
+      if (!c.ready) return false;
+      stOut("#stWsOut", p.plan === "clone" ? "下載中…" : "建立中…");
+      r = p.plan === "clone"
+        ? await api("/api/setup/clone", { url, path })
+        : await api("/api/setup/new", { path, remote: p.plan === "create" ? url : "" });
+    }
+  } catch (e) {
+    stOut("#stWsOut", "");
+    drawChecks([{ id: "action", ok: false, msg: e.message }]);
+    return false;
+  }
+  await refreshStatus();
+  if (state.status?.layout === "v1") { wiz.flow = FLOWS.migrate; wiz.i = -1; wiz.mode = "migrate"; return true; }
+  // A moment of "done" before the next step (principle 3: positive feedback).
+  cw.done = { label: r.git_error ? `${p.did}（Git：${r.git_error}）` : p.did, path: r.workspace };
+  cw.history = []; cw.pane = "done"; drawCw();
+  await new Promise((ok) => setTimeout(ok, 900));
+  return true;
 }
 
 // ── migrate ────────────────────────────────────────────

@@ -16,6 +16,7 @@ pub mod git;
 pub mod notebook;
 pub mod secrets;
 pub mod settings;
+pub mod setup;
 pub mod speech;
 pub mod study;
 
