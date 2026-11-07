@@ -95,7 +95,15 @@ pub struct Settings {
     pub claude_bin: Option<PathBuf>,
     /// The user this computer last entered, per workspace id.
     pub active_users: std::collections::BTreeMap<String, String>,
+    /// `url` is used only when `llama_external`; `model` is a catalog id
+    /// (or, for an external server, whatever name it expects).
     pub llama: LlamaServerConfig,
+    /// `[llama] url` / `JELEARNER_LLAMA_URL` was set: talk to that server.
+    /// Otherwise the app starts llama-server itself from `llama_home`.
+    pub llama_external: bool,
+    /// The shared model folder (`[llama] home`, else `LOCAL_LLM_HOME`;
+    /// docs/decisions.md §15). Tests leave it unset.
+    pub llama_home: Option<PathBuf>,
     /// The `jl-speech` helper (`JELEARNER_SPEECH_BIN` or `[speech] bin`);
     /// None = look next to the app and in the checkout's build folder.
     /// Tests point it at a path that does not exist, or at a fake.
@@ -145,6 +153,7 @@ struct ClaudeSection {
 struct LlamaSection {
     url: Option<String>,
     model: Option<String>,
+    home: Option<PathBuf>,
 }
 #[derive(Deserialize, Default)]
 struct GoogleSection {
@@ -215,10 +224,12 @@ impl Settings {
             use_keychain: env("JELEARNER_NO_KEYCHAIN").is_none(),
             claude_bin: env("JELEARNER_CLAUDE_BIN").map(PathBuf::from).or(cfg.claude.bin),
             active_users: cfg.active_users,
+            llama_external: env("JELEARNER_LLAMA_URL").or(cfg.llama.url.clone()).is_some(),
             llama: LlamaServerConfig {
                 url: env("JELEARNER_LLAMA_URL").or(cfg.llama.url).unwrap_or_else(|| "http://127.0.0.1:8080/v1".into()),
                 model: env("JELEARNER_LLAMA_MODEL").or(cfg.llama.model).unwrap_or_else(|| catalog.defaults.brain.clone()),
             },
+            llama_home: jl_core::local_llm::home(cfg.llama.home.as_deref()),
             speech_bin: env("JELEARNER_SPEECH_BIN").map(PathBuf::from).or(cfg.speech.bin),
             google: GoogleSettings {
                 mode: google_mode,
@@ -258,6 +269,8 @@ impl Settings {
             claude_bin: Some(PathBuf::from("/nonexistent/claude")),
             active_users: cfg.active_users,
             llama: LlamaServerConfig { url: "http://127.0.0.1:9/v1".into(), model: catalog.defaults.brain.clone() },
+            llama_external: true,
+            llama_home: None,
             // Never Apple's engine in tests; a test that wants one sets a fake.
             speech_bin: Some(PathBuf::from("/nonexistent/jl-speech")),
             google: GoogleSettings {

@@ -1214,3 +1214,45 @@ async fn speech_recognition_through_the_helper() {
     assert_eq!(send("en", vec![]).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(send("en", vec![0; jl_server::speech::AUDIO_MAX_BYTES + 1]).await.0, StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+/// Local models from the shared folder (decisions §15): which brains are
+/// downloaded, choosing one, and the messages when something is missing.
+/// Starting a real llama-server is covered by jl-core's ignored test.
+#[tokio::test]
+async fn local_models_from_the_shared_folder() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let mut st = Settings::for_tests(Paths::from_repo(), app_dir.path().to_path_buf());
+    st.llama_external = false;
+    let c = start(st.clone()).await;
+    // No shared folder configured.
+    let (code, e) = c.post("/api/settings/llama", json!({"model": "qwen3.5-4b-q8"})).await;
+    assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE, "{e}");
+    assert!(e["error"].as_str().unwrap().contains("LOCAL_LLM_HOME"), "{e}");
+
+    // A folder with Qwen 4B downloaded but no llama.cpp.
+    let repo = home.path().join("gguf/unsloth/Qwen3.5-4B-GGUF");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("Qwen3.5-4B-Q8_0.gguf"), b"x").unwrap();
+    st.llama_home = Some(home.path().to_path_buf());
+    let c = start(st).await;
+    let (_, m) = c.get("/api/models").await;
+    let brain = |id: &str| m["brains"].as_array().unwrap().iter().find(|b| b["id"] == id).cloned().unwrap();
+    assert_eq!(brain("qwen3.5-4b-q8")["installed"], true);
+    assert_eq!(brain("qwen3.8-27b-q4")["installed"], false);
+    assert_eq!(m["runtime"], false);
+    assert_eq!(brain(m["catalog"]["defaults"]["brain"].as_str().unwrap())["chosen"], true);
+
+    let (code, e) = c.post("/api/settings/llama", json!({"model": "no-such-model"})).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "{e}");
+    let (code, e) = c.post("/api/settings/llama", json!({"model": "apple-speech"})).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "only brains run in llama-server: {e}");
+    let (code, e) = c.post("/api/settings/llama", json!({"model": "qwen3.5-4b-q8"})).await;
+    assert_eq!(code, StatusCode::SERVICE_UNAVAILABLE, "{e}");
+    assert!(e["error"].as_str().unwrap().contains("llama.cpp"), "{e}");
+    // The choice is remembered for this computer even though it could not start yet.
+    let cfg = std::fs::read_to_string(app_dir.path().join("config.toml")).unwrap();
+    assert!(cfg.contains("model = \"qwen3.5-4b-q8\"") && cfg.contains("kind = \"llama-server\""), "{cfg}");
+    let (_, m) = c.get("/api/models").await;
+    assert_eq!(m["brains"].as_array().unwrap().iter().find(|b| b["chosen"] == true).unwrap()["id"], "qwen3.5-4b-q8");
+}

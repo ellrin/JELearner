@@ -12,10 +12,11 @@
 //! - [`report`] — weekly report, lesson confirmation, review scheduling
 //! - [`level`] — fine-grained levels and difficulty scores
 //! - [`catalog`] — local model catalog (for the Mac)
+//! - [`local_llm`] — models in the shared `LOCAL_LLM_HOME` folder; starts llama-server
 //! - [`rules`], [`points`], [`progress`] — points, levels, difficulty (stage A)
 //! - [`topics`], [`conversation`] — topics and the typed AI conversation
 //! - [`notebook`] — the review notebook: one page per lesson / conversation
-//! - [`speech`] — speech engine trait (browser speech now; native / Whisper / Kokoro later)
+//! - [`speech`] — speech engine trait; on-device recognition on macOS through `jl-speech`
 
 pub mod catalog;
 pub mod claude_code;
@@ -28,6 +29,7 @@ pub mod import;
 pub mod lang;
 pub mod lesson;
 pub mod level;
+pub mod local_llm;
 pub mod news;
 pub mod notebook;
 pub mod points;

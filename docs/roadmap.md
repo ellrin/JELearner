@@ -29,7 +29,7 @@
 | 2 | **A** ✓ | 積分（主動單元＋被動時間）、等級與綜合評估、難度調整、打字版 AI 對話、通識主題、今日任務清單與進度頁、拖放匯入、個人卡與大頭貼（完成；實作細節見 plan.md 第 20 節） |
 | 3 | **B**（進行中） | 已完成：課程接上伺服器與介面（主題／固定課程、大綱、開課、單元積分、延伸）、每日課程與今日步驟、復習筆記本、假名標音、robots.txt 擋下的新聞標示、階內里程碑星星與升階週數預估。待做：模型評分的輸出題、關鍵字回饋、跳級機制與大級檢核、弱項複習 |
 | 4 | **C** | 課程配方（興趣、固定）、新聞關鍵字搜尋、照片判讀 |
-| 5 | **D**（進行中） | 已完成第一步：瀏覽器朗讀、語音設定、對話麥克風、課文跟讀比對（不計分）、`SpeechProvider` trait。待做：15 秒錄音對話、聽寫、聽力題、跟讀計分 |
+| 5 | **D**（進行中） | 已完成第一步：瀏覽器朗讀、語音設定、對話麥克風、課文跟讀比對（不計分）、`SpeechProvider` trait。第二步：Mac 本機辨識（`jl-speech`）、15 秒錄音、Premium 聲音、本機模型共用資料夾。待做：語音回合記為「說」、聽寫、聽力題、跟讀計分 |
 | 6 | **0-2＋E** | 家庭成員（deploy key）、學習群組（任何人可當管理員）、好友排行 |
 
 以下各階段在第二版之後或與 Mac 到貨時程同步進行；語音相關項目已併入第二版 D 階段（瀏覽器）與 Mac 到貨後（本機模型）。
@@ -49,18 +49,16 @@
 - [ ] 每週自動寄週報（App 開著時）、複習提醒
 - [ ] 每位使用者用自己的 Google 帳號；不保存在任何 repo
 
-## 第四階段：Mac 到貨
+## 第四階段：Mac 到貨（2026-11 到貨）
 
-- [ ] 模型下載精靈（沿用 PaperComposer 的 `models.rs`：Hugging Face 檔名比對、下載 llama.cpp Metal 版、進度、確認後才下載）
-- [ ] 啟動／停止 llama-server，設為預設引擎；Claude 保留為備援
-- [ ] 實測記憶體：Q4_K_XL 與 Q8_0、KV cache、與 Whisper／Kokoro 同時執行
+- [x] ~~模型下載精靈~~ → 改用所有專案共用的模型資料夾（`LOCAL_LLM_HOME`，decisions.md 第 15 節）；下載由 PaperComposer 或 `hf download` 負責
+- [x] 啟動／停止 llama-server（從共用資料夾、選了就啟動、關閉時結束）；Claude 保留為備援
+- [x] 實測速度（M6 32 GB）：Qwen3.5 4B 31、Gemma 4 12B Q8 12、Qwen3.8 27B 8 token/秒；Metal 可用 26.8 GB
 - [ ] 本機嵌入模型
 
 ## 第五階段：語音
 
-- [ ] Whisper large-v3-turbo（whisper.cpp，Metal）STT
-- [ ] Kokoro-82M TTS（英、日）
-- [ ] 以本機 Whisper／Kokoro 取代第二版 D 階段的瀏覽器語音（對話流程見 plan.md 第 10 節）
+- [x] ~~Whisper／Kokoro~~ → macOS 內建（decisions.md 第 14 節）：Apple SpeechTranscriber 辨識、系統 Premium 聲音朗讀；已取代瀏覽器的雲端辨識（D 階段第二步）
 - [ ] Gemma 4 音訊輸入（mmproj）可行性評估
 
 ## 第六階段：Tauri 打包

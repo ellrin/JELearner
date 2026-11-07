@@ -105,5 +105,6 @@ tokio、axum 0.8、reqwest（rustls）、sqlx 0.8（SQLite，執行期查詢，�
 ## 15. 共用模型資料夾與本機引擎（2026-11）
 
 - **決定**：本機模型與 llama.cpp 放在所有專案共用的資料夾，位置由環境變數 `LOCAL_LLM_HOME` 決定（或 `config.toml` 的 `[llama] home`，從 Finder 開啟的 App 讀不到 shell 變數）；模型在 `<home>/gguf/<owner>/<repo>/<檔名>`，與 `hf download --local-dir` 相同，和 PaperComposer 共用同一份檔案。`[engine] kind = "llama-server"` 時，伺服器自己用 `<home>/runtimes/llama.cpp` 的 `llama-server` 啟動 `[llama] model` 指定的模型（`--reasoning-budget 0`：Gemma 4 與 Qwen 不先思考，教材與對話都要固定 JSON）；`[llama] url` 有填時改連那台已經在跑的伺服器。
-- **目錄**：`models/catalog.json` 的大腦加上 Qwen（3.5 4B、3.5 9B、3.8 27B）；abliterated（移除拒答）版本標 `uncensored`，不當預設。
+- **目錄**：`models/catalog.json` 的大腦加上 Qwen（3.5 4B、3.5 9B、3.8 27B）與 Gemma 4 E4B；耳朵、嘴巴改為 macOS 內建（0 GB）。JELearner 是家人共用的學習工具，**不放 abliterated（移除拒答）版本**（只在 PaperComposer 提供）。設定 → 05 本機模型列出共用資料夾裡已下載的大腦，「使用這個」會寫入 `[llama] model`、把引擎切到本機並立即啟動；關閉伺服器（Ctrl+C、SIGTERM）時一併結束 llama-server。
+- **實測**（M6 32 GB）：從共用資料夾啟動 Qwen3.5 4B 到回答 JSON 約 2.7 秒；在設定頁切換 1.1 秒、測試連線 0.26 秒。
 - **原因**：模型動輒十幾 GB，每個專案各存一份浪費空間；作者在 PaperComposer 的實測（M6 32 GB）：Qwen3.5 4B 每秒 30.8 token、Gemma 4 12B Q8 11.5、Qwen3.8 27B 8.2，關掉思考後一次回覆從數分鐘降到 10–30 秒。

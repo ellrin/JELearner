@@ -1381,25 +1381,47 @@ $("#setTest").onclick = () => busy($("#setTest"), async () => {
 
 async function loadModelsStep() {
   const m = await api("/api/models");
-  $("#setSys").innerHTML = "";
-  const p = m.plan_mac32;
-  $("#setSys").append(
-    document.createTextNode(`這台電腦：${m.os}/${m.arch}，記憶體 ${m.memory_gb} GB。`), el("br"),
-    document.createTextNode(`Mac 32 GB 預估：大腦＋耳朵＋嘴巴共 ${p.total_gb} GB（預算 ${p.budget_gb} GB，GPU 可用約 ${p.gpu_usable_gb} GB）→ ${p.fits ? "放得下" : "放不下"}`),
-  );
+  const sys = $("#setSys");
+  sys.innerHTML = "";
+  sys.append(document.createTextNode(`這台電腦：記憶體 ${m.memory_gb} GB。`), el("br"));
+  if (m.external) sys.append(document.createTextNode(`本機模型連到 ${m.external}（config.toml 的 [llama] url）。`));
+  else if (!m.home) sys.append(document.createTextNode("還沒有設定模型的共用資料夾：設定環境變數 LOCAL_LLM_HOME，或在 config.toml 的 [llama] 寫 home。"));
+  else sys.append(document.createTextNode(m.runtime ? "模型與 llama.cpp 都從共用資料夾讀取。" : "共用資料夾裡還沒有 llama.cpp：在 PaperComposer 的「AI 與同步」裝一次即可。"));
   const ul = $("#setModels");
   ul.innerHTML = "";
   const role = { brain: "大腦", ears: "耳朵", mouth: "嘴巴" };
-  const defaults = Object.values(m.catalog.defaults);
+  const brains = Object.fromEntries((m.brains ?? []).map((b) => [b.id, b]));
+  const usingLocal = m.engine === "llama-server";
   for (const x of m.catalog.models) {
+    const b = brains[x.id];
     const li = el("li", "model");
     const mh = el("div", "mh");
     mh.append(el("b", null, `${x.name} ${x.variant}`), el("span", "sum", x.summary));
     const tags = el("span", "tags");
     tags.append(el("span", "tag", role[x.role] ?? x.role));
-    if (defaults.includes(x.id)) tags.append(el("span", "tag acc", "預設"));
+    if (b?.running) tags.append(el("span", "tag ok", "使用中"));
+    else if (b?.chosen && usingLocal) tags.append(el("span", "tag acc", "已選擇"));
+    if (b && !b.installed && !m.external) tags.append(el("span", "tag", "未下載"));
     mh.append(tags);
-    li.append(mh, el("div", "meta", `${x.repo}　約 ${x.approx_gb} GB　${x.runtime}　${x.license}`));
+    const meta = x.role === "brain" ? `約 ${x.approx_gb} GB　至少 ${x.min_memory_gb} GB 記憶體　${x.license}` : `${x.runtime === "macos" ? "macOS 內建，不佔模型記憶體" : x.runtime}`;
+    li.append(mh, el("div", "meta", meta));
+    // A downloaded brain that is not the one running: one click to use it.
+    if (b && (b.installed || m.external) && !(b.running || (b.chosen && usingLocal && m.external))) {
+      const use = el("button", "ghost small", "使用這個");
+      use.onclick = async () => {
+        use.disabled = true;
+        use.textContent = "啟動中…";
+        try {
+          const r = await api("/api/settings/llama", { model: x.id });
+          flash(`已改用 ${x.name}（${Math.round(r.ms / 100) / 10} 秒）`);
+          await refreshStatus();
+        } catch (e) { flash(e.message, true); }
+        loadModelsStep();
+      };
+      const row = el("div", "actions-row");
+      row.append(use);
+      li.append(row);
+    }
     ul.append(li);
   }
 }

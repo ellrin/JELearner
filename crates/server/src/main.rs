@@ -6,5 +6,17 @@ async fn main() {
     let settings = jl_server::Settings::from_env(jl_server::Paths::from_repo());
     let (addr, serve) = jl_server::bind(settings, port).await.expect("bind 127.0.0.1");
     eprintln!("JELearner on http://{addr}");
-    serve.await.expect("server");
+    // A local model this server started must not outlive it.
+    #[cfg(unix)]
+    let term = async {
+        let mut t = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+        t.recv().await;
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        r = serve => { jl_server::kill_local_model(); r.expect("server"); }
+        _ = tokio::signal::ctrl_c() => jl_server::kill_local_model(),
+        _ = term => jl_server::kill_local_model(),
+    }
 }

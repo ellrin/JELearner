@@ -1,8 +1,9 @@
 //! Local model catalog (`models/catalog.json`) and the memory budget check.
 //!
-//! Nothing here downloads or runs a model yet: that arrives with the Mac
-//! (docs/roadmap.md). The plan is computed now so the settings window can
-//! show what will fit. **Not tested on real Apple hardware.**
+//! Brains run from the shared model folder ([`crate::local_llm`]); ears and
+//! mouth are macOS built-in and take no model memory (docs/decisions.md
+//! §14–15). The GPU share below is the old estimate; an M6 32 GB reports
+//! 26.8 GB (`recommendedMaxWorkingSetSize`), so the check is conservative.
 
 use serde::{Deserialize, Serialize};
 
@@ -125,9 +126,11 @@ mod tests {
         let p = plan(&c, &[&c.defaults.brain, &c.defaults.ears, &c.defaults.mouth], 32.0);
         assert!(p.fits, "{p:?}");
         assert!((p.gpu_usable_gb - 21.3).abs() < 0.1);
-        // Q8 brain + voice still within 20 GB on 32 GB.
-        assert!(plan(&c, &["gemma-4-12b-q8", "whisper-large-v3-turbo", "kokoro-82m"], 32.0).fits);
+        // Q8 brain + built-in voice within 20 GB on 32 GB; Qwen is offered.
+        assert!(plan(&c, &["gemma-4-12b-q8", "apple-speech", "macos-voices"], 32.0).fits);
         assert!(!plan(&c, &["gemma-4-12b-q8"], 16.0).fits);
+        assert!(c.models.iter().any(|m| m.role == "brain" && m.name.starts_with("Qwen")));
+        assert!(c.models.iter().filter(|m| m.role == "brain").all(|m| m.runtime == "llama-server" && !m.repo.is_empty()));
         assert!(c.cloud.models.iter().any(|m| m.id == c.cloud.default));
     }
 }

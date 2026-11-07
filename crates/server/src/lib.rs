@@ -68,6 +68,49 @@ pub struct AppState {
     /// Claude Code CLI status (installed / signed in), refreshed at most once
     /// a minute.
     pub cc: claude_code::Cache,
+    /// The llama-server this app started from the shared model folder; the
+    /// lock also keeps two starts from loading two large models at once.
+    pub local_llm: tokio::sync::Mutex<Option<jl_core::local_llm::Running>>,
+}
+
+/// Process id of the llama-server this process started, so `main` can stop
+/// it on Ctrl+C / SIGTERM (a model left running holds many GB of memory).
+static LOCAL_PID: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
+
+/// Stop the llama-server this process started, if any. Synchronous, for exit paths.
+pub fn kill_local_model() {
+    if let Some(pid) = LOCAL_PID.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+    }
+}
+
+/// The base URL of the local model: the configured server, or one this app
+/// starts from the shared folder for the chosen catalog model (once; later
+/// calls reuse it, a different model replaces it).
+pub async fn local_llama(s: &Shared) -> Result<jl_core::provider::LlamaServerConfig, ApiError> {
+    let (external, home, cfg, model) = {
+        let st = s.settings.read().await;
+        (st.llama_external, st.llama_home.clone(), st.llama.clone(), st.catalog.get(&st.llama.model).cloned())
+    };
+    if external {
+        return Ok(cfg);
+    }
+    let home = home.ok_or_else(|| unavailable("沒有設定本機模型的共用資料夾：設定環境變數 LOCAL_LLM_HOME，或在 config.toml 的 [llama] 寫 home"))?;
+    let m = model.filter(|m| m.role == "brain").ok_or_else(|| unavailable(format!("模型目錄裡沒有「{}」", cfg.model)))?;
+    let mut run = s.local_llm.lock().await;
+    if let Some(r) = run.as_mut() {
+        if r.model_id == m.id && r.alive() {
+            return Ok(jl_core::provider::LlamaServerConfig { url: r.url.clone(), model: m.id.clone() });
+        }
+    }
+    if let Some(mut old) = run.take() {
+        let _ = old.child.kill().await;
+    }
+    let started = jl_core::local_llm::start(&home, &m, Duration::from_secs(240)).await.map_err(unavailable)?;
+    *LOCAL_PID.lock().unwrap_or_else(|e| e.into_inner()) = started.pid();
+    let url = started.url.clone();
+    *run = Some(started);
+    Ok(jl_core::provider::LlamaServerConfig { url, model: m.id })
 }
 
 pub type Shared = Arc<AppState>;
@@ -257,11 +300,14 @@ pub async fn provider(s: &Shared) -> Result<Arc<dyn LlmProvider>, ApiError> {
 
 /// A provider for one specific engine, as the chosen user.
 pub async fn provider_for(s: &Shared, which: Resolved) -> Result<Arc<dyn LlmProvider>, ApiError> {
+    if which == Resolved::LlamaServer {
+        return Ok(Arc::new(LlamaServerProvider::new(local_llama(s).await?)));
+    }
     let (_, cli) = claude_identity(s).await;
     let key = api_key(s).await;
     let st = s.settings.read().await;
     Ok(match which {
-        Resolved::LlamaServer => Arc::new(LlamaServerProvider::new(st.llama.clone())),
+        Resolved::LlamaServer => unreachable!("handled above"),
         Resolved::Subscription => Arc::new(ClaudeCodeProvider::new(cli, st.claude.model.clone(), st.claude.effort.clone())),
         Resolved::Api => {
             let (key, _) = key.ok_or_else(|| unavailable(NO_CLAUDE))?;
@@ -321,6 +367,7 @@ pub async fn build_state(settings: Settings, opts: Options) -> Shared {
         mock_calendar,
         provider_override: opts.provider,
         cc: Default::default(),
+        local_llm: Default::default(),
     })
 }
 

@@ -345,7 +345,7 @@
               <option value="auto">自動（訂閱優先）</option>
               <option value="subscription">Claude 訂閱（Claude Code）</option>
               <option value="api">Claude API key</option>
-              <option value="llama-server">本機模型（Mac 到貨後）</option>
+              <option value="llama-server">本機模型（Gemma／Qwen，在「本機模型」選）</option>
             </select></label>
             <div class="now" id="setActive"></div>
           </div>
@@ -392,7 +392,7 @@
         <section class="step" data-step="4" hidden>
           <div class="now" id="setSys"></div>
           <ul class="models" id="setModels"></ul>
-          <div class="note">Mac 到貨後啟用：下載精靈、llama-server、Whisper、Kokoro。這裡的記憶體估算尚未實機測試。</div>
+          <div class="note">模型放在所有專案共用的資料夾（環境變數 LOCAL_LLM_HOME），和 PaperComposer 用同一份；在 PaperComposer 下載，或用 hf download 放進 gguf/。選了就會在這台電腦上執行，不必先開別的程式。</div>
         </section>
 
         <section class="step" data-step="5" hidden>

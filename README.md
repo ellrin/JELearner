@@ -3,7 +3,7 @@
 本機運作的英文／日文學習秘書：自動抓英日新聞、整理成單字與文法教材、排複習、記錯題、寄週報、排行事曆。之後加上即時語音對話與數位人像，並包成 Mac app。
 
 > 開發中（第二版 B 階段：課程、每日課程、復習筆記本）。已完成：私人工作區、SQLite（生字／文法／複習進度／錯題本）、英日新聞爬蟲（遵守 robots.txt）、新聞 → Markdown 教材（模板可替換）、Claude 兩種連線方式（訂閱／API key）、Gmail／Calendar 介面與模擬實作、本機網頁、離線端到端測試。
-> 尚未完成：向量庫與 RAG、Google OAuth、本機模型（等 Mac）、語音對話（目前只有瀏覽器內建的朗讀與跟讀）、Tauri 打包、數位人像。見 [`docs/roadmap.md`](docs/roadmap.md)。
+> 尚未完成：向量庫與 RAG、Google OAuth、語音對話（D 階段第二步已完成本機辨識與 15 秒錄音；語音回合計分、聽寫、聽力題待做）、Tauri 打包、數位人像。見 [`docs/roadmap.md`](docs/roadmap.md)。
 > 第二版進行中：**0-1 起始流程與多使用者、A 階段（積分、等級、難度調整、打字版 AI 對話、今日任務與進度頁）已完成**。完整規劃（多使用者、積分與等級、AI 對話、每日課程、課程配方、語音、學習群組）：[`docs/plan.md`](docs/plan.md)。
 
 ## 執行
@@ -88,9 +88,36 @@ JELearner 是非營利的個人專案，不代付、不轉售任何 Claude 用�
 
 目前是**模擬模式**：週報、課程確認信、複習時段都放在「信件與行事曆」頁的模擬寄件匣，內容與真正寄出的一樣。程式已實作 Gmail `users.messages.send` 與 Calendar `events.insert`／`events.list` 的 REST 介面（以模擬伺服器測試），OAuth 登入在下一階段加入。
 
-## 本機模型（Mac 到貨後）
+## 本機模型
 
-[`models/catalog.json`](models/catalog.json) 列出預定的本機模型：大腦 Gemma 4 12B（llama.cpp `llama-server`，Q4_K_XL 或 Q8_0）、耳朵 Whisper large-v3-turbo、嘴巴 Kokoro-82M，總預算 20 GB。「設定 → 本機模型」會顯示估算；llama-server provider 已寫好並以模擬伺服器測試，**尚未在實機上測試**。
+模型放在**所有專案共用的資料夾**，位置由環境變數 `LOCAL_LLM_HOME` 決定（從 Finder 開啟時讀不到 shell 變數，可改在 `config.toml` 寫 `[llama] home = "/path"`）。結構和 `hf download --local-dir` 相同，與 PaperComposer 共用同一份檔案：
+
+```
+<LOCAL_LLM_HOME>/gguf/<owner>/<repo>/<檔名>      模型
+<LOCAL_LLM_HOME>/runtimes/llama.cpp/…/llama-server
+```
+
+「設定 → 05 本機模型」列出 [`models/catalog.json`](models/catalog.json) 的大腦（Gemma 4 E4B／12B、Qwen3.5 4B／9B、Qwen3.8 27B），標示哪些已下載；按「使用這個」就把引擎切到本機並啟動，不必先開別的程式，關閉 JELearner 時一併結束。模型以不思考模式執行（教材與對話都要固定 JSON，思考只會讓每次多等幾分鐘）。`config.toml` 寫了 `[llama] url` 時改連那台已經在跑的伺服器。
+
+M6 32 GB 實測：Qwen3.5 4B 每秒約 31 個 token、Gemma 4 12B Q8 約 12、Qwen3.8 27B 約 8；從啟動 Qwen3.5 4B 到回答約 3 秒。
+
+## 語音（macOS）
+
+辨識用 macOS 內建的 Apple 語音辨識（英、日），錄音不離開電腦；朗讀用系統聲音。需要先編譯一次小工具 `jl-speech`：
+
+```sh
+cd tools/macos-speech && swift build -c release
+```
+
+伺服器會自動找到它（也可用 `JELEARNER_SPEECH_BIN` 或 `config.toml` 的 `[speech] bin` 指定）。之後在「設定 → 08 語音」下載英、日辨識模型（第一次約 2 分鐘，由系統保存）。麥克風每次最多錄 15 秒，按鈕上顯示倒數，再按一次就送出。沒有本機辨識的電腦（例如 Windows）仍可在設定裡打開瀏覽器的雲端辨識。
+
+想要更自然的朗讀，到「系統設定 → 輔助使用 → 朗讀內容 → 系統聲音 → 管理聲音」免費下載 Premium 聲音；JELearner 會優先選用。
+
+實機檢查（需要 Mac、`jl-speech` 與兩個辨識模型、共用資料夾裡的 Qwen3.5 4B）：
+
+```sh
+cargo test -p jl-core real_ -- --ignored
+```
 
 ## 測試
 

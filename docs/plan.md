@@ -702,7 +702,7 @@ per_day = 10                # 每天帶入幾個新字
 ### 第 D 階段：瀏覽器語音
 
 - [x] 第一步（第 15 節）：瀏覽器朗讀（生字、複習卡、課文、例句、對話 AI 的話、自動朗讀）、設定 → 08 語音（聲音、速度、試聽、語音辨識開關與隱私說明）、對話麥克風填入輸入框、課文逐句跟讀與逐字比對；`SpeechProvider` trait 與 mock
-- [ ] 第二步（第 15 節，Mac 到貨）：`jl-speech`（Swift：status／install／transcribe）與 `MacSpeech`；`/api/speech/*`；網頁錄 WAV、15 秒倒數、本機辨識預設開啟、瀏覽器雲端辨識改為備案；聲音優先 Premium、設定頁的下載說明；本機模型用共用資料夾、伺服器自己啟動 llama-server、目錄加 Qwen；測試（假的 `jl-speech`、`say` 產生的語音實機辨識）
+- [x] 第二步（第 15 節，Mac 到貨）：`jl-speech`（Swift：status／install／transcribe）與 `MacSpeech`；`/api/speech/*`；網頁錄 WAV、15 秒倒數、本機辨識預設開啟、瀏覽器雲端辨識改為備案；聲音優先 Premium、設定頁的下載說明；本機模型用共用資料夾、伺服器自己啟動 llama-server、目錄加 Qwen；測試（假的 `jl-speech`、`say` 產生的語音實機辨識）
 - [ ] 語音合成：聽力題
 - [ ] 語音辨識：語音回合記為「說」
 - [ ] 聽寫；跟讀達標計分

@@ -64,6 +64,7 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .route("/api/claude-code/login", post(claude_code_login))
         .route("/api/engine/test", post(engine_test))
         .route("/api/models", get(models))
+        .route("/api/settings/llama", post(set_llama))
         .route("/api/google", get(google_status))
         .route("/api/google/outbox", get(google_outbox))
         .route("/api/google/weekly-report", post(weekly_report))
@@ -1381,6 +1382,24 @@ async fn models(State(s): State<Shared>) -> R<Value> {
     let memory_gb = sys.total_memory() as f64 / 1024f64.powi(3);
     let c = &st.catalog;
     let defaults = [c.defaults.brain.as_str(), c.defaults.ears.as_str(), c.defaults.mouth.as_str()];
+    let running = match s.local_llm.lock().await.as_mut() {
+        Some(r) => r.alive().then(|| r.model_id.clone()),
+        None => None,
+    };
+    // Per brain: downloaded into the shared folder, running, chosen.
+    let brains: Vec<Value> = c
+        .models
+        .iter()
+        .filter(|m| m.role == "brain")
+        .map(|m| {
+            json!({
+                "id": m.id,
+                "installed": st.llama_home.as_deref().is_some_and(|h| jl_core::local_llm::find_model(h, m).is_some()),
+                "running": running.as_deref() == Some(m.id.as_str()),
+                "chosen": st.llama.model == m.id,
+            })
+        })
+        .collect();
     Ok(Json(json!({
         "catalog": c,
         "memory_gb": (memory_gb * 10.0).round() / 10.0,
@@ -1388,8 +1407,37 @@ async fn models(State(s): State<Shared>) -> R<Value> {
         "arch": std::env::consts::ARCH,
         "plan_here": catalog::plan(c, &defaults, memory_gb),
         "plan_mac32": catalog::plan(c, &defaults, 32.0),
-        "note": "本機模型等 Mac 到貨後啟用；目前只顯示預估，尚未實機測試。",
+        "home": st.llama_home,
+        "runtime": st.llama_home.as_deref().is_some_and(|h| jl_core::local_llm::find_runtime(h).is_some()),
+        "external": st.llama_external.then(|| st.llama.url.clone()),
+        "engine": st.engine.as_str(),
+        "brains": brains,
     })))
+}
+
+#[derive(Deserialize)]
+struct LlamaBody {
+    model: String,
+}
+
+/// Use a local model: remember it, switch the engine to it and start it now
+/// (so the first lesson does not wait for the load).
+async fn set_llama(State(s): State<Shared>, Json(b): Json<LlamaBody>) -> R<Value> {
+    {
+        let mut st = s.settings.write().await;
+        if !st.catalog.get(&b.model).is_some_and(|m| m.role == "brain") {
+            return Err(bad(format!("模型目錄裡沒有「{}」", b.model)));
+        }
+        if let Some(dir) = st.app_dir.clone() {
+            settings::write_config_value(&dir, Some("llama"), "model", toml::Value::String(b.model.clone())).map_err(fail)?;
+            settings::write_config_value(&dir, Some("engine"), "kind", toml::Value::String("llama-server".into())).map_err(fail)?;
+        }
+        st.llama.model = b.model.clone();
+        st.engine = settings::EngineKind::LlamaServer;
+    }
+    let t = std::time::Instant::now();
+    crate::local_llama(&s).await?;
+    Ok(Json(json!({ "model": b.model, "engine": "llama-server", "ms": t.elapsed().as_millis() as u64 })))
 }
 
 // ── Google (mock until OAuth) ───────────────────────────

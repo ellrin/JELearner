@@ -20,7 +20,11 @@ scripts/dev.sh --mock                        # both of the above together
   `provider.rs` (LlmProvider trait: Claude API, llama-server, mock), `claude_code.rs`
   (Claude subscription through Claude Code), `lesson.rs`,
   `google.rs` (Mailer / Calendar traits: REST + in-memory), `report.rs`, `catalog.rs`,
-  `speech.rs` (SpeechProvider placeholder; browser speech lives in `web/speech.js`).
+  `speech.rs` (SpeechProvider; `MacSpeech` = Apple's on-device recognition through the
+  `jl-speech` helper; speaking stays in `web/speech.js`), `local_llm.rs` (models in the
+  shared `LOCAL_LLM_HOME` folder; starts llama-server).
+- `tools/macos-speech/`: `jl-speech`, a Swift helper (`swift build -c release` there);
+  status / install / transcribe, one JSON object per call.
 - `crates/server` (`jl-server`): axum on 127.0.0.1, `api.rs` handlers, `settings.rs`,
   `secrets.rs`, `git.rs`. Handlers are plain async fns over `Shared` so they can become
   Tauri commands later.
@@ -50,8 +54,15 @@ scripts/dev.sh --mock                        # both of the above together
   structured output via `output_config.format`, effort via `output_config.effort`,
   `fallbacks: "default"` with beta `server-side-fallback-2026-07-01`, check
   `stop_reason` (`refusal`, `max_tokens`) before reading content.
-- Local budget ≤ 20 GB on a 32 GB Mac: Gemma 4 12B (Q4_K_XL ~7.6 GB or Q8_0 ~12.9 GB,
-  mmproj ~0.2 GB), Whisper large-v3-turbo ~1.6 GB, Kokoro-82M ~0.35 GB.
+- Local models live in the shared folder `LOCAL_LLM_HOME` (`[llama] home`), shared with
+  PaperComposer: `<home>/gguf/<owner>/<repo>/<file>`, llama.cpp in `<home>/runtimes/`.
+  Without `[llama] url` the server starts llama-server itself (`--reasoning-budget 0`)
+  for `[llama] model` (a catalog id) and stops it on exit. Brains: Gemma 4 and Qwen; no
+  abliterated models in this app. Ears and mouth are macOS built-in (decisions §14):
+  Apple's SpeechTranscriber and the system voices, no Whisper or Kokoro.
+- Tests never call Apple's engine or a real llama-server: `speech_bin` points at a
+  missing path (or `speech::fake`), `llama_external` stays on. Real-hardware checks are
+  `#[ignore]` tests (`cargo test -p jl-core real_ -- --ignored`).
 - Gmail / Calendar: traits first, mock implementations and mock servers; OAuth later.
 - UI: axum on 127.0.0.1 + static web now; Tauri later.
 - Privacy / multi-user: personal data lives in the user's own private repo (the
