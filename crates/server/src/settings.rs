@@ -108,6 +108,9 @@ pub struct Settings {
     /// None = look next to the app and in the checkout's build folder.
     /// Tests point it at a path that does not exist, or at a fake.
     pub speech_bin: Option<PathBuf>,
+    /// Family mode (plan §19.2.5): this computer belongs to one member of the
+    /// admin's workspace, set up by the admin. None = a normal computer.
+    pub family: Option<FamilySettings>,
     pub google: GoogleSettings,
     pub crawler_delay_ms: u64,
     pub user_agent: Option<String>,
@@ -131,6 +134,24 @@ struct ConfigFile {
     crawler: CrawlerSection,
     #[serde(default)]
     speech: SpeechSection,
+    #[serde(default)]
+    family: Option<FamilySettings>,
+}
+
+/// `[family]` in config.toml (this computer only, never in the workspace).
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize, PartialEq)]
+pub struct FamilySettings {
+    /// The member who uses this computer; unset while the admin is still setting it up.
+    #[serde(default)]
+    pub member: Option<String>,
+    /// The deploy key this computer uses for the workspace repo.
+    #[serde(default)]
+    pub key: Option<PathBuf>,
+    /// Salted SHA-256 of the admin's PIN (hex), and the salt.
+    #[serde(default)]
+    pub pin_salt: Option<String>,
+    #[serde(default)]
+    pub pin_hash: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -184,6 +205,22 @@ fn read_config(app_dir: Option<&Path>) -> ConfigFile {
 
 /// Set `key = value` at the top level (`table = None`) or in `[table]`,
 /// keeping everything else in config.toml.
+/// Replace (or with `None`, remove) a whole `[table]` in config.toml.
+pub fn write_config_table(app_dir: &Path, table: &str, value: Option<toml::Table>) -> Result<(), String> {
+    let path = config_path(app_dir);
+    let mut doc: toml::Table = std::fs::read_to_string(&path).ok().and_then(|raw| raw.parse().ok()).unwrap_or_default();
+    match value {
+        Some(t) => {
+            doc.insert(table.to_string(), toml::Value::Table(t));
+        }
+        None => {
+            doc.remove(table);
+        }
+    }
+    std::fs::create_dir_all(app_dir).map_err(|e| e.to_string())?;
+    std::fs::write(&path, toml::to_string(&doc).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
 pub fn write_config_value(app_dir: &Path, table: Option<&str>, key: &str, value: toml::Value) -> Result<(), String> {
     let path = config_path(app_dir);
     let mut doc: toml::Table = std::fs::read_to_string(&path).ok().and_then(|raw| raw.parse().ok()).unwrap_or_default();
@@ -231,6 +268,7 @@ impl Settings {
             },
             llama_home: jl_core::local_llm::home(cfg.llama.home.as_deref()),
             speech_bin: env("JELEARNER_SPEECH_BIN").map(PathBuf::from).or(cfg.speech.bin),
+            family: cfg.family,
             google: GoogleSettings {
                 mode: google_mode,
                 gmail_base: env("JELEARNER_GMAIL_BASE_URL").unwrap_or_else(|| "https://gmail.googleapis.com".into()),
@@ -273,6 +311,7 @@ impl Settings {
             llama_home: None,
             // Never Apple's engine in tests; a test that wants one sets a fake.
             speech_bin: Some(PathBuf::from("/nonexistent/jl-speech")),
+            family: cfg.family,
             google: GoogleSettings {
                 mode: GoogleMode::Mock,
                 gmail_base: "http://127.0.0.1:9".into(),

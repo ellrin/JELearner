@@ -123,11 +123,13 @@
         <div class="tabs steps" id="stTabs" aria-hidden="true">
           <button data-step="migrate"><span class="c">1</span>轉換工作區</button>
           <button data-step="welcome"><span class="c">1</span>歡迎</button>
+          <button data-step="assist"><span class="c">2</span>協助設定</button>
           <button data-step="workspace"><span class="c">2</span>工作區</button>
           <button data-step="user"><span class="c">3</span>使用者</button>
           <button data-step="langs"><span class="c">4</span>學習語言</button>
           <button data-step="claude"><span class="c">5</span>Claude</button>
           <button data-step="interests"><span class="c">6</span>興趣</button>
+          <button data-step="pin"><span class="c">7</span>PIN</button>
           <button data-step="done"><span class="c">✓</span>完成</button>
         </div>
         <button class="ico close" id="stClose" data-icon="x" aria-label="關閉 Esc" hidden></button>
@@ -141,6 +143,24 @@
             <div><span data-icon="chat"></span><b>AI 對話</b></div><i>→</i>
             <div><span data-icon="star"></span><b>積分與升級</b></div>
           </div>
+          <!-- Who sets this computer up (plan §19.2.2): drawn by start.js on a first run. -->
+          <div class="create-pick who-pick" id="stWho" hidden></div>
+        </section>
+
+        <section class="step" data-step="assist" hidden>
+          <!-- Assisted setup (plan §19.2.4): the admin, on a family member's computer. Drawn by start.js. -->
+          <div class="st-head"><h3 class="st-title" id="faTitle"></h3><button class="help" id="faHelp" data-tip="家人的電腦用一把只屬於這台電腦的金鑰（deploy key）連到你的 private repo，家人不需要 GitHub 帳號，也不會過期；你隨時可以在 GitHub 的 Settings → Deploy keys 撤銷。這把金鑰讀得到整個 repo。">?</button></div>
+          <div id="faPane"></div>
+          <div class="note" id="faOut"></div>
+        </section>
+
+        <section class="step" data-step="pin" hidden>
+          <div class="st-head"><h3 class="st-title">設定管理員 PIN</h3><button class="help" data-tip="家人在這台電腦只看得到學習相關的設定；工作區、同步、Claude、本機模型收在「管理員設定」，用這組 PIN 打開。PIN 只存在這台電腦。忘記的話重新跑一次協助設定，學習資料不會遺失。">?</button></div>
+          <div class="form">
+            <label><span>PIN（4–6 位數）</span><input id="stPin" inputmode="numeric" autocomplete="off" maxlength="6" type="password"></label>
+            <label><span>再輸入一次</span><input id="stPin2" inputmode="numeric" autocomplete="off" maxlength="6" type="password"></label>
+          </div>
+          <div class="note" id="stPinOut"></div>
         </section>
 
         <section class="step" data-step="migrate" hidden>
@@ -260,6 +280,11 @@
           <button data-step="6"><span class="c">07</span>外觀</button>
           <button data-step="7"><span class="c">08</span>語音</button>
         </div>
+        <!-- Family mode (plan §19.2.5): admin tabs stay hidden until the PIN is entered. -->
+        <div class="admin-gate" id="setAdmin" hidden>
+          <button class="ghost small" id="setAdminOpen">管理員設定</button>
+          <span class="pin-row" hidden><input id="setAdminPin" inputmode="numeric" type="password" maxlength="6" placeholder="PIN" aria-label="管理員 PIN"><button class="primary small" id="setAdminGo">打開</button></span>
+        </div>
         <button class="ico close" data-icon="x" aria-label="關閉 Esc"></button>
       </div>
       <div class="wizard">
@@ -305,9 +330,9 @@
             <label><span>頭像顏色</span><input id="setColor" type="color"></label>
             <label><span>週報信箱</span><input id="setEmail" type="email" placeholder="you@example.com（可留空）"></label>
             <button class="primary small" id="setSaveUser">儲存</button>
-            <div class="note">存在私人工作區的 profiles/〈你〉/profile.toml，會跟著工作區同步。</div>
+            <div class="note no-family">存在私人工作區的 profiles/〈你〉/profile.toml，會跟著工作區同步。</div>
           </div>
-          <div class="git-box">
+          <div class="git-box admin-only">
             <div class="seg-row"><b>這個工作區的使用者</b><button class="help" data-tip="同一個工作區的成員看得到彼此的所有檔案（包括單字庫），適合家人或伴侶。每位使用者有自己的資料庫、自己的 Claude 連線。不需要密碼，選名字即可進入。">?</button></div>
             <ul class="members" id="setMembers"></ul>
             <div class="actions-row"><button class="ghost" id="setAddUser">新增使用者</button></div>

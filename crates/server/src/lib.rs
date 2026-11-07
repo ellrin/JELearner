@@ -12,6 +12,7 @@
 
 pub mod api;
 pub mod courses;
+pub mod family;
 pub mod git;
 pub mod notebook;
 pub mod secrets;

@@ -1340,3 +1340,101 @@ async fn setup_wizard_checks_and_guards() {
     let (st, _) = c.post("/api/setup/check", json!({"plan": "nonsense"})).await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
 }
+
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let o = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+/// Family mode (plan §19.2.4–19.2.5) with two "computers" sharing a bare
+/// repo: the admin's workspace, then the assisted setup on the member's
+/// computer (clone, the member, PIN), then the member's automatic sync that
+/// commits only `profiles/<member>/` and replays it on top of the admin's work.
+#[tokio::test]
+async fn family_mode_two_computers() {
+    let root = tempfile::tempdir().unwrap();
+    let bare = root.path().join("family.git");
+    git_fixture(root.path(), &["init", "-q", "--bare", bare.to_str().unwrap()]);
+    let url = bare.to_str().unwrap().to_string();
+
+    // The admin's computer: a workspace with the admin, pushed.
+    let (app_a, ws_a) = (root.path().join("app-a"), root.path().join("ws-a"));
+    let a = start(Settings::for_tests(Paths::from_repo(), app_a.clone())).await;
+    let (st, r) = a.post("/api/setup/workspace", json!({"path": ws_a, "init": true})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (st, r) = a.post("/api/users", json!({"name": "Ellrin", "languages": ["en"], "majors": {"en": "B2"}})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    git_fixture(&ws_a, &["init", "-q"]);
+    git_fixture(&ws_a, &["add", "-A"]);
+    git_fixture(&ws_a, &["commit", "-q", "-m", "admin workspace"]);
+    git_fixture(&ws_a, &["remote", "add", "origin", &url]);
+    git_fixture(&ws_a, &["push", "-q", "-u", "origin", "main"]);
+
+    // The member's computer, set up by the admin.
+    let (app_b, ws_b) = (root.path().join("app-b"), root.path().join("ws-b"));
+    let b = start(Settings::for_tests(Paths::from_repo(), app_b.clone())).await;
+    let (_, k) = b.post("/api/family/key", json!({"url": url})).await;
+    assert_eq!(k["public_key"], Value::Null, "not GitHub: no deploy key: {k}");
+    let (_, t) = b.post("/api/family/test", json!({"url": url})).await;
+    assert_eq!((t["ok"].as_bool(), t["empty"].as_bool()), (Some(true), Some(false)), "{t}");
+    let (st, r) = b.post("/api/family/clone", json!({"url": url, "path": ws_b})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (st, r) = b.post("/api/users", json!({"name": "daidai", "languages": ["ja"], "majors": {"ja": "N5"}})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let (st, e) = b.post("/api/family/finish", json!({"member": "daidai", "pin": "12"})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "PIN too short: {e}");
+    let (st, e) = b.post("/api/family/finish", json!({"member": "nobody", "pin": "2468"})).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{e}");
+    let (st, r) = b.post("/api/family/finish", json!({"member": "daidai", "pin": "2468"})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["synced"], true, "the new member went up while the admin was there: {r}");
+    let (_, s) = b.get("/api/status").await;
+    assert_eq!(s["family"], json!({"member": "daidai", "ready": true}));
+    let cfg = std::fs::read_to_string(app_b.join("config.toml")).unwrap();
+    assert!(cfg.contains("[family]") && cfg.contains("pin_hash") && !cfg.contains("2468"), "only the hash is kept: {cfg}");
+    assert!(git_out(&bare, &["log", "--oneline", "-1"]).contains("daidai"), "the member is in the shared repo");
+    assert_eq!(git_out(&bare, &["log", "-1", "--format=%an"]), "daidai", "authored as the member, no global Git author needed");
+
+    // PIN
+    assert_eq!(b.post("/api/family/unlock", json!({"pin": "0000"})).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(b.post("/api/family/unlock", json!({"pin": "2468"})).await.0, StatusCode::OK);
+
+    // The member's sync commits only profiles/daidai/; a shared file edit stays local.
+    std::fs::write(ws_b.join("profiles/daidai/note.txt"), "my note\n").unwrap();
+    std::fs::write(ws_b.join("topics.toml"), "# changed on the member's computer\n").unwrap();
+    let (_, r) = b.post("/api/family/sync", json!({})).await;
+    assert_eq!((r["ok"].as_bool(), r["pushed"].as_bool()), (Some(true), Some(true)), "{r}");
+    let files = git_out(&bare, &["show", "--name-only", "--format=", "HEAD"]);
+    assert!(files.lines().all(|f| f.starts_with("profiles/daidai/")), "only the member's folder: {files}");
+    assert!(git_out(&ws_b, &["status", "--porcelain"]).contains("topics.toml"), "shared edit not committed");
+
+    // Both sides moved: the admin pushes, the member changes again; the sync replays on top.
+    git_fixture(&ws_a, &["pull", "-q", "--rebase"]);
+    std::fs::write(ws_a.join("profiles/ellrin/admin.txt"), "from the admin\n").unwrap();
+    git_fixture(&ws_a, &["add", "-A"]);
+    git_fixture(&ws_a, &["commit", "-q", "-m", "admin work"]);
+    git_fixture(&ws_a, &["push", "-q"]);
+    std::fs::write(ws_b.join("profiles/daidai/note.txt"), "my note, again\n").unwrap();
+    let (_, r) = b.post("/api/family/sync", json!({})).await;
+    assert_eq!((r["ok"].as_bool(), r["pulled"].as_bool(), r["pushed"].as_bool()), (Some(true), Some(true), Some(true)), "{r}");
+    assert!(ws_b.join("profiles/ellrin/admin.txt").exists(), "the admin's work arrived");
+    assert!(ws_b.join("topics.toml").exists() && std::fs::read_to_string(ws_b.join("topics.toml")).unwrap().contains("member's computer"), "the local shared edit was put back, not lost");
+    let (_, r) = b.post("/api/family/sync", json!({})).await;
+    assert_eq!((r["ok"].as_bool(), r["pushed"].as_bool()), (Some(true), Some(false)), "nothing new: {r}");
+
+    // The remote is gone (unplugged, deleted…): a quiet failure, with a reason.
+    git_fixture(&ws_b, &["remote", "set-url", "origin", root.path().join("gone.git").to_str().unwrap()]);
+    let (st, r) = b.post("/api/family/sync", json!({})).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["reason"].is_string() && r["detail"].is_string(), "{r}");
+
+    // The admin turns family mode off (PIN first).
+    assert_eq!(b.post("/api/family/leave", json!({"pin": "1111"})).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(b.post("/api/family/leave", json!({"pin": "2468"})).await.0, StatusCode::OK);
+    let (_, s) = b.get("/api/status").await;
+    assert_eq!(s["family"], Value::Null);
+    assert!(!std::fs::read_to_string(app_b.join("config.toml")).unwrap().contains("[family]"));
+    // A computer that is not in family mode has no family sync.
+    assert_eq!(b.post("/api/family/sync", json!({})).await.0, StatusCode::BAD_REQUEST);
+}

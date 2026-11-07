@@ -17,6 +17,8 @@ const FLOWS = {
   pick: ["user", "langs", "claude", "interests", "done"],
   add: ["user", "langs", "claude", "interests", "done"],
   migrate: ["migrate", "done"],
+  // The admin sets up a family member's computer (plan §19.2.4).
+  assist: ["welcome", "assist", "user", "langs", "claude", "interests", "pin", "done"],
 };
 
 /** Avatar colours; a new user gets the first one nobody uses yet. */
@@ -46,15 +48,28 @@ function startWizard(mode) {
   wiz.mode = mode;
   wiz.chips = new Set();
   if (wiz.creating) $("#stColor").value = freeColor();
+  numberTabs();
+  wizShow();
+  if (!dlgStart.open) dlgStart.showModal();
+  tabsInView($("#stTabs"));
+}
+
+/** Show this flow's tabs, numbered from 1 (the last one keeps its check mark). */
+function numberTabs() {
   $$("#stTabs button").forEach((b) => { b.hidden = !wiz.flow.includes(b.dataset.step); b.tabIndex = -1; });
-  // Number the steps of this flow from 1 (the last one keeps its check mark).
   wiz.flow.forEach((step, i) => {
     const c = $(`#stTabs button[data-step="${step}"] .c`);
     if (c && step !== "done") c.textContent = String(i + 1);
   });
+}
+
+/** Switch flow from the welcome tiles and go to step `at` of it. */
+function setFlow(mode, at) {
+  wiz.flow = FLOWS[mode];
+  wiz.mode = mode;
+  wiz.i = at;
+  numberTabs();
   wizShow();
-  if (!dlgStart.open) dlgStart.showModal();
-  tabsInView($("#stTabs"));
 }
 
 // The wizard can be left (×, Esc) only when there is a user to return to.
@@ -72,13 +87,13 @@ function wizShow() {
   $$("#stTabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.step === step)));
   tabsInView($("#stTabs"));
   const last = wiz.i === wiz.flow.length - 1;
-  $("#stPrev").hidden = wiz.i === 0 || step === "done";
+  $("#stPrev").hidden = wiz.i === 0 || step === "done" || (wiz.mode === "assist" && step === "user");
   // Skipping is possible where nothing is required.
   $("#stSkip").hidden = !["welcome", "claude", "interests"].includes(step) && !(step === "workspace");
   $("#stNext").textContent = last ? "開始學習" : step === "migrate" ? "開始升級" : "下一步";
   $("#stClose").hidden = !canLeave();
   $("#stNext").hidden = false; // the workspace questions hide it while a tile is the answer
-  ({ workspace: loadStWorkspace, user: loadStUser, langs: loadStLangs, claude: loadStClaude, interests: loadStInterests, done: loadStDone, migrate: loadStMigrate }[step] ?? (() => {}))();
+  ({ welcome: loadStWelcome, assist: loadStAssist, pin: loadStPin, workspace: loadStWorkspace, user: loadStUser, langs: loadStLangs, claude: loadStClaude, interests: loadStInterests, done: loadStDone, migrate: loadStMigrate }[step] ?? (() => {}))();
   // The main button takes the focus (not the step tabs), unless a field asks for it.
   setTimeout(() => {
     const a = document.activeElement;
@@ -98,6 +113,7 @@ function stOut(id, msg, err) {
 
 $("#stPrev").onclick = () => {
   if (wizStep() === "workspace" && cwBack()) return; // back through the setup questions first
+  if (wizStep() === "assist" && faBack()) return;
   if (wiz.i > 0) { wiz.i -= 1; wizShow(); }
 };
 $("#stSkip").onclick = () => {
@@ -113,6 +129,8 @@ $("#stNext").onclick = () => busy($("#stNext"), async () => {
   const step = wizStep();
   try {
     if (step === "workspace") { if (!(await stDoWorkspace())) return; }
+    else if (step === "assist") { if (!(await stDoAssist())) return; }
+    else if (step === "pin") { if (!(await stDoPin())) return; }
     else if (step === "user") { if (!(await stDoUser())) return; }
     else if (step === "langs") await stDoLangs();
     else if (step === "interests") await stDoInterests();
@@ -334,6 +352,156 @@ async function stDoWorkspace() {
   return true;
 }
 
+// ── welcome: who sets this computer up (plan §19.2.2) ──
+function loadStWelcome() {
+  const who = $("#stWho");
+  const first = wiz.mode === "first" || wiz.mode === "assist";
+  who.hidden = !first;
+  if (!first) return;
+  who.innerHTML = "";
+  cw.drawnAt = Date.now();
+  who.append(
+    cwTile("folder", "我自己用", "建立或下載我的工作區", () => { if (wiz.mode !== "first") setFlow("first", 1); else wizNext(); }),
+    cwTile("star", "請家人幫我設定", "家人會幫你把這台電腦準備好", () => setFlow("assist", 1)),
+  );
+  $("#stNext").hidden = true; // the tiles are the answer
+  $("#stSkip").hidden = true; // two answers, nothing else (plan §19.2.2)
+}
+
+// ── assist: the admin, on a family member's computer (plan §19.2.4) ──
+// hand → url → key (GitHub only) → place; then the usual user, language,
+// Claude and interest steps, then the PIN. The member never sees Git.
+const fa = { pane: "hand", history: [], url: "", key: null };
+const FA_PANES = {
+  hand: { title: "請把電腦交給幫你設定的人", go: "我是來幫忙設定的" },
+  url: { title: "你的 private repo", go: "下一步" },
+  key: { title: "讓這台電腦連上你的 repo", go: "我加好了，測試連線" },
+  place: { title: "放在這台電腦的哪裡", go: "下載" },
+};
+function faTo(pane) { fa.history.push(fa.pane); fa.pane = pane; drawFa(); }
+function faBack() { if (!fa.history.length) return false; fa.pane = fa.history.pop(); drawFa(); return true; }
+
+async function copyText(text, btn) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const t = el("textarea"); t.value = text; document.body.append(t); t.select();
+    try { document.execCommand("copy"); } catch {}
+    t.remove();
+  }
+  const was = btn.textContent; btn.textContent = "已複製"; setTimeout(() => (btn.textContent = was), 1500);
+}
+
+function drawFa() {
+  const p = FA_PANES[fa.pane];
+  $("#faTitle").textContent = p.title;
+  $("#faHelp").hidden = fa.pane === "hand"; // the technical note is for the admin's screens
+  const box = $("#faPane");
+  box.innerHTML = "";
+  stOut("#faOut", "");
+  if (fa.pane === "hand") {
+    const d = el("div", "fa-hand");
+    const ic = el("span", "big-ok"); ic.append(icon("star"));
+    d.append(ic, el("p", null, "接下來由幫你設定的家人操作，大約 5 分鐘。設定好之後，你只要打開 App 就能學習。"));
+    box.append(d);
+  } else if (fa.pane === "url") {
+    const form = el("div", "form");
+    form.append(cwField("repo 網址", "faUrl", fa.url, "https://github.com/你/JELearner-private"));
+    box.append(form);
+  } else if (fa.pane === "key") {
+    const k = fa.key;
+    const ol = el("ol", "fa-steps");
+    const step = (...kids) => { const li = el("li"); li.append(...kids); ol.append(li); };
+    step(el("span", null, "打開 repo 的 Deploy keys 頁面"), ghostButton("external", "打開", () => api("/api/family/open-key", { url: fa.url }).catch((e) => stOut("#faOut", e.message, true))));
+    const tb = el("button", "ghost small", "複製");
+    tb.onclick = () => copyText(k.title, tb);
+    step(el("span", null, "Title 填："), el("code", null, k.title), tb);
+    const kb = el("button", "ghost small", "複製");
+    kb.onclick = () => copyText(k.public_key, kb);
+    const ta = el("textarea", "fa-key"); ta.readOnly = true; ta.rows = 3; ta.value = k.public_key; ta.onclick = () => ta.select();
+    step(el("span", null, "Key 貼上："), kb, ta);
+    step(el("span", null, "勾選 "), el("b", null, "Allow write access"), el("span", null, "，按 Add key"));
+    box.append(ol);
+  } else if (fa.pane === "place") {
+    const form = el("div", "form");
+    form.append(cwField("放在", "faPath", CW_DEFAULT, CW_DEFAULT));
+    box.append(form);
+  }
+  $("#stNext").hidden = false;
+  $("#stNext").textContent = p.go;
+  $("#stPrev").hidden = !fa.history.length && wiz.i === 0;
+  const focus = $("#faPane input") ?? $("#stNext");
+  setTimeout(() => focus.focus(), 30);
+}
+
+function loadStAssist() { fa.pane = "hand"; fa.history = []; drawFa(); }
+
+/** The pane's action; true when the assist step is done (on to 使用者). */
+async function stDoAssist() {
+  try {
+    if (fa.pane === "hand") { faTo("url"); return false; }
+    if (fa.pane === "url") {
+      const url = $("#faUrl").value.trim();
+      if (!url) { $("#faUrl").focus(); stOut("#faOut", "請貼上 repo 網址", true); return false; }
+      fa.url = url;
+      stOut("#faOut", "準備中…");
+      fa.key = await api("/api/family/key", { url });
+      faTo(fa.key.public_key ? "key" : "place");
+      return false;
+    }
+    if (fa.pane === "key") {
+      stOut("#faOut", "測試中…");
+      const t = await api("/api/family/test", { url: fa.url });
+      if (!t.ok) {
+        stOut("#faOut", t.reason === "offline" ? "這台電腦連不到網路，連上後再試一次" : "還連不上：確認 Key 貼對了、有勾 Allow write access，再按一次", true);
+        return false;
+      }
+      if (t.empty) { stOut("#faOut", "這個 repo 還是空的：請先在你自己的電腦建立工作區並同步上去", true); return false; }
+      faTo("place");
+      return false;
+    }
+    // place: download with the key
+    stOut("#faOut", "下載中…");
+    const r = await api("/api/family/clone", { url: fa.url, path: $("#faPath").value.trim() || CW_DEFAULT });
+    stOut("#faOut", "");
+    const box = $("#faPane");
+    box.innerHTML = "";
+    const d = el("div", "cw-done");
+    const ck = el("span", "big-ok"); ck.append(icon("check"));
+    d.append(ck, el("b", null, "已下載"), el("div", "path", tildePath(r.workspace)));
+    box.append(d);
+    await refreshStatus();
+    wiz.creating = false;
+    await new Promise((ok) => setTimeout(ok, 900));
+    return true;
+  } catch (e) {
+    stOut("#faOut", e.message, true);
+    return false;
+  }
+}
+
+// ── PIN: guards admin settings on this computer (plan §19.2.5) ──
+function loadStPin() {
+  $("#stPin").value = ""; $("#stPin2").value = "";
+  stOut("#stPinOut", "");
+  for (const id of ["#stPin", "#stPin2"]) $(id).onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); $("#stNext").click(); } };
+  setTimeout(() => $("#stPin").focus(), 30);
+}
+
+async function stDoPin() {
+  const a = $("#stPin").value.trim(), b = $("#stPin2").value.trim();
+  if (!/^\d{4,6}$/.test(a)) { stOut("#stPinOut", "PIN 要 4 到 6 位數字", true); $("#stPin").focus(); return false; }
+  if (a !== b) { stOut("#stPinOut", "兩次輸入的不一樣", true); $("#stPin2").focus(); return false; }
+  try {
+    const r = await api("/api/family/finish", { member: state.status?.user?.id, pin: a });
+    await refreshStatus();
+    if (!r.synced) flash("設定好了；同步會在連上網路後自動完成");
+    return true;
+  } catch (e) {
+    stOut("#stPinOut", e.message, true);
+    return false;
+  }
+}
+
 // ── migrate ────────────────────────────────────────────
 function loadStMigrate() {
   stOut("#stMigrateOut", "");
@@ -352,10 +520,11 @@ function loadStUser() {
   const s = state.status;
   const ul = $("#stPeople");
   ul.innerHTML = "";
-  const people = s?.users ?? [];
+  // Setting up a family member's computer: the admin's own profile is not a choice.
+  const people = (s?.users ?? []).filter((u) => !(wiz.mode === "assist" && u.admin));
   // Adding someone (or a workspace with nobody yet): only the form.
   if (wiz.mode === "add" || !people.length) wiz.creating = true;
-  $("#stUserNow").textContent = wiz.creating ? (people.length ? "新增使用者" : "建立你的使用者") : "你是誰？";
+  $("#stUserNow").textContent = wiz.mode === "assist" ? (wiz.creating ? "新增這位家人" : "這台電腦是誰在用？") : wiz.creating ? (people.length ? "新增使用者" : "建立你的使用者") : "你是誰？";
   ul.hidden = wiz.creating && (wiz.mode === "add" || !people.length);
   for (const u of people) {
     const li = el("li", "person");
@@ -368,6 +537,8 @@ function loadStUser() {
         await api("/api/users/select", { id: u.id });
         resetUserState();
         await refreshStatus();
+        // Setting up a family member's computer: their profile exists; on to their Claude and the PIN.
+        if (wiz.mode === "assist") { wiz.creating = false; wiz.i = wiz.flow.indexOf("langs"); wizShow(); return; }
         dlgStart.close();
         greet();
         render();
@@ -498,6 +669,11 @@ $("#stDoneImport").onclick = () => { dlgStart.close(); $("#impResults").innerHTM
 
 function loadStDone() {
   const u = state.status?.user;
+  // Assisted setup: hand the computer back; the "next" cards are for later.
+  const assist = wiz.mode === "assist";
+  $("#dlgStart [data-step='done'] .st-title").textContent = assist ? "設定好了" : "準備好了";
+  $("#dlgStart .done-next").hidden = assist;
+  if (assist) $("#stNext").textContent = `交還給 ${u?.name ?? "使用者"}`;
   const box = $("#stDone");
   box.innerHTML = "";
   for (const l of u?.languages ?? []) {

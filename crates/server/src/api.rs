@@ -76,6 +76,7 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .merge(crate::notebook::routes())
         .merge(crate::speech::routes())
         .merge(crate::setup::routes())
+        .merge(crate::family::routes())
         .fallback_service(ServeDir::new(web))
 }
 
@@ -97,7 +98,7 @@ pub(crate) async fn ws(s: &Shared) -> Result<RwLockReadGuard<'_, Loaded>, ApiErr
 }
 
 /// The open workspace folder (with or without a chosen user).
-async fn root_path(s: &Shared) -> Result<PathBuf, ApiError> {
+pub(crate) async fn root_path(s: &Shared) -> Result<PathBuf, ApiError> {
     s.root.read().await.as_ref().map(|r| r.root.root.clone()).ok_or_else(|| unavailable("尚未選擇工作區"))
 }
 
@@ -225,6 +226,8 @@ struct Status {
     import: Option<ImportReport>,
     stats: Value,
     prompts_overridden: Vec<String>,
+    /// Family mode (plan §19.2.5): `{ member, ready }`; never the PIN.
+    family: Option<Value>,
 }
 
 fn level_options() -> Value {
@@ -318,6 +321,7 @@ async fn status(State(s): State<Shared>) -> R<Status> {
         import: None,
         stats: json!({}),
         prompts_overridden: vec![],
+        family: s.settings.read().await.family.as_ref().map(|f| json!({ "member": f.member, "ready": f.member.is_some() && f.pin_hash.is_some() })),
     };
     let Some(l) = guard.as_ref() else { return Ok(Json(out)) };
     let now = Utc::now();
@@ -568,7 +572,7 @@ struct WorkspaceBody {
 
 /// Switch to a workspace folder and remember it in config.toml; enter the
 /// user this computer used there last (or the only one).
-async fn use_workspace(s: &Shared, path: PathBuf, init: bool) -> Result<Value, ApiError> {
+pub(crate) async fn use_workspace(s: &Shared, path: PathBuf, init: bool) -> Result<Value, ApiError> {
     let st = s.settings.read().await.clone();
     let open = open_workspace(&st, Some(path.clone()), init).map_err(bad)?;
     if let Some(dir) = &st.app_dir {

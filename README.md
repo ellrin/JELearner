@@ -116,6 +116,19 @@ JELearner 是非營利的個人專案，不代付、不轉售任何 Claude 用�
 
 目前是**模擬模式**：週報、課程確認信、複習時段都放在「信件與行事曆」頁的模擬寄件匣，內容與真正寄出的一樣。程式已實作 Gmail `users.messages.send` 與 Calendar `events.insert`／`events.list` 的 REST 介面（以模擬伺服器測試），OAuth 登入在下一階段加入。
 
+## 讓家人一起用（家人模式）
+
+家人共用你的 private repo，各自有自己的資料夾（`profiles/<名字>/`），**家人不需要 GitHub 帳號，也不會看到任何同步或 Git 的字眼**。在家人的電腦上由你操作一次（約 5 分鐘）：
+
+1. 打開 JELearner，選 **請家人幫我設定**。
+2. 貼上你的 private repo 網址。App 為這台電腦產生一把金鑰：照畫面的四個步驟，到 repo 的 Settings → Deploy keys 加上（勾 Allow write access），回來按「測試連線」。
+3. 選位置下載 → 選「這台電腦是誰在用」或新增 → 學習語言 → **幫他登入他自己的 Claude** → 興趣。
+4. 設一組 4–6 位數的**管理員 PIN**，按「交還給 ○○」。
+
+之後家人只要打開 App：開啟時、每次學習後、關閉時都會自動同步，只上傳他自己的資料夾。設定裡只看得到學習相關的項目；工作區、Claude、本機模型收在「管理員設定」，要輸入 PIN。要停用時在「管理員設定」按「關閉家人模式」；要撤銷這台電腦，到 GitHub 刪掉那把 deploy key。
+
+deploy key 讀得到整個 repo（包括你的單字庫），適合家人。只想分享進度的朋友，請等之後的「學習群組」。
+
 ## 本機模型
 
 模型放在**所有專案共用的資料夾**，位置由環境變數 `LOCAL_LLM_HOME` 決定（從 Finder 開啟時讀不到 shell 變數，可改在 `config.toml` 寫 `[llama] home = "/path"`）。結構和 `hf download --local-dir` 相同，與 PaperComposer 共用同一份檔案：

@@ -33,6 +33,8 @@ async function api(path, body, method) {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!r.ok) throw new Error(data?.error ?? (typeof data === "string" && data) ?? `${r.status}`);
+  // Family mode: whatever the member just saved goes up a little later, on its own.
+  if (opts?.method && opts.method !== "GET" && !path.startsWith("/api/family/")) scheduleFamilySync();
   return data;
 }
 
@@ -237,6 +239,7 @@ async function refreshStatus() {
   const s = state.status;
   applyUser();
   applyFurigana();
+  applyFamily();
   // Another user or language: the review queue and selections belong to them.
   const who = `${s.user?.id ?? ""}/${state.lang}`;
   if (state.who !== who) {
@@ -275,7 +278,7 @@ async function refreshStatus() {
   sb.innerHTML = "";
   const dot = el("span", `dot ${s.engine_ready ? "ok" : "warn"}`);
   const eng = el("button", "eng", null);
-  eng.append(dot, document.createTextNode(s.engine_ready ? "Claude 已連線" : "Claude 未連線"));
+  eng.append(dot, document.createTextNode(s.engine_ready ? (s.family?.ready ? "AI 老師準備好了" : "Claude 已連線") : s.family?.ready ? "AI 老師還沒準備好" : "Claude 未連線"));
   eng.title = s.engine_ready ? `${s.engine_label}・${s.engine}` : (s.engine_error ?? "設定 → Claude");
   eng.onclick = () => openSettings(3);
   sb.append(eng, el("span", "grow"));
@@ -299,7 +302,7 @@ async function paintFoot(s) {
   ic.append(icon("cloud"));
   f.append(ic, el("span", "nm", name));
   f.title = s.workspace;
-  if (s.demo) return;
+  if (s.demo || s.family?.ready) return; // family mode: no sync state, ever
   const gen = ++footGen;
   try {
     const g = await api("/api/git/status");
@@ -321,6 +324,7 @@ async function greet() {
   if (!s.user) return say("請先選擇使用者，或新增一位。");
   const name = s.demo ? "" : `${s.user.name}，`;
   if (s.demo) return say(`${name}歡迎！目前用的是示範資料。到「設定 → 工作區」連接你的私人 repo（例如 JELearner-private），生字和錯題才會存到你自己的地方。`);
+  if (!s.engine_ready && s.family?.ready) return say(`${name}Claude 還沒連上，請家人幫你看一下。複習和錯題本可以先用。`);
   if (!s.engine_ready) return say(`${name}你的 Claude 還沒連上。到「設定 → Claude」用瀏覽器登入你自己的 Claude 帳號（用訂閱額度），或貼上 API key。複習和錯題本可以先用。`);
   try {
     const t = await fetchToday();
@@ -363,6 +367,7 @@ function applyUser() {
 const userMenu = $("#userMenu");
 $("#actUser").onclick = (e) => {
   e.stopPropagation();
+  if (familyLocked()) return; // a family member's computer: one person, nothing to switch
   if (!userMenu.hidden) { userMenu.hidden = true; return; }
   const s = state.status;
   userMenu.innerHTML = "";
@@ -1152,6 +1157,10 @@ $("#demoChip").onclick = () => openSettings(0);
 $(".close", dlg).onclick = () => dlg.close();
 
 function openSettings(step) {
+  // Family mode: Claude is the admin's to fix; other locked admin tabs open 學習語言 instead.
+  if (familyLocked() && step === 3) { flash("AI 老師還沒準備好，請家人幫忙看一下"); return; }
+  if (familyLocked() && ADMIN_TABS.includes(step)) step = 2;
+  applyAdminGate();
   dlg.showModal();
   showStep(step);
 }
@@ -1462,4 +1471,102 @@ refreshStatus().then(() => {
   greet();
   render();
   checkStart();
+  if (state.status?.family?.ready) familySync(); // bring in the admin's work on open
 });
+
+// ── family mode (plan §19.2.5) ──────────────────────────
+// The member never sees Git: sync runs on open, ~15 s after a change, every
+// 10 minutes and when the window is hidden or closed. Offline is retried
+// quietly; only a lasting problem shows one sentence, with the details for
+// the admin folded away. Admin settings open with the PIN.
+const fam = { timer: null, unlocked: false, pin: "" };
+const familyOn = () => !!state.status?.family?.ready;
+
+function applyFamily() {
+  const on = familyOn();
+  document.body.classList.toggle("family", on);
+  $("#actSync").hidden = on;
+  // 12: one person on this computer: the name is not a menu.
+  const chip = $("#actUser");
+  chip.tabIndex = on ? -1 : 0;
+  if (on) { chip.removeAttribute("aria-haspopup"); chip.setAttribute("aria-label", "使用者"); }
+  else { chip.setAttribute("aria-haspopup", "true"); chip.setAttribute("aria-label", "切換使用者"); }
+  if (!on) {
+    fam.unlocked = false;
+    const banner = $("#famBanner");
+    if (banner) banner.remove();
+  }
+  applyAdminGate();
+}
+
+function scheduleFamilySync(ms = 15000) {
+  if (!familyOn()) return;
+  clearTimeout(fam.timer);
+  fam.timer = setTimeout(familySync, ms);
+}
+
+async function familySync() {
+  if (!familyOn()) return;
+  clearTimeout(fam.timer);
+  let r;
+  try { r = await api("/api/family/sync", {}); } catch (e) { r = { ok: false, reason: "other", detail: e.message }; }
+  if (r.ok) {
+    const banner = $("#famBanner");
+    if (banner) banner.remove();
+    if (r.pulled) { await refreshStatus(); render(); }
+    return;
+  }
+  if (r.reason === "offline") return; // next time; nothing to say
+  showFamilyBanner(r);
+}
+
+const FAMILY_REASON = { auth: "金鑰無法使用（可能在 GitHub 被移除）", conflict: "和管理員的修改衝突，已保留在這台電腦", other: "同步失敗" };
+function showFamilyBanner(r) {
+  let b = $("#famBanner");
+  if (!b) { b = el("div", "fam-banner"); b.id = "famBanner"; b.setAttribute("role", "status"); document.body.append(b); }
+  b.innerHTML = "";
+  const d = el("details");
+  d.append(el("summary", null, "給幫忙的人看"), el("pre", null, `${FAMILY_REASON[r.reason] ?? r.reason}\n${r.detail ?? ""}`));
+  b.append(el("span", null, "資料暫時沒有存到家人那邊，請家人幫忙看一下。學習可以照常進行。"), d);
+}
+
+setInterval(() => { if (familyOn()) familySync(); }, 10 * 60 * 1000);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && familyOn()) navigator.sendBeacon?.("/api/family/sync");
+});
+
+// Admin tabs (workspace, Claude, local models, mail) wait for the PIN.
+const ADMIN_TABS = [0, 3, 4, 5];
+const familyLocked = () => familyOn() && !fam.unlocked;
+function applyAdminGate() {
+  const locked = familyLocked();
+  document.body.classList.toggle("fam-locked", locked); // .admin-only parts of open tabs, too
+  $$("#setTabs button").forEach((b) => { if (ADMIN_TABS.includes(Number(b.dataset.step))) b.hidden = locked; });
+  $("#setAdmin").hidden = !familyOn();
+  $("#setAdminOpen").textContent = locked ? "管理員設定" : "關閉家人模式";
+  $("#setAdmin .pin-row").hidden = true;
+}
+$("#setAdminOpen").onclick = async () => {
+  if (familyLocked()) {
+    const row = $("#setAdmin .pin-row");
+    row.hidden = !row.hidden;
+    if (!row.hidden) setTimeout(() => $("#setAdminPin").focus(), 0);
+    return;
+  }
+  // Unlocked: the admin can turn family mode off on this computer.
+  if (!confirm("關閉這台電腦的家人模式？之後同步與設定會像管理員的電腦一樣。")) return;
+  try { await api("/api/family/leave", { pin: fam.pin }); flash("已關閉家人模式"); await refreshStatus(); render(); }
+  catch (e) { flash(e.message, true); }
+};
+$("#setAdminGo").onclick = async () => {
+  const pin = $("#setAdminPin").value.trim();
+  try {
+    await api("/api/family/unlock", { pin });
+    fam.unlocked = true; fam.pin = pin;
+    $("#setAdminPin").value = "";
+    applyAdminGate();
+    flash("已打開管理員設定");
+    $("#setTabs button[data-step='0']")?.focus();
+  } catch (e) { flash(e.message, true); $("#setAdminPin").select(); }
+};
+$("#setAdminPin").onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); $("#setAdminGo").click(); } };

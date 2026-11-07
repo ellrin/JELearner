@@ -108,3 +108,11 @@ tokio、axum 0.8、reqwest（rustls）、sqlx 0.8（SQLite，執行期查詢，�
 - **目錄**：`models/catalog.json` 的大腦加上 Qwen（3.5 4B、3.5 9B、3.8 27B）與 Gemma 4 E4B；耳朵、嘴巴改為 macOS 內建（0 GB）。JELearner 是家人共用的學習工具，**不放 abliterated（移除拒答）版本**（只在 PaperComposer 提供）。設定 → 05 本機模型列出共用資料夾裡已下載的大腦，「使用這個」會寫入 `[llama] model`、把引擎切到本機並立即啟動；關閉伺服器（Ctrl+C、SIGTERM）時一併結束 llama-server。
 - **實測**（M6 32 GB）：從共用資料夾啟動 Qwen3.5 4B 到回答 JSON 約 2.7 秒；在設定頁切換 1.1 秒、測試連線 0.26 秒。
 - **原因**：模型動輒十幾 GB，每個專案各存一份浪費空間；作者在 PaperComposer 的實測（M6 32 GB）：Qwen3.5 4B 每秒 30.8 token、Gemma 4 12B Q8 11.5、Qwen3.8 27B 8.2，關掉思考後一次回覆從數分鐘降到 10–30 秒。
+
+## 16. 家人模式與協助設定（第 F 階段 F2，2026-11）
+
+- **決定**：共用管理員 private repo 的家人可能完全不會程式。管理員在家人的電腦上跑一次「協助設定」：App 為這台電腦產生 deploy key（`<設定資料夾>/deploy/<owner>__<repo>/id_ed25519`，不進工作區），帶管理員到 GitHub 加上（寫入權限），測試連線後用這把金鑰 clone，並把它記在該 clone 的 `core.sshCommand`；之後選或新增這位家人、設定語言、**替他登入他自己的 Claude**、設定管理員 PIN，最後「交還給使用者」。`config.toml` 的 `[family]` 記住 `member`、`key` 與 PIN 的加鹽 SHA-256。
+- **同步**：家人模式沒有同步按鈕、沒有 Git 字眼。`POST /api/family/sync` 在開啟時、每次修改後約 15 秒、每 10 分鐘、視窗隱藏或關閉時執行：只 commit `profiles/<家人>/`（作者記為那位家人，不需要電腦上的 Git 設定），`pull --rebase --autostash` 接在管理員的修改之後，再推送。共用檔案（`workspace.toml`、`topics.toml`…）在家人的電腦上改了也不 commit，所以不會和管理員衝突。離線時安靜地下次再試；金鑰被撤銷或真的衝突時只顯示一句「資料暫時沒有存到家人那邊，請家人幫忙看一下」，細節收在「給幫忙的人看」。
+- **設定**：家人只看得到使用者（自己的資料，成員名單隱藏）、學習語言、外觀、語音；工作區、Claude、本機模型、信件在「管理員設定」後面，要 PIN。PIN 是家裡的鎖，不是安全機制（一切都在家人自己的電腦上執行），忘記時重跑協助設定，學習資料在工作區不會遺失。
+- **不替家人申請 GitHub 帳號**：token 會過期，過期時家人會看到看不懂的錯誤；deploy key 不過期、綁這台電腦、管理員可隨時撤銷。限制：deploy key 讀得到整個 repo（第 16.2 節）。
+- **測試**：`family_mode_two_computers`（兩個伺服器共用一個本機 bare repo：協助設定、只 commit 家人的資料夾、雙方都有新 commit 時 rebase、PIN、遠端消失時安靜失敗、關閉家人模式）；金鑰產生用真的 `ssh-keygen`。**尚未用真的 GitHub deploy key 實測**；關閉 App 視窗時的最後一次同步是盡力而為（`sendBeacon`），沒送出的下次開啟時補上。
