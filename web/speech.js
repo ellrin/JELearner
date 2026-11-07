@@ -318,7 +318,8 @@ const Speech = (() => {
       stopFn = listen(lang, {
         onText,
         onTick: (left) => { b.dataset.left = String(left); b.setAttribute("aria-label", `錄音中，剩 ${left} 秒，按一下送出`); },
-        onBusy: () => { delete b.dataset.left; b.classList.add("busy"); b.setAttribute("aria-label", "辨識中"); },
+        // Recording is over: busy replaces listening (its own look, not "still recording").
+        onBusy: () => { delete b.dataset.left; b.classList.remove("listening"); b.classList.add("busy"); b.setAttribute("aria-label", "辨識中"); },
         onEnd: reset,
       });
     };
@@ -439,7 +440,7 @@ const Speech = (() => {
         out.innerHTML = "";
         orig(e);
         const watch = setInterval(() => {
-          if (say.classList.contains("listening")) return;
+          if (say.classList.contains("listening") || say.classList.contains("busy")) return;
           clearInterval(watch);
           if (heard.textContent.trim()) showResult(heard.textContent);
         }, 200);
@@ -533,13 +534,16 @@ function renderSpeechSettings(box) {
       const sel = el("select");
       sel.dataset.lang = lang;
       const chosen = Speech.voiceFor(lang)?.name;
+      // Grouped by quality, best first (the list is already in that order).
+      const GROUP = ["Premium", "加強版", "標準", "Eloquence（較機械）", "趣味聲音"];
+      let group = null, at = -1;
       for (const v of list) {
-        const tier = Speech.TIER[Speech.quality(v)];
-        const named = /premium|enhanced/i.test(v.name); // Chrome already writes "(Premium)"
-        const o = el("option", null, `${v.name}${tier && !named ? `・${tier}` : ""}${v.localService ? "" : "・雲端"}`);
+        const q = Speech.quality(v);
+        if (q !== at) { at = q; group = el("optgroup"); group.label = GROUP[q]; sel.append(group); }
+        const o = el("option", null, `${v.name}${v.localService ? "" : "・雲端"}`);
         o.value = v.name;
         if (v.name === chosen) o.selected = true;
-        sel.append(o);
+        group.append(o);
       }
       sel.onchange = () => Speech.setPref("voice", { ...Speech.prefs().voice, [lang]: sel.value });
       const test = iconButton("speaker", "試聽", () => Speech.speak(Speech.SAMPLE[lang], lang, test));
@@ -568,8 +572,11 @@ function renderSpeechSettings(box) {
     const langsShown = langs.filter((l) => Speech.voicesFor(l).length);
     if (/Mac/.test(navigator.userAgent) && langsShown.some(Speech.lacksGoodVoice)) {
       const tip = el("div", "voice-tip");
+      const help = el("button", "help", "?");
+      help.dataset.tip = "系統設定 → 輔助使用 → 朗讀內容 → 系統聲音 → 管理聲音，下載 Premium 聲音（例如英文 Ava、Zoe，日文 Kyoko 加強版），下載後重新整理這一頁。";
       tip.append(
-        el("div", "note", "想要更自然的聲音：在「系統設定 → 輔助使用 → 朗讀內容 → 系統聲音 → 管理聲音」免費下載 Premium 聲音（例如英文 Ava、Zoe，日文 Kyoko 加強版），下載後重新整理這一頁。"),
+        el("span", "note", "免費下載更自然的 Premium 聲音"),
+        help,
         ghostButton("external", "打開系統設定", async () => { try { await api("/api/open/voices", {}); } catch (e) { flash(e.message, true); } }),
       );
       form.append(tip);
@@ -590,10 +597,11 @@ function recognitionSettings() {
     const rc = el("input"); rc.type = "checkbox"; rc.checked = Speech.prefs().localRecognition !== false;
     rc.onchange = () => { Speech.setPref("localRecognition", rc.checked); Speech.refreshButtons(); };
     rl.append(rc, el("span", null, "語音辨識（對話的麥克風、課文跟讀）"));
-    recForm.append(rl, el("div", "note", "在這台電腦上辨識，錄音不會離開電腦。每次最多 15 秒，按一下麥克風就送出。"));
+    recForm.append(rl, el("div", "note", "在這台電腦上辨識，錄音不會離開電腦。"));
     for (const lang of langs.filter(Speech.hasLocal)) {
-      const row = el("div", "speech-model");
-      row.append(el("span", null, `${langLabel(lang)}辨識模型`));
+      // Same grid as the form labels above, so the columns line up.
+      const row = el("div", "kv speech-model");
+      row.append(el("span", null, `${langLabel(lang)}辨識`));
       if (local.langs[lang].installed) {
         const ok = el("span", "ok");
         ok.append(icon("check"), document.createTextNode("已下載"));

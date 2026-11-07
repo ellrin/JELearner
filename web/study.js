@@ -763,6 +763,11 @@ function composer(v, tr, ja) {
   const total = v.seconds_per_turn;
   let left = total;
   convTimer = setInterval(() => {
+    // While the mic records or the server transcribes, its own countdown is
+    // the one that matters: the turn ring waits, dimmed (one number at a time).
+    const speaking = mic.classList.contains("listening") || mic.classList.contains("busy");
+    timer.classList.toggle("paused", speaking);
+    if (speaking) return;
     left -= 1;
     if (left <= 0) { clearInterval(convTimer); timer.classList.add("over"); secsLabel.textContent = "0"; fill.setAttribute("stroke-dashoffset", C); return; }
     secsLabel.textContent = String(left);
@@ -770,6 +775,9 @@ function composer(v, tr, ja) {
   }, 1000);
 
   function onInput() {
+    // Grow with the text (a spoken answer can be long), up to the CSS max-height.
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
     count.textContent = `${ta.value.length}/${v.max_chars}`;
     send.disabled = !ta.value.trim();
     hint.textContent = "";

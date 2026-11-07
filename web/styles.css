@@ -371,7 +371,15 @@ details.fmt pre { font: 13.5px/1.55 var(--mono); background: var(--surface); pad
 .model .mh { display: flex; gap: 10px; align-items: baseline; }
 .model .sum { color: var(--muted); font-size: 14px; }
 .model .tags { margin-left: auto; display: flex; gap: 4px; }
-.model .meta { font: 500 12.5px var(--mono); color: var(--muted); margin-top: 4px; }
+.model .meta { font: 500 12.5px var(--mono); color: var(--muted); margin-top: 4px; display: flex; flex-wrap: wrap; column-gap: 14px; }
+.model .meta > span { white-space: nowrap; }
+.model .use-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.model .use-row .meta { margin-top: 0; flex: 1 1 auto; }
+.model.dim { opacity: .6; }
+@media (max-width: 560px) {
+  .model .mh { flex-wrap: wrap; }
+  .model .sum { order: 3; flex-basis: 100%; }
+}
 .look-row { display: flex; gap: 16px; align-items: center; }
 .look-row .lbl { font: 500 12.5px var(--mono); color: var(--muted); width: 48px; }
 .themes { display: flex; gap: 6px; }
@@ -696,7 +704,7 @@ details.fmt pre { font: 13.5px/1.55 var(--mono); background: var(--surface); pad
 .composer { position: sticky; bottom: 44px; background: var(--bg); padding: 8px 0 4px; display: flex; flex-direction: column; gap: 8px; }
 .composer .starters { display: flex; gap: 6px; flex-wrap: wrap; }
 .composer .box { display: grid; grid-template-columns: 1fr; grid-auto-flow: column; grid-auto-columns: auto; gap: 10px; align-items: end; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px; padding: 8px 8px 8px 12px; }
-.composer textarea { border: 0; background: none; resize: none; padding: 6px 0; font-size: 15.5px; outline: none; }
+.composer textarea { border: 0; background: none; resize: none; padding: 6px 0; font-size: 15.5px; outline: none; max-height: 9em; overflow-y: auto; }
 .composer textarea:focus { outline: none; }
 .composer .count { font: 500 11.5px var(--mono); color: var(--muted); align-self: center; }
 .composer .c-hint { font-size: 13px; color: var(--warn); min-height: 1em; }
@@ -706,6 +714,7 @@ details.fmt pre { font: 13.5px/1.55 var(--mono); background: var(--surface); pad
 .timer .fill { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; }
 .timer span { font: 600 12px var(--mono); color: var(--muted); }
 .timer.over .fill { stroke: var(--warn); }
+.timer.paused { opacity: .35; transition: opacity .2s; }
 .send { width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; }
 .send:disabled { opacity: .4; cursor: default; }
 .conv-done { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px; margin-bottom: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; font: 700 16px var(--sans); }
@@ -1107,14 +1116,21 @@ ruby rt { font-size: .5em; font-weight: 400; letter-spacing: 0; }
 @media (prefers-reduced-motion: reduce) { .ico.mic-btn.listening { animation: none; } }
 /* On-device recording: seconds left as a badge on the button; a quiet busy state while the server transcribes. */
 .ico.mic-btn { position: relative; }
-.ico.mic-btn[data-left]::after { content: attr(data-left); position: absolute; top: -6px; right: -8px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--panel); border: 1px solid var(--accent-text); color: var(--accent-text); font: 700 10.5px/16px var(--mono); text-align: center; pointer-events: none; }
-.ico.mic-btn.busy { animation: none; color: var(--accent-text); background: var(--accent-soft); cursor: progress; }
-.ico.mic-btn.busy svg { opacity: .55; }
-.speech-model { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 32px; }
-.speech-model > span:first-child { min-width: 8em; color: var(--muted); }
-.speech-model .ok { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-text); }
+.ico.mic-btn[data-left]::after { content: attr(data-left); position: absolute; top: -7px; right: -9px; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 10px; background: var(--panel); border: 1px solid var(--accent-text); color: var(--accent-text); font: 700 11.5px/18px var(--mono); text-align: center; pointer-events: none; }
+/* Transcribing: the mic stays upright (not the generic .ico.busy spin) inside a turning ring. */
+.ico.mic-btn.busy, .paper .ico.mic-btn.busy, .shadow .ico.mic-btn.big.busy, .paper .shadow .ico.mic-btn.big.busy { animation: none; color: var(--accent-text); background: var(--accent-soft); cursor: progress; }
+.ico.mic-btn.busy svg { animation: none; }
+.ico.mic-btn.busy::before { content: ""; position: absolute; inset: 2px; border-radius: 50%; border: 2px solid var(--accent-text); border-top-color: transparent; pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) { .ico.mic-btn.busy::before { animation: spin .9s linear infinite; } }
+.speech-model { min-height: 32px; }
+.speech-model > :nth-child(2) { justify-self: start; }
+.speech-model .ok { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-2-text, var(--accent-text)); }
 .speech-model .ok svg { width: 15px; height: 15px; }
-.voice-tip { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 4px; }
+.voice-tip { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 2px 0 14px; }
+#setSpeech .git-box { margin-top: 4px; }
+/* The grid's 1fr cell will not shrink below its content: let the speed row give way at phone width. */
+.speech-form label > .inline { min-width: 0; }
+.speech-form .inline input[type=range] { min-width: 0; flex: 1 1 0; }
 /* Shadowing panel under a paragraph: listen, say it, matched words light up. */
 .shadow { margin: -4px 0 14px; padding: 10px 12px; border: 1px solid var(--accent-2-text, var(--accent-text)); border-radius: 10px; background: var(--panel); display: flex; flex-direction: column; gap: 8px; }
 .shadow .sh-head { display: flex; align-items: center; gap: 8px; font: 600 12.5px var(--mono); color: var(--muted); }

@@ -1394,20 +1394,32 @@ async function loadModelsStep() {
   const usingLocal = m.engine === "llama-server";
   for (const x of m.catalog.models) {
     const b = brains[x.id];
-    const li = el("li", "model");
+    const tooBig = x.role === "brain" && x.min_memory_gb > m.memory_gb + 0.5;
+    const li = el("li", `model${tooBig ? " dim" : ""}`);
     const mh = el("div", "mh");
     mh.append(el("b", null, `${x.name} ${x.variant}`), el("span", "sum", x.summary));
     const tags = el("span", "tags");
     tags.append(el("span", "tag", role[x.role] ?? x.role));
     if (b?.running) tags.append(el("span", "tag ok", "使用中"));
     else if (b?.chosen && usingLocal) tags.append(el("span", "tag acc", "已選擇"));
-    if (b && !b.installed && !m.external) tags.append(el("span", "tag", "未下載"));
+    if (b && !b.installed && !m.external) {
+      tags.append(el("span", "tag", "未下載"));
+      const help = el("button", "help", "?");
+      help.dataset.tip = `在 PaperComposer 下載，或：hf download ${x.repo} --include "*${x.file_suffix}" --local-dir "${m.home ?? "$LOCAL_LLM_HOME"}/gguf/${x.repo}"`;
+      tags.append(help);
+    }
     mh.append(tags);
-    const meta = x.role === "brain" ? `約 ${x.approx_gb} GB　至少 ${x.min_memory_gb} GB 記憶體　${x.license}` : `${x.runtime === "macos" ? "macOS 內建，不佔模型記憶體" : x.runtime}`;
-    li.append(mh, el("div", "meta", meta));
-    // A downloaded brain that is not the one running: one click to use it.
-    if (b && (b.installed || m.external) && !(b.running || (b.chosen && usingLocal && m.external))) {
-      const use = el("button", "ghost small", "使用這個");
+    const meta = el("div", "meta");
+    const items = x.role === "brain"
+      ? [`約 ${x.approx_gb} GB`, `至少 ${x.min_memory_gb} GB 記憶體`, x.license]
+      : [x.runtime === "macos" ? "macOS 內建，不佔模型記憶體" : x.runtime];
+    items.forEach((t) => meta.append(el("span", null, t)));
+    const row = el("div", "use-row");
+    row.append(meta);
+    // A downloaded brain that is not running: one click starts it (and makes it the engine).
+    if (b && (b.installed || m.external) && !b.running && !(m.external && b.chosen && usingLocal)) {
+      const label = b.chosen && usingLocal ? "啟動" : "使用這個";
+      const use = el("button", "ghost small", label);
       use.onclick = async () => {
         use.disabled = true;
         use.textContent = "啟動中…";
@@ -1418,10 +1430,9 @@ async function loadModelsStep() {
         } catch (e) { flash(e.message, true); }
         loadModelsStep();
       };
-      const row = el("div", "actions-row");
       row.append(use);
-      li.append(row);
     }
+    li.append(mh, row);
     ul.append(li);
   }
 }
