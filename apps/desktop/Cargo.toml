@@ -1,0 +1,18 @@
+[package]
+name = "jelearner"
+version.workspace = true
+edition.workspace = true
+description = "JELearner desktop app"
+
+# Desktop shell (like PaperComposer's): starts the local server in-process on
+# a free 127.0.0.1 port and opens a native window on it (WKWebView on macOS,
+# WebView2 on Windows). docs/decisions.md §6, docs/roadmap.md stage 6.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+jl-server = { path = "../../crates/server" }
+tauri = { version = "2", features = [] }
+tokio = { workspace = true }
+url = "2"

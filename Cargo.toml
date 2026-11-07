@@ -1,7 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/server"]
-# apps/desktop (Tauri) comes later; see docs/roadmap.md.
+members = ["crates/core", "crates/server", "apps/desktop"]
+# `cargo test` / `cargo build` skip the app: it bundles jl-speech, which
+# `cargo tauri build` makes first (scripts/build-speech.sh).
+default-members = ["crates/core", "crates/server"]
+# apps/desktop: the Tauri shell (docs/roadmap.md stage 6).
 
 [workspace.package]
 version = "0.1.0"

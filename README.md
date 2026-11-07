@@ -1,9 +1,13 @@
+<p align="center">
+  <img src="apps/desktop/icons/logo.png" alt="JELearner logo" width="160">
+</p>
+
 # JELearner
 
-本機運作的英文／日文學習秘書：自動抓英日新聞、整理成單字與文法教材、排複習、記錯題、寄週報、排行事曆。之後加上即時語音對話與數位人像，並包成 Mac app。
+本機運作的英文／日文學習秘書：自動抓英日新聞、整理成單字與文法教材、排複習、記錯題、寄週報、排行事曆，用說的練對話與跟讀。可以包成 Mac app；之後加上數位人像。
 
 > 開發中（第二版 B 階段：課程、每日課程、復習筆記本）。已完成：私人工作區、SQLite（生字／文法／複習進度／錯題本）、英日新聞爬蟲（遵守 robots.txt）、新聞 → Markdown 教材（模板可替換）、Claude 兩種連線方式（訂閱／API key）、Gmail／Calendar 介面與模擬實作、本機網頁、離線端到端測試。
-> 尚未完成：向量庫與 RAG、Google OAuth、語音對話（D 階段第二步已完成本機辨識與 15 秒錄音；語音回合計分、聽寫、聽力題待做）、Tauri 打包、數位人像。見 [`docs/roadmap.md`](docs/roadmap.md)。
+> 尚未完成：向量庫與 RAG、Google OAuth、語音對話（D 階段第二步已完成本機辨識與 15 秒錄音；語音回合計分、聽寫、聽力題待做）、Windows 安裝檔、數位人像。見 [`docs/roadmap.md`](docs/roadmap.md)。
 > 第二版進行中：**0-1 起始流程與多使用者、A 階段（積分、等級、難度調整、打字版 AI 對話、今日任務與進度頁）已完成**。完整規劃（多使用者、積分與等級、AI 對話、每日課程、課程配方、語音、學習群組）：[`docs/plan.md`](docs/plan.md)。
 
 ## 執行
@@ -25,6 +29,30 @@ scripts/dev.sh --mock
 會同時啟動模擬的 Claude API 與模擬新聞網站（`cargo run -p jl-server --example mock_services`），把私人工作區 `sources.toml` 的 feed 換成畫面上印出的網址即可。
 
 **macOS 開發**：`scripts/dev.sh` 會用系統的 `security` 保存 API key，避免每次重新編譯都被問鑰匙圈密碼。
+
+## 自己打包成 App（macOS 26 以上）
+
+這個 repo 只提供原始碼，要不要包成 App 由你決定。需要 Xcode Command Line Tools（Swift）與打包工具（裝一次即可）：
+
+```sh
+cargo install tauri-cli --version "^2" --locked
+cd apps/desktop
+APPLE_SIGNING_IDENTITY="你的簽章名稱" cargo tauri build --bundles app
+cp -R ../../target/release/bundle/macos/JELearner.app /Applications/
+```
+
+- 打包前會自動編譯語音辨識小工具 `jl-speech`（`scripts/build-speech.sh`），放進 App 一起簽章。
+- App 內建伺服器（隨機埠）並開啟原生視窗，關閉時一併結束本機模型。第一次用麥克風時系統會詢問權限。
+- **簽章**：Claude 的 API key 存在鑰匙圈，沒有固定簽章的 App 每次重新打包都會被要求輸入密碼。自己用的話建立一張免費的自簽憑證即可（作法見 PaperComposer 的 README「自己打包成 App」），給別人用需要 Apple Developer ID 與公證。
+- **從 Finder 開啟讀不到 shell 變數**：本機模型的共用資料夾要寫在設定檔 `~/Library/Application Support/JELearner/config.toml`：
+
+  ```toml
+  [llama]
+  home = "/Users/你/LocalLLM"
+  ```
+
+- 圖示原稿在 `apps/desktop/icons/logo.svg`（字母以線條繪製，不依賴字型）；換圖後在 `apps/desktop/` 執行 `cargo tauri icon icons/logo.png -o icons`。
+- `cargo test`／`cargo build` 不會編譯 App（`Cargo.toml` 的 `default-members`），要打包時才需要 Swift。
 
 ## 私人工作區
 

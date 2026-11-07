@@ -37,3 +37,5 @@
 # Tauri generated files (later)
 /apps/desktop/gen/
 /tools/macos-speech/.build
+/apps/desktop/binaries
+/apps/desktop/gen

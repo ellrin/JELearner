@@ -63,8 +63,9 @@
 
 ## 第六階段：Tauri 打包
 
-- [ ] `apps/desktop`（沿用 PaperComposer：同程序啟動伺服器、隨機埠、WKWebView）
-- [ ] 打包 `.app`／`.dmg`、圖示、簽章
+- [x] `apps/desktop`（沿用 PaperComposer：同程序啟動伺服器、隨機埠、WKWebView；關閉時結束本機模型）
+- [x] 打包 `.app`、圖示（與 PaperComposer 同系列的霓虹對話框）、自簽憑證簽章；`jl-speech` 以 externalBin 一起打包，Info.plist 有麥克風與語音辨識說明（2026-11，M6 實測：App 內辨識英日正確）
+- [ ] `.dmg`、Windows 安裝檔、麥克風在 App 視窗內的實機錄音（需人工測試）
 - [ ] 需要原生能力的 handler 改為 Tauri command（麥克風、通知、深連結）
 
 ## 之後：數位人像

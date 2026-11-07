@@ -10,7 +10,11 @@ cargo test                                   # everything, offline (mock servers
 cargo run -p jl-server                       # http://127.0.0.1:7979
 cargo run -p jl-server --example mock_services   # mock Claude + news site on :7980
 scripts/dev.sh --mock                        # both of the above together
+cd apps/desktop && APPLE_SIGNING_IDENTITY="…" cargo tauri build --bundles app   # the Mac app
 ```
+
+`apps/desktop` is not a default member: `cargo test` / `cargo build` skip it (it bundles
+`jl-speech`, built by `scripts/build-speech.sh` before `cargo tauri build`).
 
 `cargo test` must pass before every commit.
 
