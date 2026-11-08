@@ -1366,10 +1366,19 @@ async function loadClaudeStep(fresh = false) {
   $("#setKeySave").hidden = !editing;
   $("#setKeyMasked").textContent = c.api.configured ? `${c.api.masked}　（${{ env: "環境變數", keychain: "系統金鑰圈", file: "設定資料夾", settings: "設定" }[c.api.source] ?? c.api.source}）` : "";
 
-  const sel = $("#setModel");
-  sel.innerHTML = "";
-  for (const m of c.models) { const o = el("option", null, `${m.id}　${m.summary}`); o.value = m.id; if (m.id === c.model) o.selected = true; sel.append(o); }
-  if (!c.models.some((m) => m.id === c.model)) { const o = el("option", null, c.model); o.value = c.model; o.selected = true; sel.prepend(o); }
+  // Short name and what it is good at first (the id is long); the default of each choice is marked.
+  const fill = (sel, current, def) => {
+    sel.innerHTML = "";
+    for (const m of c.models) {
+      const o = el("option", null, `${m.summary || m.id}${m.id === def ? "（預設）" : ""}`);
+      o.value = m.id; o.title = m.id;
+      if (m.id === current) o.selected = true;
+      sel.append(o);
+    }
+    if (current && !c.models.some((m) => m.id === current)) { const o = el("option", null, current); o.value = current; o.selected = true; sel.prepend(o); }
+  };
+  fill($("#setModel"), c.model, c.defaults?.model);
+  fill($("#setModelRt"), c.realtime_model, c.defaults?.realtime);
   $("#setEffort").value = c.effort ?? "";
   return c;
 }
@@ -1405,8 +1414,10 @@ $("#setKeySave").onclick = async () => {
     await refreshStatus(); loadClaudeStep(); greet();
   } catch (e) { flash(e.message, true); }
 };
-$("#setModel").onchange = async () => { await api("/api/settings/claude", { model: $("#setModel").value }); refreshStatus(); };
-$("#setEffort").onchange = async () => { await api("/api/settings/claude", { effort: $("#setEffort").value }); };
+const saveClaude = (body, then) => api("/api/settings/claude", body).then(() => { flash("已儲存"); then?.(); }).catch((e) => flash(e.message, true));
+$("#setModel").onchange = () => saveClaude({ model: $("#setModel").value }, refreshStatus);
+$("#setModelRt").onchange = () => saveClaude({ realtime_model: $("#setModelRt").value });
+$("#setEffort").onchange = () => saveClaude({ effort: $("#setEffort").value });
 // Tests the method shown (subscription or API key), whatever is chosen above.
 $("#setTest").onclick = () => busy($("#setTest"), async () => {
   const out = $("#setTestOut");

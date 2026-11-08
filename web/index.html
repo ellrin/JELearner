@@ -392,10 +392,11 @@
           <details class="other-way adv">
             <summary>進階</summary>
             <div class="form">
-              <label><span>模型</span><select id="setModel"></select><span class="inline"><button class="help" data-tip="兩種連線方式用同一個模型設定；清單來自 models/catalog.json。">?</button></span></label>
-              <label><span>effort</span><select id="setEffort">
-                <option value="">模型預設</option><option>low</option><option>medium</option><option>high</option><option>xhigh</option><option>max</option>
-              </select></label>
+              <label><span>產生課程</span><select id="setModel" aria-label="產生課程用的模型"></select><span class="inline"><button class="help" aria-label="說明：產生課程用的模型" data-tip="寫課文、排課程大綱、挑主題卡時用的模型。">?</button></span></label>
+              <label><span>即時對話</span><select id="setModelRt" aria-label="即時對話用的模型"></select><span class="inline"><button class="help" aria-label="說明：即時對話用的模型" data-tip="AI 對話的每一句回覆和對話結束的評分用的模型。越快，等回覆的時間越短。">?</button></span></label>
+              <label><span>思考深度</span><select id="setEffort" aria-label="產生課程時的思考深度">
+                <option value="">模型預設</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">很高</option><option value="max">最高</option>
+              </select><span class="inline"><button class="help" aria-label="說明：思考深度" data-tip="產生課程時模型想得多深。越深品質可能越好，但越慢、越貴。對話固定用最快的設定。">?</button></span></label>
             </div>
           </details>
           <div class="actions-row"><button class="ghost" id="setTest">測試連線</button><span class="note" id="setTestOut"></span></div>

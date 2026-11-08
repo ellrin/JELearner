@@ -803,13 +803,17 @@ per_day = 10                # 每天帶入幾個新字
 - [x] F2 協助設定與家人模式（2026-11，decisions.md 第 16 節；真的 GitHub deploy key 尚未實測）：第一次打開的兩個按鈕（「請家人幫我設定」要等協助設定完成才有意義，從 F1 移到這裡）；deploy key 產生與配對、以該金鑰 clone；交還使用者；家人模式的自動同步（開啟 pull、單元完成與關閉時 push、只寫 `profiles/<id>/`、離線補傳、壞掉時一句話）；設定頁分成「我的學習」與「管理員設定」；管理員端「邀請家人」；測試（本機 bare repo 模擬兩台電腦、離線、金鑰失效）
 - [x] F3 單一入口（2026-11，decisions.md 第 17 節）：「開始今天的課」、主題卡（新聞＋興趣＋通識比例）、換一批（排除已出現）、選定後只產生今天這一課；右欄「產生教材」預設收起，今日頁的「其他方式」帶到貼文章／網址與清單排課（課程頁的「新課程」保留給想自己排課的人）；重點主題（在地設定集 `profiles/<id>/focus/<語言>.toml`、各類別換成在地版本、依重點挑新聞、重點標籤）；測試（mock 新聞與 mock provider：`today_topic_cards_and_focus`）
 - [x] F4 上傳回饋與興趣記憶（2026-11，decisions.md 第 18 節）：「收到了」卡片（收到什麼、多大、存在哪）、做成課程前預覽大綱（`preview: true`，確認才存）、模型推測興趣（可刪改的標籤、確認才寫入 `interests.csv`）；測試（`upload_feedback_interests_and_outline_preview`）
-- [ ] F5 iPad 上課、筆電當後台（評估中，2026-11）：daidai 的 Windows 筆電（文書機、8 GB）跑 server、Git 同步與 Claude Code（她自己的訂閱），iPad 的 Safari 只負責上課；Windows 筆電也可以直接用 Chrome 開。不跑本機模型。
-  - 語音辨識：作者選「流暢」，用瀏覽器的即時辨識（iPad Safari 是 Apple 的、Chrome 是 Google 的雲端），邊講邊出字；不用 Whisper（沒有 GPU，對話會卡）。Tauri 的 Windows App 視窗（WebView2）多半沒有即時辨識，所以 Windows 上用 Chrome 開網頁版。
-  - 朗讀：iPad 的系統聲音；Windows 上是系統聲音（日文要裝語言包）。
-  - HTTPS：iPad 的麥克風只在 HTTPS 下能用 → 筆電與 iPad 都裝 Tailscale，用 Tailscale Serve 的網址。上課時筆電要開著；連不到時 iPad 顯示「請先打開筆電」。
-  - 要做：server 的 Windows 相容（呼叫 `claude`／`git` 的方式、路徑、關閉子程序）、iPad 上預設用即時辨識、「上課模式」（遠端時藏起管理設定與在 server 上「打開」東西的按鈕）、加入主畫面的圖示與 manifest、連不到時的頁面；在她的筆電與 iPad 上實測（Safari 日文即時辨識需要開啟 Siri／聽寫）。
-  - 不做：原生 iPad App（iOS 不能執行 git／claude，Claude 只能用 API key）；在作者 Mac 上替她跑 server。
-
+- [ ] F5 iPad 獨立上課（2026-11 定案）：**Mac 備課、iPad 上課，兩邊只透過共用的 private repo 交換資料，iPad 不連任何電腦**（decisions.md 第 19、20 節）。
+  - 分工：管理員的 Mac（JELearner 本體）替家人產生課程（Sonnet）、推到 repo 的 `profiles/<家人>/`，同步時讀回她的作答紀錄、算積分與調難度；iPad 是放在 GitHub Pages 的網頁 App（加入主畫面），從 repo 讀課（GitHub API）、即時的部分直接呼叫 Claude API（Haiku）、把作答紀錄寫回她自己的資料夾。
+  - 課程檔已內嵌整堂課的資料（題目、答案、對話設定），作答紀錄沿用現有格式（積分、對話、錯題），所以 Mac 端「重建資料庫」的規則照用；她的課程要進 git（作者自己的課程維持不必上 git）。
+  - 金鑰：Claude API key 放在 Console 獨立 workspace 並設每月上限；GitHub 用只開這個 repo、Contents 讀寫的 fine-grained token；由管理員的 Mac 顯示 QR code 給 iPad 掃，她看不到設定。
+  - 費用估計（未實測）：iPad 上的即時部分用 Haiku，每月約 NT$25；課程由管理員的 Mac 產生。
+  - [x] 階段 0 可行性（iPad mini 第 6 代，Safari 26.4，2026-11）：Kyoko 朗讀可用；朗讀與辨識來回 5 輪都收得到聲音；從 Safari 直接呼叫 Claude API（Haiku 5.5）約 1.7 秒、CORS 不擋。發現：自動在朗讀後 0.2 秒開麥克風時，辨識收到 iPad 自己唸的句子（回音）；單句辨識第一個字 11 秒（待重測）。待測：更新到 iPadOS 27.2 後重測、英文辨識與聲音、加入主畫面後的辨識、「按一下才開始說」與等待 0.8 秒是否消除回音、GitHub 寫入（延到階段 3 用正式 token 測）。測試頁：`gh-pages` 分支的 `lab/`（https://ellrin.github.io/JELearner/lab/）。
+  - [x] 階段 1 Mac 的模型分工：產生課程（課文、大綱、主題卡、重點設定集、興趣推測）用 `[claude] model`（預設 Sonnet 5.5），即時的 AI 對話與對話評分用 `[claude] realtime_model`（預設 Haiku 5.5、effort low）；訂閱與 API key 兩條路都適用；Haiku 不送伺服器端拒答備援（Haiku 沒有）；設定頁「進階」可各自選。
+  - [ ] 階段 2 替家人備課與收回作答：選家人 → 依她的難度與興趣一次產生幾天的課（每天幾堂可選）→ 推上 repo；對話與批改的提示詞在備課時算好寫進課程檔；同步時讀回作答紀錄、算積分與難度；測試（mock 作答檔）
+  - [ ] 階段 3 iPad 上課 App：GitHub Pages 上的網頁 App、加入主畫面、讀課（GitHub API）、各單元畫面、即時辨識（每次新的辨識物件、按一下才開始說）、朗讀、Haiku 對話與批改、作答紀錄一次一個 commit 寫回（遇到管理員剛推就以最新版本重做，只寫自己的資料夾所以不會衝突）、離線可複習、QR code 設定；測試（Playwright WebKit、iPad mini 尺寸、mock GitHub 與 Claude；真的 Haiku 與拋棄式 repo 各一次）
+  - [ ] 階段 4 實機：作者的 iPad mini 依檢查表測完，再裝到她的 iPad
+  - 不做：在 Windows 筆電或作者 Mac 上替她跑 server、原生 iPad App（iOS 不能執行 git／claude，App 要簽章）、Whisper（沒有 GPU，對話會卡）。
 ### 第 0-2＋E 階段：家庭成員與學習群組
 
 - [ ] ~~家庭成員 deploy key 配對~~ → 移到第 F 階段 F2（協助設定與家人模式）

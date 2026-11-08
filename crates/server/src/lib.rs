@@ -294,28 +294,52 @@ pub async fn resolve_engine(s: &Shared, fresh: bool) -> Result<Resolved, String>
 }
 
 /// The engine for this request, from the current settings.
+/// What a model call is for: making lessons and courses (`claude.model`,
+/// Sonnet by default) or answering while the learner waits (`realtime`,
+/// Haiku by default: AI conversation turns and their evaluation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Task {
+    Generate,
+    Realtime,
+}
+
+/// The provider for making lessons and courses.
 pub async fn provider(s: &Shared) -> Result<Arc<dyn LlmProvider>, ApiError> {
+    provider_task(s, Task::Generate).await
+}
+
+pub async fn provider_task(s: &Shared, task: Task) -> Result<Arc<dyn LlmProvider>, ApiError> {
     if let Some(p) = &s.provider_override {
         return Ok(p.clone());
     }
     let which = resolve_engine(s, false).await.map_err(unavailable)?;
-    provider_for(s, which).await
+    provider_for_task(s, which, task).await
 }
 
 /// A provider for one specific engine, as the chosen user.
 pub async fn provider_for(s: &Shared, which: Resolved) -> Result<Arc<dyn LlmProvider>, ApiError> {
+    provider_for_task(s, which, Task::Generate).await
+}
+
+pub async fn provider_for_task(s: &Shared, which: Resolved, task: Task) -> Result<Arc<dyn LlmProvider>, ApiError> {
+    // The local engine has one model for everything.
     if which == Resolved::LlamaServer {
         return Ok(Arc::new(LlamaServerProvider::new(local_llama(s).await?)));
     }
     let (_, cli) = claude_identity(s).await;
     let key = api_key(s).await;
     let st = s.settings.read().await;
+    let mut cfg = st.claude.clone();
+    if task == Task::Realtime {
+        cfg.model = st.realtime.model.clone();
+        cfg.effort = st.realtime.effort.clone();
+    }
     Ok(match which {
         Resolved::LlamaServer => unreachable!("handled above"),
-        Resolved::Subscription => Arc::new(ClaudeCodeProvider::new(cli, st.claude.model.clone(), st.claude.effort.clone())),
+        Resolved::Subscription => Arc::new(ClaudeCodeProvider::new(cli, cfg.model, cfg.effort)),
         Resolved::Api => {
             let (key, _) = key.ok_or_else(|| unavailable(NO_CLAUDE))?;
-            Arc::new(ClaudeProvider::new(st.claude.clone(), key))
+            Arc::new(ClaudeProvider::new(cfg, key))
         }
     })
 }

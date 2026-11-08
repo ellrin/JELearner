@@ -111,7 +111,16 @@ fn mock_claude(calls: Arc<Mutex<Vec<Value>>>) -> Router {
                         .into_response();
                 }
                 assert_eq!(h["anthropic-version"], "2026-10-21");
-                assert_eq!(h["anthropic-beta"], "server-side-fallback-2026-07-01");
+                // Refusal fallbacks exist for Sonnet and Opus, not for Haiku (real-time answers).
+                if b["model"].as_str().unwrap_or("").starts_with("claude-haiku") {
+                    assert!(h.get("anthropic-beta").is_none() && b.get("fallbacks").is_none(), "no fallbacks on Haiku");
+                } else {
+                    assert_eq!(h["anthropic-beta"], "server-side-fallback-2026-07-01");
+                }
+                // Conversation turns and their evaluation are real time (Haiku); the rest makes lessons (Sonnet).
+                let realtime = b["output_config"]["format"]["schema"]["properties"]["recast"].is_object()
+                    || b["output_config"]["format"]["schema"]["properties"]["fluency"].is_object();
+                assert_eq!(b["model"], if realtime { "claude-haiku-5-5" } else { "claude-sonnet-5-5" }, "model per task");
                 assert!(b.get("temperature").is_none());
                 calls.lock().unwrap().push(b.clone());
                 let props = &b["output_config"]["format"]["schema"]["properties"];
@@ -281,7 +290,7 @@ async fn full_text_pipeline_offline() {
     {
         let calls = claude_calls.lock().unwrap();
         let req = &calls[0];
-        assert_eq!(req["model"], "claude-opus-5-5", "model from the catalog, not hard-coded");
+        assert_eq!(req["model"], "claude-sonnet-5-5", "lessons: the catalog's generation model, not hard-coded");
         assert!(req["messages"][0]["content"].as_str().unwrap().contains("Several chipmakers announced plans"));
         assert!(req["system"].as_str().unwrap().contains("B2"));
         assert!(req["messages"][0]["content"].as_str().unwrap().contains("resilient"), "known words passed");
@@ -495,7 +504,7 @@ async fn subscription_engine_through_claude_code() {
     // A lesson from pasted text, through the subscription.
     let (st, l) = c.post("/api/lessons", json!({"lang": "en", "title": "Chips", "text": "Several chipmakers announced new factories."})).await;
     assert_eq!(st, StatusCode::OK, "{l}");
-    assert_eq!(l["engine"], "claude-subscription:claude-opus-5-5");
+    assert_eq!(l["engine"], "claude-subscription:claude-sonnet-5-5");
     let args = std::fs::read_to_string(cli_dir.path().join("last-args")).unwrap();
     assert!(args.contains("--json-schema") && args.contains("--safe-mode"), "{args}");
     assert!(std::fs::read_to_string(cli_dir.path().join("last-stdin")).unwrap().contains("Several chipmakers"));
@@ -716,7 +725,7 @@ async fn typed_conversation_until_locked() {
         assert_eq!(final_call["messages"].as_array().unwrap().len(), 11, "cue + opening + 4 × (turn, reply) + last turn: the whole transcript");
         assert!(final_call["system"].as_str().unwrap().contains("last turn"));
         assert!(final_call["system"].as_str().unwrap().contains(&targets[0]));
-        assert_eq!(final_call["model"], "claude-opus-5-5");
+        assert_eq!(final_call["model"], "claude-haiku-5-5", "conversation turns: the real-time model");
     }
 
     let (code, done) = c.post(&format!("/api/conversations/{id}/finish"), json!({})).await;

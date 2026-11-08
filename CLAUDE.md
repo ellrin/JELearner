@@ -54,6 +54,9 @@ cd apps/desktop && APPLE_SIGNING_IDENTITY="…" cargo tauri build --bundles app 
   Never touch, store or forward Claude account credentials; never call the real CLI in
   tests (test settings point `claude_bin` at a nonexistent path; use `claude_code::fake`).
 - Model names live in `models/catalog.json` / `config.toml`, never in code (tests excepted).
+  Two models by task (decisions §19): `Task::Generate` (lessons, courses; `cloud.default`,
+  Sonnet) and `Task::Realtime` (conversation turns and their evaluation; `cloud.realtime`,
+  Haiku, no refusal fallbacks) — get a provider with `provider_task`.
   Current Claude API: `anthropic-version: 2026-10-21`, no `temperature`/`top_p`,
   structured output via `output_config.format`, effort via `output_config.effort`,
   `fallbacks: "default"` with beta `server-side-fallback-2026-07-01`, check

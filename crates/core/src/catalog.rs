@@ -27,6 +27,12 @@ pub struct Cloud {
     pub default: String,
     #[serde(default)]
     pub effort: Option<String>,
+    /// The model for answers the learner waits for (conversation turns);
+    /// `None` = the same as `default`.
+    #[serde(default)]
+    pub realtime: Option<String>,
+    #[serde(default)]
+    pub realtime_effort: Option<String>,
     #[serde(default)]
     pub note: String,
     pub models: Vec<CloudModel>,

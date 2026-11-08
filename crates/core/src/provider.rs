@@ -127,6 +127,12 @@ pub struct ClaudeConfig {
     pub fallbacks: bool,
 }
 
+/// Server-side refusal fallbacks exist for the Opus, Sonnet and Fable lines;
+/// Haiku has none (the request would be rejected).
+pub fn supports_fallbacks(model: &str) -> bool {
+    !model.starts_with("claude-haiku")
+}
+
 pub struct ClaudeProvider {
     http: reqwest::Client,
     cfg: ClaudeConfig,
@@ -167,7 +173,7 @@ impl ClaudeProvider {
         if !output.is_empty() {
             body["output_config"] = Value::Object(output);
         }
-        if self.cfg.fallbacks {
+        if self.cfg.fallbacks && supports_fallbacks(&self.cfg.model) {
             body["fallbacks"] = json!("default");
         }
         body
@@ -198,7 +204,7 @@ impl ClaudeProvider {
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", CLAUDE_API_VERSION)
             .json(&body);
-        if self.cfg.fallbacks {
+        if self.cfg.fallbacks && supports_fallbacks(&self.cfg.model) {
             rb = rb.header("anthropic-beta", CLAUDE_FALLBACK_BETA);
         }
         let resp = rb.send().await.map_err(|e| ProviderError::Network(name.clone(), e.to_string()))?;

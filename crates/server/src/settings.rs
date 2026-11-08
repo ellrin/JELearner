@@ -87,6 +87,9 @@ pub struct Settings {
     pub workspace: Option<PathBuf>,
     pub engine: EngineKind,
     pub claude: ClaudeConfig,
+    /// The model for answers the learner waits for (conversation turns and
+    /// their evaluation); lessons and courses use `claude.model`.
+    pub realtime: Realtime,
     /// Set by tests; otherwise the key is looked up (env, keychain, file).
     pub claude_api_key: Option<String>,
     pub use_keychain: bool,
@@ -159,6 +162,13 @@ struct SpeechSection {
     bin: Option<PathBuf>,
 }
 
+/// Model and effort for real-time answers (catalog `cloud.realtime`).
+#[derive(Debug, Clone)]
+pub struct Realtime {
+    pub model: String,
+    pub effort: Option<String>,
+}
+
 #[derive(Deserialize, Default)]
 struct EngineSection {
     kind: Option<String>,
@@ -167,6 +177,8 @@ struct EngineSection {
 struct ClaudeSection {
     model: Option<String>,
     effort: Option<String>,
+    realtime_model: Option<String>,
+    realtime_effort: Option<String>,
     fallbacks: Option<bool>,
     bin: Option<PathBuf>,
 }
@@ -257,6 +269,13 @@ impl Settings {
                 effort: env("JELEARNER_CLAUDE_EFFORT").or(cfg.claude.effort).or_else(|| catalog.cloud.effort.clone()),
                 fallbacks: cfg.claude.fallbacks.unwrap_or(true),
             },
+            realtime: Realtime {
+                model: env("JELEARNER_CLAUDE_REALTIME_MODEL")
+                    .or(cfg.claude.realtime_model)
+                    .or_else(|| catalog.cloud.realtime.clone())
+                    .unwrap_or_else(|| catalog.cloud.default.clone()),
+                effort: env("JELEARNER_CLAUDE_REALTIME_EFFORT").or(cfg.claude.realtime_effort).or_else(|| catalog.cloud.realtime_effort.clone()),
+            },
             claude_api_key: None,
             use_keychain: env("JELEARNER_NO_KEYCHAIN").is_none(),
             claude_bin: env("JELEARNER_CLAUDE_BIN").map(PathBuf::from).or(cfg.claude.bin),
@@ -300,6 +319,10 @@ impl Settings {
                 model: catalog.cloud.default.clone(),
                 effort: catalog.cloud.effort.clone(),
                 fallbacks: true,
+            },
+            realtime: Realtime {
+                model: catalog.cloud.realtime.clone().unwrap_or_else(|| catalog.cloud.default.clone()),
+                effort: catalog.cloud.realtime_effort.clone(),
             },
             claude_api_key: None,
             use_keychain: false,

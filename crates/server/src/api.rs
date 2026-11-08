@@ -1283,6 +1283,11 @@ async fn claude_status(State(s): State<Shared>, Query(q): Query<FreshQuery>) -> 
         let st = s.settings.read().await;
         (st.claude.model.clone(), st.claude.effort.clone(), st.catalog.cloud.models.clone(), st.engine)
     };
+    let (realtime, defaults) = {
+        let st = s.settings.read().await;
+        let c = &st.catalog.cloud;
+        (st.realtime.clone(), json!({ "model": c.default, "realtime": c.realtime.clone().unwrap_or_else(|| c.default.clone()) }))
+    };
     let k = api_key(&s).await;
     let (who, cli) = claude_identity(&s).await;
     // Without a chosen user nobody's sign-in is shown.
@@ -1302,6 +1307,9 @@ async fn claude_status(State(s): State<Shared>, Query(q): Query<FreshQuery>) -> 
         "install": jl_core::claude_code::INSTALL_HINT,
         "model": model,
         "effort": effort,
+        "realtime_model": realtime.model,
+        "realtime_effort": realtime.effort,
+        "defaults": defaults,
         "models": models,
     })))
 }
@@ -1338,6 +1346,7 @@ struct ClaudeSettingsBody {
     key: Option<String>,
     model: Option<String>,
     effort: Option<String>,
+    realtime_model: Option<String>,
 }
 
 async fn claude_settings(State(s): State<Shared>, Json(b): Json<ClaudeSettingsBody>) -> R<Value> {
@@ -1355,6 +1364,13 @@ async fn claude_settings(State(s): State<Shared>, Json(b): Json<ClaudeSettingsBo
             settings::write_config_value(dir, Some("claude"), "model", toml::Value::String(m.clone())).map_err(fail)?;
         }
         st.claude.model = m;
+    }
+    if let Some(m) = b.realtime_model.filter(|m| !m.trim().is_empty()) {
+        let m = m.trim().to_string();
+        if let Some(dir) = &st.app_dir {
+            settings::write_config_value(dir, Some("claude"), "realtime_model", toml::Value::String(m.clone())).map_err(fail)?;
+        }
+        st.realtime.model = m;
     }
     if let Some(e) = b.effort {
         let e = e.trim().to_string();

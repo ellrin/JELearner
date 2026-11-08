@@ -130,3 +130,18 @@ tokio、axum 0.8、reqwest（rustls）、sqlx 0.8（SQLite，執行期查詢，�
 - **先看大綱再建立**：`POST /api/courses` 加 `preview: true` 時只規劃不儲存，回傳整份大綱；學習者看過課名與每課要學什麼，按「就這樣，建立課程」才用 `POST /api/courses/confirm` 存檔（檢查語言、不能是每日課程、清單路徑必須在自己的資料夾裡）。按「不要」什麼都不留（上傳的檔案本身已經存好）。
 - **興趣記憶**：讀得出文字的上傳（文章、筆記、清單、每週素材），模型讀前 6000 字，猜 1–4 個主題關鍵字（學習者的母語、已經有的不重複；考試用的單字表可以一個都不給）。關鍵字是可以拿掉、可以自己加的小標籤；按「記住」才寫入這位使用者的 `interests.csv`，之後抓新聞與主題卡都會用。一次上傳多個檔案時只問前 3 個，避免一次呼叫太多次模型。PDF 與圖片還讀不出文字，不問。
 - **測試**：`upload_feedback_interests_and_outline_preview`（上傳 Markdown → 建議排除已有興趣、建議不寫檔、只能讀自己資料夾裡的文字檔 → 確認寫入 → 預覽不存、確認才存、竄改的清單路徑被擋）；`picker.rs` 單元測試（關鍵字清理）。前端以 Playwright 對 mock 服務實測。
+
+## 19. 兩個模型：產生課程與即時回覆（第 F 階段 F5 階段 1，2026-11）
+
+- **決定**：模型依用途分兩個。產生課程（課文、課程大綱、主題卡、重點設定集、興趣推測）用 `[claude] model`，預設 **Sonnet 5.5**；學習者正在等的回覆（AI 對話每一句、對話結束的評分）用 `[claude] realtime_model`，預設 **Haiku 5.5**、effort `low`。兩者都寫在 `models/catalog.json` 的 `cloud.default` 與 `cloud.realtime`，設定頁「進階」可以各自換。
+- **理由**：Anthropic 對 Haiku 5.5 的定位是「延遲與價格最低」、適合即時應用；對話最需要的是回得快，Opus 標示「中等」速度。課程是一次產生、品質比速度重要，用 Sonnet 5.5（速度與能力的平衡，價格是 Opus 5.5 的一半）。
+- **細節**：伺服器端的拒答備援（`fallbacks`）只有 Opus、Sonnet、Fable 有，送給 Haiku 的請求不帶這個欄位與 beta header。本機引擎（llama-server）只有一個模型，兩種用途都用它。程式裡用 `Task::Generate`／`Task::Realtime` 選模型（`provider_task`），不在程式裡寫模型名稱。
+- **測試**：e2e 的 mock Claude 檢查每個請求的模型：對話與評分是 Haiku 且沒有備援 header，其餘是 Sonnet。
+
+## 20. iPad 獨立上課：Mac 備課、iPad 上課（第 F 階段 F5，2026-11）
+
+- **決定**：家人用 iPad 上課時，iPad 不連任何電腦。管理員的 Mac 替她備課並推到共用的 private repo；iPad 是 GitHub Pages 上的網頁 App，從 repo 讀課、即時部分直接呼叫 Claude API（Haiku）、把作答紀錄寫回她自己的資料夾；Mac 同步時讀回作答、算積分與難度。
+- **為什麼不是其他做法**：Windows 筆電的日文語音辨識弱；讓 iPad 連到某台電腦上的 server 需要那台電腦一直醒著；原生 iPad App 不能執行 git、claude 與 `jl-speech`，Claude 只能用 API key，還要簽章；整個程式搬進 iPad 等於重寫，而且網頁抓不了新聞（CORS）。備課本來就是 Mac 在做，iPad 只需要上課的部分。
+- **前提的驗證**：階段 0 在作者的 iPad mini 上確認 Safari 的語音辨識、朗讀與從網頁直接呼叫 Claude API 都可行（plan 第 F 階段 F5）。
+- **安全**：網頁只有程式碼、沒有資料；Claude API key 放在設有每月上限的獨立 workspace；GitHub token 只開這一個 repo 的檔案讀寫；金鑰只存在她的 iPad 上。
+

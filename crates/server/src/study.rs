@@ -4,7 +4,7 @@
 //! [`Shared`] so it can become a Tauri command later.
 
 use crate::api::{free_path, need_lang, parse_lang, ws};
-use crate::{bad, fail, provider, unavailable, ApiError, Shared};
+use crate::{bad, fail, unavailable, ApiError, Shared};
 use axum::extract::{Path as AxPath, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -667,7 +667,7 @@ async fn start_conversation(State(s): State<Shared>, Json(b): Json<StartBody>) -
         };
         (c, learner(&l.ws, lang, &level), ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.conversation.seconds_per_turn, opening)
     };
-    let p = provider(&s).await?;
+    let p = crate::provider_task(&s, crate::Task::Realtime).await?;
     c.engine = p.id();
     if opening.trim().is_empty() {
         let req = conversation::turn_request(&templates, &c, &learner).map_err(|e| bad(e.to_string()))?;
@@ -740,7 +740,7 @@ async fn conversation_turn(State(s): State<Shared>, AxPath(id): AxPath<i64>, Que
     let detected = conversation::detect_used(&text, &c.targets, c.lang);
     c.turns.push(Turn { role: Speaker::Me, text, recast: String::new(), starters: vec![], used: detected.clone(), at: Utc::now() });
     let req = conversation::turn_request(&templates, &c, &learner).map_err(|e| bad(e.to_string()))?;
-    let p = provider(&s).await?;
+    let p = crate::provider_task(&s, crate::Task::Realtime).await?;
     let reply = conversation::parse_turn(&p.chat(&req).await.map_err(api_err)?).map_err(api_err)?;
     let used = conversation::merge_used(detected, &reply.used_targets, &c.targets);
     if let Some(me) = c.turns.last_mut() {
@@ -783,7 +783,7 @@ async fn finish_conversation(State(s): State<Shared>, AxPath(id): AxPath<i64>, Q
         (c, lr, ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.id.clone())
     };
     let req = conversation::review_request(&templates, &c, &learner).map_err(|e| bad(e.to_string()))?;
-    let p = provider(&s).await?;
+    let p = crate::provider_task(&s, crate::Task::Realtime).await?;
     let review = conversation::parse_review(&p.complete(&req).await.map_err(api_err)?).map_err(api_err)?;
     let score = review.score();
     // Every counted turn was checked for real content when it was sent.
