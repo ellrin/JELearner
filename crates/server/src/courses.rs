@@ -31,6 +31,7 @@ type R<T> = Result<Json<T>, ApiError>;
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/courses", get(list_courses).post(create_course))
+        .route("/api/courses/confirm", axum::routing::post(confirm_course))
         .route("/api/courses/lists", get(word_lists))
         .route("/api/courses/{id}", get(get_course))
         .route("/api/courses/{id}/extend", post(extend_course))
@@ -237,6 +238,10 @@ struct CreateBody {
     new_per_lesson: u32,
     /// Let the model name the fixed course's lessons (default: when an engine is ready).
     describe: Option<bool>,
+    /// Plan only: return the outline without saving it (the learner looks at
+    /// it first, then `POST /api/courses/confirm` saves it; stage F4).
+    #[serde(default)]
+    preview: bool,
 }
 
 /// Stored news below this many articles says little about a topic (a
@@ -305,7 +310,7 @@ fn display_stem(file: &str) -> String {
     if (lower.ends_with("-en") || lower.ends_with("-ja")) && stem.len() > 3 { stem[..stem.len() - 3].to_string() } else { stem }
 }
 
-fn read_workspace_list(ws: &Workspace, rel: &str) -> Result<String, ApiError> {
+pub(crate) fn read_workspace_list(ws: &Workspace, rel: &str) -> Result<String, ApiError> {
     let p = ws.root.join(rel);
     let canon = p.canonicalize().map_err(|_| bad(format!("找不到 {rel}")))?;
     let root = ws.profile_dir().canonicalize().map_err(|e| fail(e.to_string()))?;
@@ -400,10 +405,41 @@ async fn create_course(State(s): State<Shared>, Json(b): Json<CreateBody>) -> R<
         }
         other => return Err(bad(format!("不支援的課程種類：{other}（topic、fixed）"))),
     };
+    if b.preview {
+        let total = course.lessons.len();
+        return Ok(Json(json!({ "preview": course, "total": total, "warnings": warnings })));
+    }
     let l = ws(&s).await?;
     store::save_new(&l.ws, &mut course).map_err(course_err)?;
     let mut out = course_json(&l, &course).await?;
     out["warnings"] = json!(warnings);
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+struct ConfirmBody {
+    course: Course,
+}
+
+/// Save an outline the learner looked at (`preview: true` above).
+async fn confirm_course(State(s): State<Shared>, Json(b): Json<ConfirmBody>) -> R<Value> {
+    let mut c = b.course;
+    if c.kind == CourseKind::Daily || c.lessons.is_empty() || c.name.trim().is_empty() {
+        return Err(bad("這不是可以儲存的課程大綱"));
+    }
+    let l = ws(&s).await?;
+    if !l.ws.profile.languages.contains(&c.lang) {
+        return Err(bad(format!("{} 不在你的學習語言中", c.lang.label())));
+    }
+    // Lists must be the learner's own files (as when the course is made).
+    for f in c.vocab.iter().chain(c.grammar.iter()) {
+        read_workspace_list(&l.ws, f)?;
+    }
+    c.created = date();
+    c.status = CourseStatus::Active;
+    store::save_new(&l.ws, &mut c).map_err(course_err)?;
+    let mut out = course_json(&l, &c).await?;
+    out["warnings"] = json!([]);
     Ok(Json(out))
 }
 

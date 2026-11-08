@@ -174,6 +174,8 @@ fn mock_claude(calls: Arc<Mutex<Vec<Value>>>) -> Router {
                     topic_cards(&user)
                 } else if props["news_keywords"].is_object() {
                     focus_sheet()
+                } else if props["keywords"].is_object() && props["summary"].is_object() && props.as_object().map_or(0, |o| o.len()) == 2 {
+                    json!({ "summary": "一篇關於晶片工廠的新聞", "keywords": ["半導體", "music", "AI 晶片"] })
                 } else if props["enough_material"].is_object() {
                     outline(&user)
                 } else if props["lessons"]["items"]["properties"]["number"].is_object() {
@@ -919,4 +921,62 @@ async fn today_topic_cards_and_focus() {
     let (_, d) = c.send(reqwest::Method::DELETE, "/api/focus?lang=en", json!({})).await;
     assert_eq!(d["removed"], true);
     assert!(!file.exists());
+}
+
+/// An upload tells something (plan §19.2.7): the model suggests interests,
+/// which go to interests.csv only when confirmed; a course from it is a
+/// preview first and saved on confirm.
+#[tokio::test]
+async fn upload_feedback_interests_and_outline_preview() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, calls) = setup(app_dir.path(), &ws_path).await;
+    let article = "Chipmakers race to build AI accelerators. Several chipmakers announced new factories. Power supply is the bottleneck.";
+    let (st, up) = c.bytes("/api/import/file?name=chips.md", article.as_bytes().to_vec()).await;
+    assert_eq!(st, StatusCode::OK, "{up}");
+    let file = up["file"].as_str().unwrap().to_string();
+    let csv = ws_path.join("profiles/ellrin/interests.csv");
+    let before = std::fs::read_to_string(&csv).unwrap_or_default();
+
+    // Suggest: the model reads the upload; known interests are left out; nothing is written.
+    let (st, g) = c.post("/api/interests/suggest", json!({"lang": "en", "file": file})).await;
+    assert_eq!(st, StatusCode::OK, "{g}");
+    assert_eq!(g["keywords"], json!(["半導體", "AI 晶片"]), "music is already an interest");
+    assert_eq!(g["summary"], "一篇關於晶片工廠的新聞");
+    let req = calls.lock().unwrap().last().unwrap().clone();
+    assert!(req["messages"][0]["content"].as_str().unwrap().contains("Chipmakers race"), "the upload goes to the model");
+    assert!(req["system"].as_str().unwrap().contains("music"), "the prompt knows the existing interests");
+    assert_eq!(std::fs::read_to_string(&csv).unwrap_or_default(), before, "a suggestion writes nothing");
+    // Only the learner's own files, and only text.
+    assert_eq!(c.post("/api/interests/suggest", json!({"lang": "en", "file": "../../etc/passwd"})).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(c.post("/api/interests/suggest", json!({"lang": "en", "file": "profiles/ellrin/materials/photo.png"})).await.0, StatusCode::BAD_REQUEST);
+
+    // Confirmed (one edited away, one added by hand).
+    let (st, a) = c.post("/api/interests", json!({"keywords": ["半導體", "電力", " ", "MUSIC"]})).await;
+    assert_eq!(st, StatusCode::OK, "{a}");
+    assert_eq!(a["added"], 2, "{a}");
+    let after = std::fs::read_to_string(&csv).unwrap();
+    assert!(after.contains("半導體") && after.contains("電力") && !after.contains("AI 晶片"), "{after}");
+    let (_, status) = c.get("/api/status").await;
+    let mine: Vec<&str> = status["user"]["interests"].as_array().unwrap().iter().map(|i| i["keyword"].as_str().unwrap()).collect();
+    assert!(mine.contains(&"半導體"), "{mine:?}");
+    assert_eq!(c.post("/api/interests", json!({"keywords": ["", "a,b"]})).await.0, StatusCode::BAD_REQUEST);
+
+    // A course from the upload: the outline first, nothing saved until confirmed.
+    let (st, pv) = c.post("/api/courses", json!({"kind": "topic", "lang": "en", "sources": [{"text": article}], "preview": true})).await;
+    assert_eq!(st, StatusCode::OK, "{pv}");
+    assert!(pv["total"].as_u64().unwrap() >= 3, "{pv}");
+    let (_, list) = c.get("/api/courses?lang=en").await;
+    assert_eq!(list["courses"].as_array().unwrap().len(), 0, "a preview is not saved");
+    let (st, saved) = c.post("/api/courses/confirm", json!({"course": pv["preview"]})).await;
+    assert_eq!(st, StatusCode::OK, "{saved}");
+    let (_, list) = c.get("/api/courses?lang=en").await;
+    assert_eq!(list["courses"].as_array().unwrap().len(), 1);
+    assert_eq!(list["courses"][0]["id"], saved["id"]);
+    // A tampered outline cannot point at files outside the learner's folder.
+    let mut bad = pv["preview"].clone();
+    bad["kind"] = json!("fixed");
+    bad["vocab"] = json!(["../../outside.csv"]);
+    assert_eq!(c.post("/api/courses/confirm", json!({"course": bad})).await.0, StatusCode::BAD_REQUEST);
 }

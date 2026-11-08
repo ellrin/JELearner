@@ -467,7 +467,7 @@ per_day = 10                # 每天帶入幾個新字
 
 **作者決定（2026-11）**：
 
-- **daidai 的電腦是 Windows、記憶體小** → 那台預設用**作業系統內建語音**（Windows 語音合成與語音辨識；日文需要安裝日文語言套件），不跑本機模型。
+- **daidai 的電腦是 Windows、記憶體小** → 不跑本機模型。~~預設用作業系統內建語音辨識~~（2026-11 改：Windows 內建的日文辨識弱，改用瀏覽器的即時辨識，見第 F 階段 F5：iPad Safari 或 Windows 上的 Chrome）；朗讀用系統聲音（日文需要安裝日文語言套件）。
 - **作者的 Mac** → 先用 **macOS 內建語音**，之後換 Whisper（辨識）與 Kokoro（合成）。
 - **跟讀分數**用「辨識出的文字與原句比對」，是近似分數。縮寫與全寫（I'm／I am）、複合字分合（chipmakers／chip makers）、日文漢字與假名混寫都會讓分數偏低；英文 0–20 的數字字與阿拉伯數字視為相同。
 - **雲端發音評分現在不做**，只有在便宜又方便時才考慮；設計上留一個語音 provider trait 的位置（`SpeechProvider`：`synthesize`、`transcribe`、可選的 `assess_pronunciation`），讓系統內建、Whisper／Kokoro、雲端評分都能換上去，上層不直接指名引擎（和 `LlmProvider` 同樣的做法）。這次不實作，D 階段再做。
@@ -802,8 +802,13 @@ per_day = 10                # 每天帶入幾個新字
 - [x] F1 連線精靈（2026-11）：管理員的問答流程與每步檢查（Git、Git 作者、位置不在另一個 repo 裡、連得到 repo、private、新建時 repo 是空的）；建立、下載、開啟資料夾在伺服器端也擋巢狀位置；測試（本機 bare repo 模擬 clone／push、巢狀 repo 被擋）
 - [x] F2 協助設定與家人模式（2026-11，decisions.md 第 16 節；真的 GitHub deploy key 尚未實測）：第一次打開的兩個按鈕（「請家人幫我設定」要等協助設定完成才有意義，從 F1 移到這裡）；deploy key 產生與配對、以該金鑰 clone；交還使用者；家人模式的自動同步（開啟 pull、單元完成與關閉時 push、只寫 `profiles/<id>/`、離線補傳、壞掉時一句話）；設定頁分成「我的學習」與「管理員設定」；管理員端「邀請家人」；測試（本機 bare repo 模擬兩台電腦、離線、金鑰失效）
 - [x] F3 單一入口（2026-11，decisions.md 第 17 節）：「開始今天的課」、主題卡（新聞＋興趣＋通識比例）、換一批（排除已出現）、選定後只產生今天這一課；右欄「產生教材」預設收起，今日頁的「其他方式」帶到貼文章／網址與清單排課（課程頁的「新課程」保留給想自己排課的人）；重點主題（在地設定集 `profiles/<id>/focus/<語言>.toml`、各類別換成在地版本、依重點挑新聞、重點標籤）；測試（mock 新聞與 mock provider：`today_topic_cards_and_focus`）
-- [ ] F4 上傳回饋與興趣記憶：「收到了」卡片、做成課程前預覽大綱、模型推測興趣與確認、`interests.csv`；測試
-- [ ] F5（評估中）iPad 當螢幕：Windows 筆電的語音辨識弱，改用 iPad Safari 連到家裡 Mac 上替家人跑的第二個伺服器（`JELEARNER_HOME`＋`PORT`，Tailscale Serve 提供 HTTPS，麥克風需要 HTTPS）；錄音在 iPad、辨識在 Mac（`jl-speech`）、朗讀用 iPad 的系統聲音。要補：背景常駐（使用者自己裝 LaunchAgent）、加入主畫面的圖示與 manifest、連不到時的友善頁、遠端時藏起會在伺服器上「打開」東西的按鈕；實機測麥克風權限、48→16 kHz 降取樣與日文聲音清單。原生 iPad App 不做（iOS 不能執行 git／claude／jl-speech，Claude 只能用 API key）
+- [x] F4 上傳回饋與興趣記憶（2026-11，decisions.md 第 18 節）：「收到了」卡片（收到什麼、多大、存在哪）、做成課程前預覽大綱（`preview: true`，確認才存）、模型推測興趣（可刪改的標籤、確認才寫入 `interests.csv`）；測試（`upload_feedback_interests_and_outline_preview`）
+- [ ] F5 iPad 上課、筆電當後台（評估中，2026-11）：daidai 的 Windows 筆電（文書機、8 GB）跑 server、Git 同步與 Claude Code（她自己的訂閱），iPad 的 Safari 只負責上課；Windows 筆電也可以直接用 Chrome 開。不跑本機模型。
+  - 語音辨識：作者選「流暢」，用瀏覽器的即時辨識（iPad Safari 是 Apple 的、Chrome 是 Google 的雲端），邊講邊出字；不用 Whisper（沒有 GPU，對話會卡）。Tauri 的 Windows App 視窗（WebView2）多半沒有即時辨識，所以 Windows 上用 Chrome 開網頁版。
+  - 朗讀：iPad 的系統聲音；Windows 上是系統聲音（日文要裝語言包）。
+  - HTTPS：iPad 的麥克風只在 HTTPS 下能用 → 筆電與 iPad 都裝 Tailscale，用 Tailscale Serve 的網址。上課時筆電要開著；連不到時 iPad 顯示「請先打開筆電」。
+  - 要做：server 的 Windows 相容（呼叫 `claude`／`git` 的方式、路徑、關閉子程序）、iPad 上預設用即時辨識、「上課模式」（遠端時藏起管理設定與在 server 上「打開」東西的按鈕）、加入主畫面的圖示與 manifest、連不到時的頁面；在她的筆電與 iPad 上實測（Safari 日文即時辨識需要開啟 Siri／聽寫）。
+  - 不做：原生 iPad App（iOS 不能執行 git／claude，Claude 只能用 API key）；在作者 Mac 上替她跑 server。
 
 ### 第 0-2＋E 階段：家庭成員與學習群組
 

@@ -320,6 +320,8 @@ async fn messages(Json(b): Json<Value>) -> Json<Value> {
         (topic_cards(user).to_string(), 900)
     } else if props["news_keywords"].is_object() {
         (focus_sheet(user).to_string(), 900)
+    } else if props["keywords"].is_object() && props["summary"].is_object() && props.as_object().map_or(0, |o| o.len()) == 2 {
+        (json!({ "summary": "一篇關於晶片工廠的新聞", "keywords": ["半導體", "AI 晶片", "電力"] }).to_string(), 700)
     } else if props["enough_material"].is_object() {
         (course_outline(user, ja || user.contains("Japanese")).to_string(), 900)
     } else if props["lessons"]["items"]["properties"]["number"].is_object() {

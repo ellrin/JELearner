@@ -14,8 +14,12 @@ pub const TOPICS_SYSTEM: &str = "today_topics_system.md";
 pub const TOPICS_USER: &str = "today_topics_user.md";
 pub const FOCUS_SYSTEM: &str = "focus_sheet_system.md";
 pub const FOCUS_USER: &str = "focus_sheet_user.md";
+pub const INTERESTS_SYSTEM: &str = "interests_suggest_system.md";
+pub const INTERESTS_USER: &str = "interests_suggest_user.md";
 
-const BUNDLED: [(&str, &str); 9] = [
+const BUNDLED: [(&str, &str); 11] = [
+    (INTERESTS_SYSTEM, include_str!("../../../../prompts/interests_suggest_system.md")),
+    (INTERESTS_USER, include_str!("../../../../prompts/interests_suggest_user.md")),
     (TOPICS_SYSTEM, include_str!("../../../../prompts/today_topics_system.md")),
     (TOPICS_USER, include_str!("../../../../prompts/today_topics_user.md")),
     (FOCUS_SYSTEM, include_str!("../../../../prompts/focus_sheet_system.md")),

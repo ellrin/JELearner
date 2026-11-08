@@ -78,6 +78,7 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .merge(crate::setup::routes())
         .merge(crate::family::routes())
         .merge(crate::today::routes())
+        .merge(crate::interests::routes())
         .fallback_service(ServeDir::new(web))
 }
 
@@ -475,7 +476,7 @@ fn apply_user(p: &mut Profile, b: &UserBody) -> Result<(), ApiError> {
 }
 
 /// Append keywords to interests.csv (keyword,lang,weight,updated_at).
-fn add_interests(ws: &Workspace, keywords: &[String]) -> Result<usize, ApiError> {
+pub(crate) fn add_interests(ws: &Workspace, keywords: &[String]) -> Result<usize, ApiError> {
     let file = ws.interests_file();
     let existing = std::fs::read_to_string(&file).unwrap_or_default();
     let have: Vec<String> = existing.lines().skip(1).filter_map(|l| l.split(',').next()).map(|k| k.trim().trim_matches('"').to_lowercase()).collect();

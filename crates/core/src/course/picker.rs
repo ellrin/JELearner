@@ -11,8 +11,12 @@
 //! landmarks…) in `profiles/<id>/focus/<lang>.toml`, which the learner may
 //! edit; cards and lesson texts take their places from it, so lessons
 //! connect without an invented main character.
+//!
+//! An upload (stage F4) also tells something about the learner: the model
+//! reads it and suggests interest keywords, which the learner confirms or
+//! edits before they go into `interests.csv`.
 
-use super::prompts::{CourseTemplates, FOCUS_SYSTEM, FOCUS_USER, TOPICS_SYSTEM, TOPICS_USER};
+use super::prompts::{CourseTemplates, FOCUS_SYSTEM, FOCUS_USER, INTERESTS_SYSTEM, INTERESTS_USER, TOPICS_SYSTEM, TOPICS_USER};
 use super::{parse_json, strict_object, CourseError};
 use crate::lang::Lang;
 use crate::provider::CompletionRequest;
@@ -225,6 +229,53 @@ pub fn remove_focus(ws: &Workspace, lang: Lang) -> Result<bool, CourseError> {
     Ok(false)
 }
 
+// ── interests from an upload (stage F4, plan §19.2.7) ──
+
+/// What an upload is about and the interest keywords it suggests.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct InterestGuess {
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+}
+
+/// The upload text sent to the model (the start is enough to tell the topic).
+pub const SUGGEST_MAX_CHARS: usize = 6000;
+
+pub fn suggest_schema() -> Value {
+    strict_object(json!({
+        "summary": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" } }
+    }))
+}
+
+pub fn suggest_request(t: &CourseTemplates, lang: Lang, native_language: &str, existing: &[String], file_name: &str, text: &str) -> Result<CompletionRequest, CourseError> {
+    let text: String = text.chars().take(SUGGEST_MAX_CHARS).collect();
+    let c = json!({ "language": lang.english_name(), "native_language": crate::lesson::native_name(native_language), "existing": existing, "file_name": file_name, "text": text });
+    Ok(CompletionRequest { system: t.render(INTERESTS_SYSTEM, c.clone())?, user: t.render(INTERESTS_USER, c)?, max_tokens: 600, json_schema: Some(suggest_schema()) })
+}
+
+/// At most 4 keywords, trimmed, none empty, too long, repeated or already known.
+pub fn parse_suggest(text: &str, existing: &[String]) -> Result<InterestGuess, CourseError> {
+    let mut g: InterestGuess = parse_json(text)?;
+    let norm = |s: &str| s.trim().to_lowercase();
+    let mut out: Vec<String> = vec![];
+    for k in g.keywords.drain(..) {
+        let k = k.trim().trim_matches(|c| c == '"' || c == '#').trim().to_string();
+        if k.is_empty() || k.chars().count() > 30 || k.contains(',') || existing.iter().any(|e| norm(e) == norm(&k)) || out.iter().any(|o| norm(o) == norm(&k)) {
+            continue;
+        }
+        out.push(k);
+        if out.len() == 4 {
+            break;
+        }
+    }
+    g.keywords = out;
+    g.summary = g.summary.trim().chars().take(40).collect();
+    Ok(g)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +343,20 @@ mod tests {
         // The file the learner may edit reads back.
         let text = toml::to_string(&f).unwrap();
         assert_eq!(toml::from_str::<FocusSheet>(&text).unwrap(), f);
+    }
+
+    #[test]
+    fn interest_suggestions_are_cleaned() {
+        let existing = vec!["AI 晶片".to_string()];
+        let t = CourseTemplates::bundled();
+        let req = suggest_request(&t, Lang::En, "zh-TW", &existing, "chips.md", &"x".repeat(9000)).unwrap();
+        assert!(req.system.contains("AI 晶片"), "known interests are left out by the prompt too");
+        assert!(req.user.contains("chips.md") && req.user.len() < 6200);
+        let reply = json!({ "summary": "一篇關於晶片工廠的新聞", "keywords": [" 半導體 ", "ai 晶片", "半導體", "", "a,b", "#供應鏈", "電力", "工廠", "太多了"] }).to_string();
+        let g = parse_suggest(&reply, &existing).unwrap();
+        assert_eq!(g.keywords, vec!["半導體", "供應鏈", "電力", "工廠"]);
+        assert_eq!(g.summary, "一篇關於晶片工廠的新聞");
+        let none = parse_suggest(&json!({ "summary": "TOEIC 單字", "keywords": [] }).to_string(), &[]).unwrap();
+        assert!(none.keywords.is_empty());
     }
 }

@@ -1278,14 +1278,18 @@ async function renderProgress(page) {
 
 const dlgImport = $("#dlgImport");
 function openImport() {
-  if (!dlgImport.open) dlgImport.showModal();
+  if (!dlgImport.open) { dlgImport.showModal(); $("#impDrop").focus(); }
+}
+/** Start a fresh list, unless an outline is still waiting for 建立. */
+function clearImport() {
+  if (!$("#impResults .pv-list")) { $("#impResults").innerHTML = ""; $("#impInt")?.remove(); }
 }
 $(".close", dlgImport).onclick = () => dlgImport.close();
-$("#actImport").onclick = () => { $("#impResults").innerHTML = ""; openImport(); };
+$("#actImport").onclick = () => { clearImport(); openImport(); };
 $("#impDrop").onclick = () => $("#impFiles").click();
 $("#impDrop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#impFiles").click(); } };
 $("#impFiles").onchange = (e) => { importFiles([...e.target.files]); e.target.value = ""; };
-$("#asideDrop").onclick = () => { $("#impResults").innerHTML = ""; openImport(); };
+$("#asideDrop").onclick = () => { clearImport(); openImport(); };
 $("#asideDrop").onkeydown = (e) => { if (e.key === "Enter") $("#asideDrop").click(); };
 // A word list template to start from (UTF-8 with BOM so spreadsheets read it).
 $("#impTemplate").onclick = (e) => {
@@ -1303,7 +1307,7 @@ function emptyImport(text) {
   const e = el("div", "empty cta", text);
   const d = el("div", "drop small");
   d.append(icon("upload"), el("span", null, "拖放或選擇檔案"));
-  d.onclick = () => { $("#impResults").innerHTML = ""; openImport(); };
+  d.onclick = () => { clearImport(); openImport(); };
   e.append(d);
   return e;
 }
@@ -1311,71 +1315,239 @@ function emptyImport(text) {
 const KIND_LABEL = { vocab: "單字", grammar: "文法", materials: "每週素材", text: "筆記", pdf: "PDF", image: "圖片" };
 /** Kept as files in materials/ (read in a later stage), not imported into review. */
 const isMaterialFile = (f) => /\.(md|markdown|txt|pdf|png|jpe?g|webp|gif)$/i.test(f.name) || f.type.startsWith("image/");
+const isTextFile = (f) => /\.(md|markdown|txt)$/i.test(f.name);
+
+/** About how long a text is: characters for Chinese / Japanese, words otherwise. */
+function textSize(t) {
+  const cjk = (t.match(/[぀-ヿ㐀-鿿]/g) ?? []).length;
+  const n = cjk > t.length / 4 ? cjk : (t.match(/\S+/g) ?? []).length;
+  return n >= 100 ? `約 ${Math.round(n / 100) * 100} 字` : `${n} 字`;
+}
+const fmtBytes = (b) => (b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+/** `profiles/ellrin/materials/chips.md` → `materials/chips.md` (the full path stays in the title). */
+const shortPath = (p) => String(p ?? "").split("/").slice(-2).join("/");
+/** Engine and network errors as one short line; the details go in the title. */
+const friendly = (msg) => (/Claude|連線|error sending|timed out|逾時|模型/.test(msg) ? "AI 老師暫時連不上，等一下再試。" : msg);
+
+// Upload feedback (stage F4, plan §19.2.7): each file gets a 「收到了」 card
+// that says what came in (its name, kind and size) and where it is kept, and
+// the next step as a button (a course from it: the outline first, then
+// confirm). Below all the cards, one question for the whole batch: the
+// interests the model read from it, remembered only when the learner says so.
 async function importFiles(files) {
   if (!files.length) return;
   openImport();
   const ul = $("#impResults");
+  $("#impInt")?.remove();
+  const readable = [];
   for (const f of files) {
-    const li = el("li");
-    const mark = el("span", null, "…");
-    const what = el("span", null, f.name);
-    const info = el("span", "f", "");
-    li.append(mark, what, info);
+    const li = el("li", "rcv");
+    const wait = el("div", "rcv-head", `正在收 ${f.name}…`);
+    li.append(wait);
     ul.prepend(li);
-    if (isMaterialFile(f)) {
-      try {
+    let got = null;
+    try {
+      if (isMaterialFile(f)) {
         // The same limits as the server: text 2 MB, pictures 10 MB, PDF 20 MB.
-        const max = /\.pdf$/i.test(f.name) ? 20 : /\.(md|markdown|txt)$/i.test(f.name) ? 2 : 10;
+        const max = /\.pdf$/i.test(f.name) ? 20 : isTextFile(f) ? 2 : 10;
         if (f.size > max * 1024 * 1024) throw new Error(`檔案太大（上限 ${max} MB）`);
+        const text = isTextFile(f) ? await f.text() : null;
         const r = await fetch(`/api/import/file?${new URLSearchParams({ name: f.name })}`, { method: "POST", body: f });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error ?? (r.status === 413 ? "檔案太大" : `${r.status}`));
-        mark.className = "ok"; mark.textContent = "✓";
-        li.dataset.kind = d.kind;
-        what.textContent = `${KIND_LABEL[d.kind] ?? d.kind}・存進素材`;
-        info.textContent = f.name;
-        info.title = d.file;
-      } catch (e) {
-        mark.className = "bad"; mark.textContent = "✕";
-        info.textContent = e.message; info.title = e.message;
+        const what = d.kind === "text" ? `文章，${textSize(text)}` : d.kind === "pdf" ? `PDF，${fmtBytes(f.size)}` : d.kind === "image" ? "圖片" : KIND_LABEL[d.kind] ?? d.kind;
+        got = { kind: d.kind, file: d.file, what, where: "存進素材", text };
+      } else {
+        const text = await f.text();
+        const q = new URLSearchParams({ kind: "auto", name: f.name, lang: state.lang });
+        const r = await apiText(`/api/import?${q}`, text);
+        const rep = r.report;
+        const what = r.kind === "vocab" ? `單字表，${rep.words} 字` : r.kind === "grammar" ? `文法表，${rep.grammar} 條` : r.kind === "materials" ? `每週素材，文章 ${rep.articles} 篇` : KIND_LABEL[r.kind] ?? r.kind;
+        const where = r.kind === "vocab" ? "已加進生字" : r.kind === "grammar" ? "已加進文法" : "存進素材";
+        got = { kind: r.kind, file: r.file, what, where, warnings: rep.warnings };
       }
+    } catch (e) {
+      drawFailed(li, f, e.message);
       continue;
     }
-    try {
-      const text = await f.text();
-      const q = new URLSearchParams({ kind: "auto", name: f.name, lang: state.lang });
-      const r = await apiText(`/api/import?${q}`, text);
-      const rep = r.report;
-      mark.className = "ok"; mark.textContent = "✓";
-      li.dataset.kind = r.kind;
-      what.textContent = `${KIND_LABEL[r.kind] ?? r.kind}　+${rep.words + rep.grammar}${rep.articles ? `・文章 ${rep.articles}` : ""}`;
-      info.textContent = f.name;
-      info.title = [r.file, ...rep.warnings].join("\n");
-      $("#impOut").className = "note ok";
-      $("#impOut").textContent = `✓ ${f.name}`;
-    } catch (e) {
-      mark.className = "bad"; mark.textContent = "✕";
-      info.textContent = e.message;
-      info.title = e.message;
-    }
+    drawReceived(li, f, got);
+    if (["text", "materials", "vocab", "grammar"].includes(got.kind)) readable.push(got.file);
   }
-  // Next steps for what came in (plan §0.1: the next step is a button).
-  $("#impNext")?.remove();
-  const okKinds = new Set($$("li", ul).filter((li) => $(".ok", li)).map((li) => li.dataset.kind));
-  if (okKinds.size) {
-    const row = el("div", "actions-row imp-next");
-    row.id = "impNext";
-    const lists = okKinds.has("vocab") || okKinds.has("grammar");
-    const mats = [...okKinds].some((k) => !["vocab", "grammar"].includes(k));
-    const close = (fn) => () => { dlgImport.close(); fn(); };
-    if (lists) row.append(primaryButton("用這份清單建立課程", close(() => go("courses", { course: null, courseLesson: null, courseCreate: "fixed" })), true));
-    else if (mats) row.append(primaryButton("用這份素材建立課程", close(() => go("courses", { course: null, courseLesson: null, courseCreate: "topic" })), true));
-    if (mats) row.append(ghostButton("folder", "看素材", close(() => go("materials"))));
-    if (okKinds.has("vocab")) row.append(ghostButton("cards", "看生字", close(() => go("words"))));
-    ul.after(row);
+  // One question for the batch (the first 3 readable files).
+  if (readable.length && state.status?.engine_ready) {
+    const box = el("div", "rcv-int");
+    box.id = "impInt";
+    ul.after(box);
+    suggestInterests(box, readable.slice(0, 3));
   }
+  ul.querySelector("li")?.scrollIntoView({ block: "nearest" });
   await refreshStatus();
   render();
+}
+
+function drawFailed(li, f, msg) {
+  li.className = "rcv bad";
+  li.innerHTML = "";
+  const h = el("div", "rcv-head");
+  const m = el("span", "mark"); m.append(icon("x"));
+  h.append(m, el("b", null, "沒收到"), el("span", "rcv-name", f.name));
+  li.append(h, el("div", "rcv-msg", msg));
+  // A table the app could not read: the template is the next step.
+  if (/\.(csv|tsv)$/i.test(f.name)) {
+    const row = el("div", "actions-row");
+    row.append(ghostButton("download", "下載單字表範本", () => $("#impTemplate").click()));
+    li.append(row);
+  }
+}
+
+function drawReceived(li, f, got) {
+  li.innerHTML = "";
+  li.dataset.kind = got.kind;
+  const h = el("div", "rcv-head");
+  const m = el("span", "mark ok"); m.append(icon("check"));
+  h.append(m, el("b", null, `收到了：${got.what}`), el("span", "rcv-name", f.name));
+  const where = el("div", "rcv-where", `${got.where}・${shortPath(got.file)}`);
+  where.title = [got.file, ...(got.warnings ?? [])].join("\n");
+  li.append(h, where);
+  if (got.warnings?.length) li.append(el("div", "rcv-msg", `有 ${got.warnings.length} 行略過（游標停在上一行看原因）`));
+
+  const close = (fn) => () => { dlgImport.close(); fn(); };
+  const row = el("div", "actions-row");
+  const canCourse = ["vocab", "grammar"].includes(got.kind) || (got.kind === "text" && got.text?.trim());
+  const preview = el("div", "rcv-preview");
+  if (canCourse) row.append(primaryButton("做成課程", () => (state.status?.engine_ready ? previewCourse(preview, row, got, f) : openSettings(3)), true));
+  if (got.kind === "vocab") row.append(ghostButton("cards", "看生字", close(() => go("words"))));
+  else if (got.kind === "grammar") row.append(ghostButton("tree", "看文法", close(() => go("grammar"))));
+  else row.append(ghostButton("folder", "看素材", close(() => go("materials"))));
+  li.append(row, preview);
+}
+
+async function suggestInterests(box, files) {
+  const wait = el("span", "rcv-wait", "正在看這些內容跟什麼主題有關…");
+  wait.setAttribute("role", "status");
+  box.append(wait);
+  const results = await Promise.all(files.map((file) => api("/api/interests/suggest", { lang: state.lang, file }).catch(() => null)));
+  const keep = [];
+  for (const r of results) for (const k of r?.keywords ?? []) if (!keep.some((x) => x.toLowerCase() === k.toLowerCase())) keep.push(k);
+  const summaries = results.filter((r) => r?.summary).map((r) => r.summary);
+  box.innerHTML = "";
+  if (!keep.length) { box.remove(); return; }
+  const ask = el("p", null, `${files.length === 1 && summaries[0] ? `${summaries[0]}。` : ""}看起來你對這些主題有興趣，要記住嗎？`);
+  ask.setAttribute("role", "status");
+  box.append(ask);
+  const chips = el("div", "int-chips");
+  const add = el("input");
+  add.placeholder = "＋ 自己加";
+  add.setAttribute("aria-label", "自己加一個主題");
+  add.maxLength = 30;
+  const yes = primaryButton("記住", null, true);
+  const no = ghostButton("x", "不用", () => { box.remove(); ($("#impResults .primary") ?? $("#impDrop")).focus(); });
+  const clean = (v) => v.trim().replace(/[,"\n]/g, "");
+  const push = (v) => { if (v && !keep.some((k) => k.toLowerCase() === v.toLowerCase())) keep.push(v); };
+  const draw = () => {
+    chips.innerHTML = "";
+    keep.forEach((k, i) => {
+      const c = el("span", "int-chip", k);
+      const x = el("button", "x");
+      x.setAttribute("aria-label", `拿掉 ${k}`);
+      x.append(icon("x"));
+      x.onclick = () => { keep.splice(i, 1); draw(); (chips.querySelector(".x") ?? add).focus(); };
+      c.append(x);
+      chips.append(c);
+    });
+    chips.append(add);
+    yes.disabled = !keep.length && !add.value.trim();
+  };
+  add.oninput = () => { yes.disabled = !keep.length && !add.value.trim(); };
+  add.onkeydown = (e) => {
+    if (e.key === "Enter" && add.value.trim()) {
+      e.preventDefault();
+      push(clean(add.value));
+      add.value = "";
+      draw(); add.focus();
+    } else if (e.key === "Escape" && add.value) {
+      // Clear the box, not close the dialog.
+      e.preventDefault(); e.stopPropagation();
+      add.value = "";
+      yes.disabled = !keep.length;
+    }
+  };
+  yes.onclick = () => busy(yes, async () => {
+    push(clean(add.value));
+    let r;
+    try { r = await api("/api/interests", { keywords: keep }); } catch (e) { flash(e.message, true); return; }
+    box.innerHTML = "";
+    const done = el("p", "rcv-done");
+    done.tabIndex = -1;
+    done.setAttribute("role", "status");
+    done.append(icon("check"), document.createTextNode(r.added ? `記住了 ${r.added} 個主題，之後挑新聞和主題卡會用到。` : "這些主題本來就記得了。"));
+    box.append(done);
+    done.focus();
+    refreshStatus();
+  });
+  const row = el("div", "actions-row");
+  row.append(yes, no);
+  box.append(chips, row);
+  draw();
+}
+
+/** A course from the upload: the outline is shown first; saved only on 建立. */
+async function previewCourse(box, row, got, f) {
+  const mk = row.querySelector(".primary");
+  mk.disabled = true;
+  box.innerHTML = "";
+  box.setAttribute("aria-busy", "true");
+  const wait = el("span", "rcv-wait", "正在規劃課程大綱…");
+  wait.tabIndex = -1;
+  wait.setAttribute("role", "status");
+  box.append(wait, planningSkeleton());
+  wait.focus();
+  const body = got.kind === "text"
+    ? { kind: "topic", lang: state.lang, keywords: [], sources: [{ text: got.text, title: f.name.replace(/\.[^.]+$/, "") }], preview: true }
+    : { kind: "fixed", lang: state.lang, name: "", [got.kind === "grammar" ? "grammar" : "vocab"]: [got.file], file_name: f.name, describe: true, preview: true };
+  let pv;
+  try { pv = await api("/api/courses", body); } catch (e) {
+    box.innerHTML = "";
+    box.removeAttribute("aria-busy");
+    const err = el("div", "rcv-msg bad", friendly(e.message));
+    err.title = e.message;
+    err.setAttribute("role", "alert");
+    box.append(err);
+    mk.disabled = false;
+    mk.textContent = "再試一次";
+    mk.focus();
+    return;
+  }
+  box.innerHTML = "";
+  box.removeAttribute("aria-busy");
+  mk.textContent = "做成課程";
+  const c = pv.preview;
+  const head = el("div", "pv-head");
+  head.append(el("b", null, c.name), el("span", "n", `${pv.total} 課`));
+  box.append(head);
+  if (c.summary) box.append(el("p", "pv-sum", c.summary));
+  const ol = el("ol", "pv-list");
+  // The outline file's own field names (`[[lesson]]`).
+  for (const lp of c.lesson ?? c.lessons ?? []) {
+    const li = el("li");
+    li.append(el("span", "num", String(lp.number)), el("span", "t", lp.title || `第 ${lp.number} 課`));
+    if (lp.purpose) li.append(el("span", "p", lp.purpose));
+    ol.append(li);
+  }
+  box.append(ol);
+  if (pv.warnings?.length) box.append(el("div", "rcv-msg", pv.warnings.join("；")));
+  const r2 = el("div", "actions-row");
+  const ok = primaryButton("就這樣，建立課程", () => busy(ok, async () => {
+    let saved;
+    try { saved = await api("/api/courses/confirm", { course: c }); } catch (e) { flash(friendly(e.message), true); return; }
+    dlgImport.close();
+    say(`「${saved.name}」建立好了：${saved.total} 課。從第 1 課開始吧！`);
+    go("courses", { course: saved.id, courseLesson: null, courseCreate: null });
+  }), true);
+  const no = ghostButton("x", "不要", () => { box.innerHTML = ""; mk.disabled = false; mk.focus(); });
+  r2.append(ok, no);
+  box.append(r2);
+  ok.focus();
 }
 
 // Window-wide drag and drop.
@@ -1390,7 +1562,7 @@ async function importFiles(files) {
     if (!hasFiles(e)) return;
     e.preventDefault();
     depth = 0; overlay.hidden = true; $("#impDrop").classList.remove("over");
-    $("#impResults").innerHTML = "";
+    clearImport();
     importFiles([...e.dataTransfer.files]);
   });
 })();
