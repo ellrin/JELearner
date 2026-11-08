@@ -9,7 +9,7 @@
 - [x] 私人工作區：範本、`workspace.toml`（id、程度、週報信箱）、示範模式、開啟／建立／clone、Git 同步（沿用 PaperComposer）
 - [x] SQLite：words、grammar、progress（SM-2）、reviews、mistakes、lessons、articles、materials；資料庫放設定資料夾、依工作區分開
 - [x] 匯入：單字／文法 CSV（寬鬆標題、Tab 分隔）、每週 JSON；records 匯出與換機器還原
-- [x] 爬蟲：RSS／Atom、文章內文擷取、robots.txt（RFC 9309）、每站間隔；來源 BBC Technology、NHK NEWS WEB
+- [x] 爬蟲：RSS／Atom、文章內文擷取、robots.txt（RFC 9309）、每站間隔；來源見 sources.toml（2026-11 起只用條款允許改寫的來源，decisions §21）
 - [x] 教材：JSON Schema 結構化輸出 → Markdown，提示詞與版面模板放在 `prompts/`，可被工作區覆蓋
 - [x] Claude provider（key：環境變數／金鑰圈／設定資料夾）；llama-server provider（模擬測試）
 - [x] Claude 訂閱模式（比照 PaperComposer）：透過官方 Claude Code CLI、瀏覽器登入與自動偵測、引擎自動／手動切換（以假的 CLI 測試，尚未用真實帳號測試）

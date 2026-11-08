@@ -87,13 +87,15 @@ term,reading,meaning,pos,example,tags,note
 
 ```toml
 [[source]]
-id = "bbc-technology"
-name = "BBC News – Technology"
+id = "govuk-transport"
+name = "GOV.UK – Department for Transport"
 lang = "en"
-feed = "https://feeds.bbci.co.uk/news/technology/rss.xml"
+feed = "https://www.gov.uk/government/organisations/department-for-transport.atom"
 enabled = true            # 可省略，預設 true
 body_selector = "article" # 可省略：該網站文章內文的 CSS selector
 ```
+
+只放使用條款允許改寫（包括用 AI 改寫）的來源；檢查結果與不用的來源見 decisions.md 第 21 節。
 
 ## `workspace.toml`
 

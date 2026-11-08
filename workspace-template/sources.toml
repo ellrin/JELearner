@@ -3,25 +3,86 @@
 # the same site are spaced out. Lessons are for your own study: do not
 # republish article text.
 #
+# Only sources whose terms allow their text to be adapted (also with AI) are
+# enabled. Checked 2026-11 (docs/decisions.md §21):
+# - GOV.UK: Open Government Licence v3.0 (adapting allowed; attribution
+#   "Contains public sector information licensed under the Open Government
+#   Licence v3.0."). Every department has a feed: /government/organisations/<name>.atom
+# - 首相官邸: 公共データ利用規約（PDL1.0）; editing allowed when the source and
+#   the fact that it was edited are stated.
+# - Not used: BBC (terms forbid scraping, RAG and summaries), VisitScotland
+#   (terms forbid text and data mining and scraping), The Guardian Open Platform
+#   (no AI use, no adapting, 24-hour storage), Wikinews (closed in 2026),
+#   NHK (robots.txt blocks AI crawlers).
+# - The Conversation UK: CC BY-ND 4.0 — adapting for one's own study is allowed,
+#   sharing the adapted text is not. Personal, non-public use only.
+#
 # body_selector (optional): CSS selector of the article body on that site.
 
 [[source]]
-id = "bbc-technology"
-name = "BBC News – Technology"
+id = "govuk-scotland-office"
+name = "GOV.UK – Scotland Office"
 lang = "en"
-feed = "https://feeds.bbci.co.uk/news/technology/rss.xml"
+feed = "https://www.gov.uk/government/organisations/scotland-office.atom"
+
+[[source]]
+id = "govuk-transport"
+name = "GOV.UK – Department for Transport"
+lang = "en"
+feed = "https://www.gov.uk/government/organisations/department-for-transport.atom"
+
+[[source]]
+id = "govuk-treasury"
+name = "GOV.UK – HM Treasury"
+lang = "en"
+feed = "https://www.gov.uk/government/organisations/hm-treasury.atom"
+
+[[source]]
+id = "govuk-culture"
+name = "GOV.UK – Department for Culture, Media and Sport"
+lang = "en"
+feed = "https://www.gov.uk/government/organisations/department-for-culture-media-and-sport.atom"
+
+[[source]]
+id = "govuk-visitbritain"
+name = "GOV.UK – VisitBritain"
+lang = "en"
+feed = "https://www.gov.uk/government/organisations/visitbritain.atom"
+
+[[source]]
+id = "govuk-ons"
+name = "GOV.UK – Office for National Statistics"
+lang = "en"
+feed = "https://www.gov.uk/government/organisations/office-for-national-statistics.atom"
+
+[[source]]
+id = "conversation-uk"
+name = "The Conversation UK"
+lang = "en"
+feed = "https://theconversation.com/uk/articles.atom"
+# CC BY-ND 4.0: adapted versions for one's own study are allowed, not sharing
+# them; no use for training AI models. Personal use only.
+
+[[source]]
+id = "kantei"
+name = "首相官邸 新着情報"
+lang = "ja"
+feed = "https://www.kantei.go.jp/index-jnews.rdf"
 
 [[source]]
 id = "nhk-news"
 name = "NHK NEWS WEB 主要ニュース"
 lang = "ja"
 feed = "https://www3.nhk.or.jp/rss/news/cat0.xml"
+# Off: NHK's robots.txt blocks AI crawlers (ClaudeBot, GPTBot, …).
+enabled = false
 
 [[source]]
 id = "itmedia-news"
 name = "ITmedia NEWS"
 lang = "ja"
 feed = "https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml"
+# Terms not checked yet.
 enabled = false
 
 [[source]]
@@ -29,4 +90,5 @@ id = "npr-technology"
 name = "NPR – Technology"
 lang = "en"
 feed = "https://feeds.npr.org/1019/rss.xml"
+# Terms not checked yet.
 enabled = false

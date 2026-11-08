@@ -145,3 +145,10 @@ tokio、axum 0.8、reqwest（rustls）、sqlx 0.8（SQLite，執行期查詢，�
 - **前提的驗證**：階段 0 在作者的 iPad mini 上確認 Safari 的語音辨識、朗讀與從網頁直接呼叫 Claude API 都可行（plan 第 F 階段 F5）。
 - **安全**：網頁只有程式碼、沒有資料；Claude API key 放在設有每月上限的獨立 workspace；GitHub token 只開這一個 repo 的檔案讀寫；金鑰只存在她的 iPad 上。
 
+## 21. 新聞與參考來源：只用條款允許的（2026-11）
+
+- **決定**：只抓使用條款允許「改寫（包括用 AI 改寫）」的來源，即使是不公開的個人用途也照條款走（作者：尊重比較好）。每個來源在 `sources.toml` 註明授權。
+- **可以用**：GOV.UK（Open Government Licence v3.0：可改寫、可商用，標示「Contains public sector information licensed under the Open Government Licence v3.0.」；每個部會有 `/government/organisations/<名稱>.atom`）、首相官邸（公共データ利用規約 PDL1.0：可編輯，要註明出處與「加工して作成」）、The Conversation UK（CC BY-ND 4.0：自己做改寫版自用可以、不能分享改寫版、不能拿去訓練 AI；只限個人使用）、Wikipedia／Wikivoyage（CC BY-SA，歷史素材用）。
+- **不用**：BBC（robots.txt 與條款：禁止爬取、RAG、AI 依據，連「自己用的摘要」也禁止）、VisitScotland（條款 3.13：任何目的的文字資料探勘與爬取都禁止；個人只能手動下載部分內容）、The Guardian Open Platform（禁止任何 AI 相關用途、禁止改寫、內容最多存 24 小時）、Wikinews（2026 年關閉、唯讀）、NHK（robots.txt 封鎖 AI 爬蟲；條款頁無法讀取，先停用）。gov.scot 是 OGL，但找不到新聞 feed。
+- **注意**：「政府網站」不等於全部可用：GOV.UK 與 gov.scot 是「除另有標示外」採 OGL，第三方內容、標誌、個人資料除外；議會、NHS、地方政府各有自己的授權，要個別檢查。
+
