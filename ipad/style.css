@@ -80,3 +80,8 @@ label.f span { display: block; font-size: 15px; color: var(--muted); margin-bott
 .bubble .again { float: right; min-height: 40px; min-width: 44px; padding: 4px 10px; margin: 0 0 4px 10px; }
 .units li button.next { border-color: var(--acc-text); }
 .toast { cursor: pointer; }
+
+.pic { margin: 0 0 12px; }
+.pic img { display: block; width: 100%; max-height: 320px; object-fit: cover; border-radius: 10px; background: var(--surface); }
+.pic figcaption { margin-top: 4px; }
+.pic figcaption a { color: inherit; }

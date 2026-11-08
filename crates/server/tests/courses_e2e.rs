@@ -1238,3 +1238,78 @@ async fn library_themes_split_into_lessons_with_texts() {
     assert_eq!(got.status().as_u16(), 404, "the picture is removed once the lesson is done");
     assert!(std::fs::read_to_string(dir.join("飲食/haggis-1.md")).unwrap().contains("A. Cook"), "the credit stays in the text");
 }
+
+/// The admin prepares a member's English lessons from the topic library (the
+/// default when the language has one): each day's choices from different
+/// categories, texts not used before, packages for the iPad.
+#[tokio::test]
+async fn admin_prepares_library_lessons_for_a_member() {
+    use jl_core::course::library::{self, ArticleOut, LessonFocus, SourceDoc, ThemePlan};
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, calls) = setup(app_dir.path(), &ws_path).await;
+    let dir = ws_path.join("library/uk");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("syllabus.toml"), "name = \"蘇格蘭與英國\"\nlang = \"en\"\ntopic = [\n  { id = \"whisky\", cat = \"飲食\", zh = \"威士忌\", en = \"Whisky\", refs = [\"w:Scotch whisky\"] },\n  { id = \"trains\", cat = \"交通\", zh = \"火車\", en = \"Trains\", refs = [\"w:ScotRail\"] },\n]\n").unwrap();
+    let syl = library::load_syllabus(&ws_path, "uk").unwrap();
+    let src = vec![SourceDoc { title: "Ref".into(), url: "https://en.wikipedia.org/wiki/Ref".into(), licence: "CC BY-SA 4.0".into(), text: String::new() }];
+    for t in &syl.topic {
+        let lessons: Vec<LessonFocus> = (1..=2)
+            .map(|i| LessonFocus { id: format!("{}-{i}", t.id), zh: format!("{} 第 {i} 課", t.zh), en: format!("{} {i}", t.en), focus: "One thing.".into(), goal: "能說一句話".into(), vocabulary: vec!["ticket".into()], sources: vec![1], refs: vec![] })
+            .collect();
+        library::save_plan(&ws_path, "uk", t, &ThemePlan { theme: t.id.clone(), lesson: lessons.clone() }).unwrap();
+        for l in &lessons {
+            let text = (0..30).map(|k| format!("A day in Scotland sentence {k} about {}.", t.en)).collect::<Vec<_>>().join(" ");
+            let a = ArticleOut { title: l.en.clone(), text, key_terms: vec![], used_sources: vec![1], summary: String::new() };
+            let p = library::article_path(&ws_path, "uk", t, &l.id);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, library::render_article(&syl, "uk", t, l, &a, &src, None, "test", "2026-11-08")).unwrap();
+        }
+    }
+    let (_, me) = c.get("/api/status").await;
+    let admin = me["user"]["id"].as_str().unwrap().to_string();
+    let (_, r) = c.post("/api/users", json!({ "name": "daidai", "languages": ["en"], "majors": { "en": "A2" } })).await;
+    let member = r["user"]["id"].as_str().unwrap().to_string();
+    c.post("/api/users/select", json!({"id": admin})).await;
+
+    let wait = || async {
+        let mut p = Value::Null;
+        for _ in 0..200 {
+            p = c.get("/api/family/prepare").await.1["progress"].clone();
+            if p["running"] == false { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        p
+    };
+    let n_cards = calls.lock().unwrap().iter().filter(|b| b["output_config"]["format"]["schema"]["properties"]["cards"].is_object()).count();
+    let (st, r) = c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 1, "choices": 2})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let p = wait().await;
+    assert_eq!((p["done"].as_u64(), p["errors"].as_array().map(|e| e.len())), (Some(2), Some(0)), "{p}");
+    assert_eq!(calls.lock().unwrap().iter().filter(|b| b["output_config"]["format"]["schema"]["properties"]["cards"].is_object()).count(), n_cards, "no news topic cards: the library is the source");
+    let ipad = ws_path.join("profiles").join(&member).join("ipad");
+    let index: Value = serde_json::from_str(&std::fs::read_to_string(ipad.join("index.json")).unwrap()).unwrap();
+    let today = index["days"].as_object().unwrap().values().next().unwrap().as_array().unwrap().clone();
+    let cats: Vec<&str> = today.iter().map(|e| e["category"].as_str().unwrap()).collect();
+    assert_eq!(cats, vec!["飲食", "交通"], "the day's choices from different categories: {index}");
+    assert!(today.iter().all(|e| e["kind"] == "library"));
+    let pkg: Value = serde_json::from_str(&std::fs::read_to_string(ipad.join(today[0]["file"].as_str().unwrap().trim_start_matches("ipad/"))).unwrap()).unwrap();
+    assert!(pkg["data"]["text"].is_string() && pkg["conversation"]["system"].is_string(), "{pkg}");
+    assert_eq!(pkg["card"]["why"], "能說一句話");
+    let used = std::fs::read_to_string(ipad.join("library-used.txt")).unwrap();
+    assert_eq!(used.lines().collect::<Vec<_>>(), vec!["whisky-1", "trains-1"]);
+    // Next time: the texts not used yet.
+    c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 1, "choices": 2})).await;
+    let p = wait().await;
+    assert_eq!(p["done"], 2, "{p}");
+    assert_eq!(std::fs::read_to_string(ipad.join("library-used.txt")).unwrap().lines().count(), 4);
+    // All used: said plainly.
+    c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 1, "choices": 2})).await;
+    let p = wait().await;
+    assert!(p["errors"][0].as_str().unwrap().contains("寫更多課"), "{p}");
+    // The news when asked for.
+    c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 1, "choices": 1, "source": "news"})).await;
+    let _ = wait().await;
+    assert!(calls.lock().unwrap().iter().filter(|b| b["output_config"]["format"]["schema"]["properties"]["cards"].is_object()).count() > n_cards, "news topic cards when asked");
+}

@@ -50,22 +50,37 @@ pub struct Progress {
     pub errors: Vec<String>,
 }
 
-static PROGRESS: Mutex<Option<Progress>> = Mutex::new(None);
+/// Progress per server (an app has one; tests run several side by side).
+static PROGRESS: Mutex<Option<std::collections::HashMap<usize, Progress>>> = Mutex::new(None);
 
-fn update(f: impl FnOnce(&mut Progress)) {
-    if let Some(p) = PROGRESS.lock().expect("progress lock").as_mut() {
+fn key(s: &Shared) -> usize {
+    std::sync::Arc::as_ptr(s) as *const () as usize
+}
+
+fn current(s: &Shared) -> Option<Progress> {
+    PROGRESS.lock().expect("lock").as_ref().and_then(|m| m.get(&key(s)).cloned())
+}
+
+fn set(s: &Shared, p: Progress) {
+    PROGRESS.lock().expect("lock").get_or_insert_with(Default::default).insert(key(s), p);
+}
+
+fn update(s: &Shared, f: impl FnOnce(&mut Progress)) {
+    if let Some(p) = PROGRESS.lock().expect("lock").as_mut().and_then(|m| m.get_mut(&key(s))) {
         f(p);
     }
 }
 
-async fn status() -> R<Value> {
-    Ok(Json(json!({ "progress": PROGRESS.lock().expect("progress lock").clone() })))
+async fn status(State(s): State<Shared>) -> R<Value> {
+    Ok(Json(json!({ "progress": current(&s) })))
 }
 
 #[derive(Deserialize)]
 struct StartBody {
     member: String,
     lang: Option<String>,
+    /// `library` (default when the language has a topic library) or `news`.
+    source: Option<String>,
     #[serde(default = "three")]
     days: u32,
     #[serde(default = "three")]
@@ -93,19 +108,16 @@ async fn start(State(s): State<Shared>, Json(b): Json<StartBody>) -> R<Value> {
         }
         open.root.user(&b.member).map_err(|_| bad(format!("找不到使用者 {}", b.member)))?;
     }
-    {
-        let mut p = PROGRESS.lock().expect("progress lock");
-        if p.as_ref().is_some_and(|p| p.running) {
-            return Err(bad("已經在備課了，等這一批做完"));
-        }
-        *p = Some(Progress { running: true, member: b.member.clone(), lang: lang.code().into(), total: (b.days * b.choices) as usize, ..Default::default() });
+    if current(&s).is_some_and(|p| p.running) {
+        return Err(bad("已經在備課了，等這一批做完"));
     }
+    set(&s, Progress { running: true, member: b.member.clone(), lang: lang.code().into(), total: (b.days * b.choices) as usize, ..Default::default() });
     let s2 = s.clone();
     tokio::spawn(async move {
-        if let Err(e) = run(&s2, &b.member, lang, b.days, b.choices).await {
-            update(|p| p.errors.push(e.1));
+        if let Err(e) = run(&s2, &b.member, lang, b.days, b.choices, b.source.as_deref()).await {
+            update(&s2, |p| p.errors.push(e.1));
         }
-        update(|p| {
+        update(&s2, |p| {
             p.running = false;
             p.current.clear();
         });
@@ -125,7 +137,7 @@ fn day(offset: u32) -> String {
     (chrono::Local::now().date_naive() + chrono::Days::new(offset as u64)).format("%Y-%m-%d").to_string()
 }
 
-async fn run(s: &Shared, member: &str, lang: Lang, days: u32, choices: u32) -> Result<(), ApiError> {
+async fn run(s: &Shared, member: &str, lang: Lang, days: u32, choices: u32, source: Option<&str>) -> Result<(), ApiError> {
     // Results from the iPad first: the new lessons follow her latest level.
     let _ = crate::inbox::process_member(s, member).await;
     let m = member_loaded(s, member).await?;
@@ -137,6 +149,12 @@ async fn run(s: &Shared, member: &str, lang: Lang, days: u32, choices: u32) -> R
     // The iPad answers in conversations with the real-time model (decisions §19).
     index["realtime_model"] = json!(s.settings.read().await.realtime.model.clone());
     index["realtime_effort"] = json!(s.settings.read().await.realtime.effort.clone());
+    // The topic library first, when the language has one (and it was not turned off).
+    if source != Some("news")
+        && let Some(coll) = crate::library::collection_for(&m.ws.root, lang)
+    {
+        return run_library(s, &m, lang, days, choices, &coll, index).await;
+    }
     let mut shown: Vec<String> = index["days"].as_object().map(|d| d.values().flat_map(|v| v.as_array().cloned().unwrap_or_default()).filter_map(|x| x["title"].as_str().map(str::to_string)).collect()).unwrap_or_default();
     let (parts, focus, t) = crate::today::card_inputs(&m, lang);
     let heads = crate::today::headlines(s, lang, focus.as_ref()).await?;
@@ -147,11 +165,11 @@ async fn run(s: &Shared, member: &str, lang: Lang, days: u32, choices: u32) -> R
         let more = crate::today::ask_cards(s, lang, parts, focus.as_ref(), &t, &heads, &shown, want - cards.len(), want - cards.len()).await.unwrap_or_default();
         cards.extend(more);
     }
-    update(|p| p.total = cards.len().min(want));
+    update(s, |p| p.total = cards.len().min(want));
     let provider = crate::provider(s).await?;
     for (i, card) in cards.into_iter().take(want).enumerate() {
         let date = day(i as u32 / choices);
-        update(|p| p.current = card.title.clone());
+        update(s, |p| p.current = card.title.clone());
         match prepare_one(s, &m, provider.as_ref(), lang, &card, &date).await {
             Ok(entries) => {
                 let list = index["days"][&date].as_array().cloned().unwrap_or_default();
@@ -159,12 +177,12 @@ async fn run(s: &Shared, member: &str, lang: Lang, days: u32, choices: u32) -> R
                 list.extend(entries);
                 index["days"][&date] = Value::Array(list);
                 save_index(&m, &index).map_err(|e| bad(e.to_string()))?;
-                update(|p| {
+                update(s, |p| {
                     p.done += 1;
                     p.made.push(card.title.clone());
                 });
             }
-            Err(e) => update(|p| p.errors.push(format!("{}：{}", card.title, e.1))),
+            Err(e) => update(s, |p| p.errors.push(format!("{}：{}", card.title, e.1))),
         }
     }
     Ok(())
@@ -183,6 +201,12 @@ async fn prepare_one(s: &Shared, m: &Loaded, provider: &dyn jl_core::provider::L
     let focus_name = picker::load_focus(&m.ws, lang).map(|f| f.name).unwrap_or_default();
     let mut course = daily_course(m, lang, card.title.trim(), card.keywords.clone(), article, focus_name, date).await?;
     store::save_new(&m.ws, &mut course).map_err(course_err)?;
+    let card = json!({ "title": card.title, "why": card.why, "kind": card.kind, "category": card.category });
+    package_course(s, m, provider, lang, &course, &card, date).await
+}
+
+/// Write a saved course's lessons and a package each for the iPad.
+async fn package_course(s: &Shared, m: &Loaded, provider: &dyn jl_core::provider::LlmProvider, lang: Lang, course: &jl_core::course::Course, card: &Value, date: &str) -> Result<Vec<Value>, ApiError> {
     let t = templates(&m.ws);
     let lr = learner(m, lang, false).await?;
     let focus = picker::load_focus(&m.ws, lang);
@@ -237,7 +261,9 @@ async fn prepare_one(s: &Shared, m: &Loaded, provider: &dyn jl_core::provider::L
             "course": course.id,
             "lesson": n,
             "lesson_id": lesson_id,
-            "card": { "title": card.title, "why": card.why, "kind": card.kind, "category": card.category },
+            "card": card,
+            // A library lesson's picture (in the member's folder while the lesson is open).
+            "picture": crate::library::picture_for_package(&m.ws, lang, &course.id),
             "plan": { "title": lp.title, "purpose": lp.purpose, "minutes": lp.minutes, "units": unit_json(&lp), "words": lp.words },
             "data": data,
             "review_cards": cards,
@@ -247,9 +273,71 @@ async fn prepare_one(s: &Shared, m: &Loaded, provider: &dyn jl_core::provider::L
         let path = m.ws.profile_dir().join(&rel);
         std::fs::create_dir_all(path.parent().expect("has a parent")).map_err(|e| bad(e.to_string()))?;
         std::fs::write(&path, serde_json::to_string_pretty(&package).unwrap_or_default()).map_err(|e| bad(e.to_string()))?;
-        out.push(json!({ "title": card.title, "why": card.why, "kind": card.kind, "course": course.id, "lesson": n, "file": rel, "minutes": lp.minutes }));
+        out.push(json!({ "title": card["title"], "why": card["why"], "kind": card["kind"], "category": card["category"], "course": course.id, "lesson": n, "file": rel, "minutes": lp.minutes }));
     }
     Ok(out)
+}
+
+/// Library lessons for the iPad: texts not used for this member yet, each
+/// day's choices from different categories.
+async fn run_library(s: &Shared, m: &Loaded, lang: Lang, days: u32, choices: u32, coll: &str, mut index: Value) -> Result<(), ApiError> {
+    let used_path = m.ws.profile_dir().join("ipad").join("library-used.txt");
+    let used: Vec<String> = std::fs::read_to_string(&used_path).unwrap_or_default().lines().map(str::to_string).collect();
+    let avail: Vec<(jl_core::course::library::Topic, jl_core::course::library::LessonFocus)> =
+        crate::library::written_lessons(&m.ws.root, coll).into_iter().filter(|(_, l)| !used.contains(&l.id)).collect();
+    let want = (days * choices) as usize;
+    // Round-robin over categories, in syllabus order.
+    let mut cats: Vec<String> = vec![];
+    for (t, _) in &avail {
+        if !cats.contains(&t.cat) {
+            cats.push(t.cat.clone());
+        }
+    }
+    let mut queues: Vec<std::collections::VecDeque<(jl_core::course::library::Topic, jl_core::course::library::LessonFocus)>> =
+        cats.iter().map(|c| avail.iter().filter(|(t, _)| &t.cat == c).cloned().collect()).collect();
+    let mut picked = vec![];
+    while picked.len() < want && queues.iter().any(|q| !q.is_empty()) {
+        for q in queues.iter_mut() {
+            if picked.len() == want {
+                break;
+            }
+            if let Some(x) = q.pop_front() {
+                picked.push(x);
+            }
+        }
+    }
+    if picked.is_empty() {
+        return Err(bad("主題庫裡沒有還沒用過的課了：先在主題庫「寫更多課」"));
+    }
+    update(s, |p| p.total = picked.len());
+    let provider = crate::provider(s).await?;
+    for (i, (t, l)) in picked.into_iter().enumerate() {
+        let date = day(i as u32 / choices);
+        update(s, |p| p.current = l.zh.clone());
+        let res: Result<Vec<Value>, ApiError> = async {
+            let made = crate::library::course_from_text(s, m, coll, &l.id, &date).await?;
+            let card = json!({ "title": l.zh, "why": l.goal, "kind": "library", "category": t.cat });
+            package_course(s, m, provider.as_ref(), lang, &made, &card, &date).await
+        }
+        .await;
+        match res {
+            Ok(entries) => {
+                let mut list = index["days"][&date].as_array().cloned().unwrap_or_default();
+                list.extend(entries);
+                index["days"][&date] = Value::Array(list);
+                save_index(m, &index).map_err(|e| bad(e.to_string()))?;
+                let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&used_path).map_err(|e| bad(e.to_string()))?;
+                use std::io::Write;
+                writeln!(f, "{}", l.id).map_err(|e| bad(e.to_string()))?;
+                update(s, |p| {
+                    p.done += 1;
+                    p.made.push(l.zh.clone());
+                });
+            }
+            Err(e) => update(s, |p| p.errors.push(format!("{}：{}", l.zh, e.1))),
+        }
+    }
+    Ok(())
 }
 
 fn index_path(m: &Loaded) -> std::path::PathBuf {

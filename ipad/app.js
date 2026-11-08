@@ -294,7 +294,7 @@ function drawHome(box) {
 }
 function choiceButton(x) {
   const b = el("button", "choice");
-  const kind = { news: "新聞", interest: "興趣", general: "通識" }[x.kind] ?? "";
+  const kind = x.kind === "library" ? x.category ?? "" : { news: "新聞", interest: "興趣", general: "通識" }[x.kind] ?? "";
   if (kind) b.append(el("span", `tag${x.kind === "news" ? " acc" : ""}`, kind));
   b.append(el("b", null, x.title));
   if (x.why) b.append(el("span", "why", x.why));
@@ -441,6 +441,7 @@ function drawReading(box, pkg, u) {
     g.append(gRow);
     box.append(g);
     const t = el("div", "card");
+    if (pkg.picture?.path) t.append(pictureFigure(pkg.picture));
     t.append(rich("div", "text", data.text));
     const row = el("div", "row");
     row.append(button("🔊 唸課文", "", () => speak(data.text, lang)), button("停", "", () => synth?.cancel()));
@@ -495,6 +496,29 @@ function drawReading(box, pkg, u) {
     d.append(why);
     box.append(d);
   });
+}
+
+/** A library lesson's picture (from the repository; kept here for offline use) with its credit. */
+function pictureFigure(pic) {
+  const fig = el("figure", "pic");
+  const img = el("img");
+  img.alt = "";
+  const cap = el("figcaption", "note");
+  const a = el("a", null, `${pic.author}・${pic.licence}`);
+  a.href = pic.page; a.target = "_blank"; a.rel = "noopener";
+  cap.append("圖片：", a);
+  fig.append(img, cap);
+  const key = `jl.pic:${pic.path}`;
+  const cached = store.get(key);
+  if (cached) img.src = cached;
+  else {
+    gh(`/contents/${encodeURI(base() + pic.path)}`, { headers: { Accept: "application/vnd.github.raw+json" } })
+      .then((r) => r.blob())
+      .then((b) => new Promise((ok) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(b); }))
+      .then((url) => { img.src = url; store.set(key, url); })
+      .catch(() => fig.remove());
+  }
+  return fig;
 }
 
 /** Sentences of a text (English: . ! ? ; Japanese: 。！？). */

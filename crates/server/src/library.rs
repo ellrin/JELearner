@@ -95,16 +95,29 @@ pub struct Progress {
     pub errors: Vec<String>,
 }
 
-static PROGRESS: Mutex<Option<Progress>> = Mutex::new(None);
+/// Progress per server (an app has one; tests run several side by side).
+static PROGRESS: Mutex<Option<std::collections::HashMap<usize, Progress>>> = Mutex::new(None);
 
-fn update(f: impl FnOnce(&mut Progress)) {
-    if let Some(p) = PROGRESS.lock().expect("lock").as_mut() {
+fn key(s: &Shared) -> usize {
+    std::sync::Arc::as_ptr(s) as *const () as usize
+}
+
+fn current(s: &Shared) -> Option<Progress> {
+    PROGRESS.lock().expect("lock").as_ref().and_then(|m| m.get(&key(s)).cloned())
+}
+
+fn set(s: &Shared, p: Progress) {
+    PROGRESS.lock().expect("lock").get_or_insert_with(Default::default).insert(key(s), p);
+}
+
+fn update(s: &Shared, f: impl FnOnce(&mut Progress)) {
+    if let Some(p) = PROGRESS.lock().expect("lock").as_mut().and_then(|m| m.get_mut(&key(s))) {
         f(p);
     }
 }
 
-async fn status() -> R<Value> {
-    Ok(Json(json!({ "progress": PROGRESS.lock().expect("lock").clone() })))
+async fn status(State(s): State<Shared>) -> R<Value> {
+    Ok(Json(json!({ "progress": current(&s) })))
 }
 
 #[derive(Deserialize)]
@@ -142,13 +155,10 @@ async fn start(State(s): State<Shared>, Json(b): Json<BuildBody>) -> R<Value> {
         return Err(bad("這些主題的課都已經寫好了"));
     }
     let limit = b.limit.unwrap_or(10).clamp(1, 500);
-    {
-        let mut p = PROGRESS.lock().expect("lock");
-        if p.as_ref().is_some_and(|p| p.running) {
-            return Err(bad("已經在產生了，等這一批做完"));
-        }
-        *p = Some(Progress { running: true, collection: b.collection.clone(), total: limit, ..Default::default() });
+    if current(&s).is_some_and(|p| p.running) {
+        return Err(bad("已經在產生了，等這一批做完"));
     }
+    set(&s, Progress { running: true, collection: b.collection.clone(), total: limit, ..Default::default() });
     let s2 = s.clone();
     tokio::spawn(async move {
         let mut written = 0;
@@ -158,10 +168,10 @@ async fn start(State(s): State<Shared>, Json(b): Json<BuildBody>) -> R<Value> {
             }
             match work_on_theme(&s2, &root, &b.collection, &syl, &t, &native, limit - written).await {
                 Ok(n) => written += n,
-                Err(e) => update(|p| p.errors.push(format!("{}：{}", t.zh, e.1))),
+                Err(e) => update(&s2, |p| p.errors.push(format!("{}：{}", t.zh, e.1))),
             }
         }
-        update(|p| {
+        update(&s2, |p| {
             p.running = false;
             p.current.clear();
             p.total = p.done;
@@ -172,7 +182,7 @@ async fn start(State(s): State<Shared>, Json(b): Json<BuildBody>) -> R<Value> {
 
 /// Read a theme's references once; split it if needed; write up to `room` texts.
 async fn work_on_theme(s: &Shared, root: &Path, collection: &str, syl: &Syllabus, t: &Topic, native: &str, room: usize) -> Result<usize, ApiError> {
-    update(|p| p.current = format!("讀參考資料：{}", t.zh));
+    update(s, |p| p.current = format!("讀參考資料：{}", t.zh));
     let mut docs: Vec<(String, SourceDoc)> = vec![];
     // Each reference page's lead picture (by its URL).
     let mut lead: HashMap<String, String> = HashMap::new();
@@ -206,7 +216,7 @@ async fn work_on_theme(s: &Shared, root: &Path, collection: &str, syl: &Syllabus
     let plan = match library::load_plan(root, collection, t) {
         Some(p) => p,
         None => {
-            update(|p| p.current = format!("拆課：{}", t.zh));
+            update(s, |p| p.current = format!("拆課：{}", t.zh));
             let all: Vec<SourceDoc> = docs.iter().map(|(_, d)| d.clone()).collect();
             let req = library::split_request(&tpl, syl, t, native, &all).map_err(course_err)?;
             let reply = provider.complete(&req).await.map_err(crate::study::api_err)?;
@@ -224,7 +234,7 @@ async fn work_on_theme(s: &Shared, root: &Path, collection: &str, syl: &Syllabus
         if n >= room {
             break;
         }
-        update(|p| p.current = format!("{}：{}", t.zh, ls.zh));
+        update(s, |p| p.current = format!("{}：{}", t.zh, ls.zh));
         let mine: Vec<SourceDoc> = docs.iter().filter(|(r, _)| ls.refs.is_empty() || ls.refs.contains(r)).map(|(_, d)| d.clone()).collect();
         let sources = if mine.is_empty() { docs.iter().map(|(_, d)| d.clone()).collect() } else { mine };
         let res: Result<String, ApiError> = async {
@@ -257,12 +267,12 @@ async fn work_on_theme(s: &Shared, root: &Path, collection: &str, syl: &Syllabus
         match res {
             Ok(title) => {
                 n += 1;
-                update(|p| {
+                update(s, |p| {
                     p.done += 1;
                     p.made.push(format!("{}・{}", ls.zh, title));
                 });
             }
-            Err(e) => update(|p| p.errors.push(format!("{}・{}：{}", t.zh, ls.zh, e.1))),
+            Err(e) => update(s, |p| p.errors.push(format!("{}・{}：{}", t.zh, ls.zh, e.1))),
         }
     }
     Ok(n)
@@ -330,6 +340,41 @@ pub(crate) fn source_of(a: &Article) -> SourceText {
 
 async fn lesson(State(s): State<Shared>, Json(b): Json<LessonBody>) -> R<Value> {
     let l = ws(&s).await?;
+    let course = course_from_text(&s, &l, &b.collection, &b.id, &date()).await?;
+    let picture = picture_paths(&l.ws, course.lang, &course.id).0.is_file();
+    Ok(Json(json!({ "id": course.id, "next": 1, "lessons": course.lessons.len(), "picture": picture })))
+}
+
+/// The collection for a language (the first one), if the workspace has one.
+pub(crate) fn collection_for(root: &Path, lang: jl_core::Lang) -> Option<String> {
+    library::collections(root).into_iter().find(|c| library::load_syllabus(root, c).is_ok_and(|s| s.lang == lang))
+}
+
+/// Every planned lesson whose text is written, in syllabus order.
+pub(crate) fn written_lessons(root: &Path, collection: &str) -> Vec<(Topic, LessonFocus)> {
+    let Ok(syl) = library::load_syllabus(root, collection) else { return vec![] };
+    syl.topic
+        .iter()
+        .flat_map(|t| library::load_plan(root, collection, t).map(|p| p.lesson).unwrap_or_default().into_iter().map(move |l| (t.clone(), l)))
+        .filter(|(t, l)| library::article_path(root, collection, t, &l.id).exists())
+        .collect()
+}
+
+/// The picture of a lesson for the iPad: its path in the member's folder and its credit.
+pub(crate) fn picture_for_package(ws: &jl_core::workspace::Workspace, lang: jl_core::Lang, course: &str) -> Value {
+    let (jpg, meta) = picture_paths(ws, lang, course);
+    let Ok(r) = std::fs::read_to_string(meta).and_then(|t| serde_json::from_str::<ImageRef>(&t).map_err(std::io::Error::other)) else { return Value::Null };
+    if !jpg.is_file() {
+        return Value::Null;
+    }
+    let rel = jpg.strip_prefix(ws.profile_dir()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    json!({ "path": rel, "author": r.author, "licence": r.licence, "page": r.page })
+}
+
+/// A one-lesson course from a library text for `l` (the active learner or a
+/// family member), dated `created`, with its picture downloaded and shrunk.
+pub(crate) async fn course_from_text(s: &Shared, l: &crate::Loaded, collection: &str, id: &str, created: &str) -> Result<jl_core::course::Course, ApiError> {
+    let b = LessonBody { collection: collection.to_string(), id: id.to_string() };
     let root = l.ws.root.clone();
     let syl = library::load_syllabus(&root, &b.collection).map_err(course_err)?;
     if !l.ws.profile.languages.contains(&syl.lang) {
@@ -342,7 +387,7 @@ async fn lesson(State(s): State<Shared>, Json(b): Json<LessonBody>) -> R<Value> 
         .ok_or_else(|| bad("找不到這一課"))?;
     let a = read_text(&root, &b.collection, &t, &ls).ok_or_else(|| bad("這一課的文章還沒寫"))?;
     let keywords: Vec<String> = a.key_terms.iter().take(3).map(|k| k.term.clone()).chain(t.news.iter().take(2).cloned()).collect();
-    let mut course = daily_course(&l, syl.lang, &a.title, keywords, Some(source_of(&a)), String::new(), &date()).await?;
+    let mut course = daily_course(l, syl.lang, &a.title, keywords, Some(source_of(&a)), String::new(), created).await?;
     // The words to learn are the text's own key terms (not words due elsewhere).
     let n = course.lessons.first().map(|lp| lp.words.len()).unwrap_or(0).clamp(4, 8);
     if let Some(lp) = course.lessons.first_mut() {
@@ -354,21 +399,14 @@ async fn lesson(State(s): State<Shared>, Json(b): Json<LessonBody>) -> R<Value> 
     course.summary = ls.goal.clone();
     store::save_new(&l.ws, &mut course).map_err(course_err)?;
     // The picture: downloaded and shrunk now, removed when the lesson is done.
-    let mut picture = false;
-    if let Some(img) = &a.image {
-        let lang = syl.lang;
-        let ws_ = l.ws.clone();
-        let id = course.id.clone();
-        drop(l);
-        if let Ok(bytes) = s.fetcher.get_bytes(&img.url).await
-            && let Ok(jpg) = picture::compress(&bytes)
-        {
-            let (p, meta) = picture_paths(&ws_, lang, &id);
-            if std::fs::create_dir_all(p.parent().expect("has a parent")).is_ok() && std::fs::write(&p, jpg).is_ok() {
-                picture = std::fs::write(meta, serde_json::to_string_pretty(img).unwrap_or_default()).is_ok();
-            }
+    if let Some(img) = &a.image
+        && let Ok(bytes) = s.fetcher.get_bytes(&img.url).await
+        && let Ok(jpg) = picture::compress(&bytes)
+    {
+        let (p, meta) = picture_paths(&l.ws, syl.lang, &course.id);
+        if std::fs::create_dir_all(p.parent().expect("has a parent")).is_ok() && std::fs::write(&p, jpg).is_ok() {
+            let _ = std::fs::write(meta, serde_json::to_string_pretty(img).unwrap_or_default());
         }
-        return Ok(Json(json!({ "id": id, "next": 1, "lessons": 1, "picture": picture })));
     }
-    Ok(Json(json!({ "id": course.id, "next": 1, "lessons": course.lessons.len(), "picture": picture })))
+    Ok(course)
 }

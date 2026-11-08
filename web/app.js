@@ -1339,6 +1339,22 @@ function openPrep(m, watching = false) {
   const lang = sel("語言", [["en", "英文"], ["ja", "日文"]], state.lang);
   const days = sel("天數", [1, 2, 3, 5, 7].map((d) => [String(d), `${d} 天`]), "3");
   const choices = sel("每天可選", [1, 2, 3, 4].map((c) => [String(c), `${c} 個主題`]), "3");
+  // The content: the topic library of that language (default), or the day's news.
+  const sourceLabel = el("label");
+  const source = el("select");
+  source.setAttribute("aria-label", "內容");
+  sourceLabel.append(el("span", null, "內容"), source);
+  form.append(sourceLabel);
+  let libs = [];
+  const fillSource = () => {
+    const lib = libs.find((c) => c.lang === lang.value && c.written > 0);
+    source.innerHTML = "";
+    if (lib) { const o = el("option", null, `主題庫・${lib.name}（${lib.written} 堂）`); o.value = "library"; source.append(o); }
+    const n = el("option", null, "每日新聞"); n.value = "news"; source.append(n);
+  };
+  lang.addEventListener("change", fillSource);
+  fillSource();
+  api("/api/library").then((r) => { libs = r.collections ?? []; fillSource(); }).catch(() => {});
   box.append(form);
   const row = el("div", "actions-row");
   const go = primaryButton("開始備課", null, true);
@@ -1420,7 +1436,7 @@ function openPrep(m, watching = false) {
     }
     try {
       startedHere = true;
-      await api("/api/family/prepare", { member: m.id, lang: lang.value, days: Number(days.value), choices: Number(choices.value) });
+      await api("/api/family/prepare", { member: m.id, lang: lang.value, days: Number(days.value), choices: Number(choices.value), source: source.value });
       watch();
     } catch (e) { lastKey = ""; out.innerHTML = ""; out.append(errLine(e.message)); }
   });
