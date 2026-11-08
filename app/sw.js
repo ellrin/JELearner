@@ -1,6 +1,6 @@
 // Offline: the app's own files (and the Claude SDK) from the cache, refreshed
 // in the background. GitHub and Claude API calls are never cached.
-const CACHE = "jl-app-dda98b3";
+const CACHE = "jl-app-3f9e858";
 const FILES = ["./", "index.html", "app.js", "style.css", "manifest.webmanifest", "icon-256.png", "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm"];
 self.addEventListener("install", (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener("activate", (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));
