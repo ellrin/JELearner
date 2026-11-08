@@ -43,7 +43,8 @@ let toastTimer;
 function toast(msg, bad = false) {
   const t = $("#toast");
   t.textContent = msg; t.className = `toast${bad ? " bad" : ""}`; t.hidden = false;
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 3500);
+  t.onclick = () => (t.hidden = true);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), bad ? 7000 : 3500);
 }
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const UNIT = { review: "複習卡片", reading: "課文與閱讀", quiz: "測驗", translation: "翻譯", "sentence-making": "造句", cloze: "填空", paraphrase: "換句話說", conversation: "AI 對話" };
@@ -54,13 +55,14 @@ function show(title, draw, push = true) {
   if (push) stack.push({ title, draw });
   $("#title").textContent = title;
   $("#back").hidden = stack.length <= 1;
+  $("#openSettings").hidden = !cfg;
   main.innerHTML = "";
   window.speechSynthesis?.cancel();
   draw(main);
   window.scrollTo(0, 0);
 }
 $("#back").onclick = () => { if (stack.length > 1) { stack.pop(); const v = stack[stack.length - 1]; show(v.title, v.draw, false); } };
-$("#openSettings").onclick = () => { stack.length = 0; show("設定", drawSettings); };
+$("#openSettings").onclick = () => show("設定", drawSettings);
 
 // ── GitHub: the shared private repository ───────────────
 const base = () => `profiles/${cfg.member}/`;
@@ -69,9 +71,10 @@ async function gh(path, opts = {}) {
     ...opts,
     headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${cfg.token}`, "X-GitHub-Api-Version": "2022-11-28", ...(opts.headers ?? {}) },
   });
+  if (!r.ok) console.warn("GitHub", r.status, path);
   if (r.status === 401) throw new Error("GitHub 不認得這把鑰匙了，請家人幫忙重新設定");
-  if (r.status === 403 || r.status === 404) throw Object.assign(new Error(`找不到檔案或沒有權限（${r.status}）`), { status: r.status });
-  if (!r.ok) throw new Error(`GitHub ${r.status}`);
+  if (r.status === 403 || r.status === 404) throw Object.assign(new Error("找不到課程資料，請家人檢查設定（repo 或使用者 id）"), { status: r.status });
+  if (!r.ok) throw new Error("GitHub 暫時連不上，等一下再試");
   return r;
 }
 async function readJson(rel) {
@@ -85,6 +88,7 @@ async function putNew(rel, text, message) {
 
 // ── sync: results up, lessons down ──────────────────────
 let syncing = false;
+let syncError = null;
 function syncState(text, bad = false) { const s = $("#syncState"); s.textContent = text; s.className = `sync${bad ? " bad" : ""}`; }
 async function sync() {
   if (!cfg || syncing) return;
@@ -111,7 +115,9 @@ async function sync() {
       }
     }
     syncState(`已同步 ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+    syncError = null;
   } catch (e) {
+    syncError = e.message;
     syncState(navigator.onLine ? "沒有同步成功" : "離線中", navigator.onLine);
     if (navigator.onLine) console.warn(e);
     throw e;
@@ -145,12 +151,14 @@ function speak(text, lang) {
   });
 }
 const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+let currentRec = null;
 /** Tap to talk: a new recognizer each time (the iPad audio session). */
 function listen(lang, onText) {
   return new Promise((resolve, reject) => {
     if (!Rec) return reject(new Error("這個瀏覽器不能聽寫，請用打字的"));
     synth?.cancel();
     const r = new Rec();
+    currentRec = r;
     r.lang = lang === "ja" ? "ja-JP" : "en-US";
     r.interimResults = true; r.continuous = false;
     let final = "", interim = "", err = null;
@@ -160,21 +168,28 @@ function listen(lang, onText) {
       onText?.(final + interim);
     };
     r.onerror = (e) => { err = e.error; };
-    r.onend = () => (err && err !== "no-speech" && !final && !interim ? reject(new Error(err === "not-allowed" ? "麥克風沒有開放，到 設定 › Safari › 麥克風 允許" : `聽寫失敗（${err}）`)) : resolve(final || interim));
+    r.onend = () => (err && err !== "no-speech" && !final && !interim ? reject(new Error(err === "not-allowed" ? "麥克風沒有開放，到 設定 › Safari › 麥克風 允許" : "沒聽清楚，再說一次，或用打字的")) : resolve(final || interim));
     try { r.start(); } catch (e) { reject(e); }
     setTimeout(() => { try { r.stop(); } catch { /* ended */ } }, 15000);
   });
 }
 function micButton(lang, target) {
   const b = el("button", "mic", "🎤");
-  b.setAttribute("aria-label", "按一下開始說");
+  const idle = () => { b.classList.remove("on"); b.textContent = "🎤"; b.setAttribute("aria-label", "按一下開始說"); };
+  idle();
   b.onclick = async () => {
-    b.classList.add("on"); b.disabled = true;
-    try { const t = await listen(lang, (x) => { target.value = x; }); target.value = t; target.dispatchEvent(new Event("input")); }
+    if (b.classList.contains("on")) { try { currentRec?.stop(); } catch { /* ended */ } return; }
+    b.classList.add("on"); b.textContent = "■"; b.setAttribute("aria-label", "正在聽，再按一下停");
+    try { const t = await listen(lang, (x) => { target.value = x; target.dispatchEvent(new Event("input")); }); target.value = t; target.dispatchEvent(new Event("input")); }
     catch (e) { toast(e.message, true); }
-    finally { b.classList.remove("on"); b.disabled = false; }
+    finally { idle(); }
   };
   return b;
+}
+/** A text box that grows with what is said or typed (up to about four lines). */
+function grow(ta) {
+  ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`; });
+  return ta;
 }
 
 // ── Claude: the AI conversation ─────────────────────────
@@ -195,7 +210,8 @@ async function claude(system, messages, schema, maxTokens) {
     if (e instanceof Anthropic.AuthenticationError) throw new Error("AI 老師的鑰匙不對，請家人幫忙重新設定");
     if (e instanceof Anthropic.RateLimitError) throw new Error("AI 老師忙不過來，等一下再試");
     if (e instanceof Anthropic.APIConnectionError) throw new Error("連不上 AI 老師，檢查一下網路");
-    throw new Error(`AI 老師暫時沒有回答（${e.status ?? e.message}）`);
+    console.warn("Claude", e.status, e.message);
+    throw new Error("AI 老師暫時沒有回答，等一下再試");
   }
   if (res.stop_reason === "refusal") throw new Error("AI 老師沒有回答這句，換個說法再試一次");
   const text = res.content.filter((b) => b.type === "text").map((b) => b.text).join("");
@@ -243,7 +259,14 @@ function drawHome(box) {
   const index = store.get("jl.index");
   const d = today();
   const list = index?.days?.[d] ?? [];
-  if (!index) { box.append(el("p", "muted", "正在拿今天的課…")); return; }
+  if (!index) {
+    if (!syncError) { box.append(el("p", "muted", "正在拿今天的課…")); return; }
+    box.append(el("h2", null, "還拿不到今天的課"), el("p", "err", syncError));
+    const row = el("div", "row");
+    row.append(button("再試一次", "main", async () => { try { await sync(); } catch { /* shown below */ } show("今天", drawHome, false); }));
+    box.append(row);
+    return;
+  }
   const picked = st.picked[d];
   if (picked) {
     const e = list.find((x) => x.file === picked);
@@ -299,11 +322,16 @@ function openLesson(file) {
   if (!pkg) { toast("這堂課還沒下載", true); return; }
   show(pkg.card?.title ?? pkg.plan.title, (box) => {
     if (pkg.plan.purpose) box.append(el("p", "muted", pkg.plan.purpose));
+    const next = pkg.plan.units.find((x) => !doneOf(keyOf(pkg)).includes(x.index));
+    const top = el("div", "row");
+    if (next) top.append(button(`${doneOf(keyOf(pkg)).length ? "繼續" : "開始"}：${UNIT[next.kind] ?? next.kind}`, "main", () => openUnit(pkg, next)));
+    else top.append(el("span", "tag ok", "這堂課完成了"));
+    box.append(top);
     const ul = el("ul", "units");
     for (const u of pkg.plan.units) {
       const li = el("li");
       const done = doneOf(keyOf(pkg)).includes(u.index);
-      const b = el("button", done ? "done" : "");
+      const b = el("button", done ? "done" : u === next ? "next" : "");
       const mk = el("span", "mark", done ? "✓" : String(u.index + 1));
       b.append(mk, el("span", null, UNIT[u.kind] ?? u.kind), el("span", "min", `${u.minutes} 分`));
       b.onclick = () => openUnit(pkg, u);
@@ -390,7 +418,9 @@ function drawReading(box, pkg, u) {
       if (answers.filter(Boolean).length === qs.length) {
         const n = answers.filter((a) => a.correct).length;
         finishUnit(pkg, u, { answers });
-        box.append(el("h2", null, `答對 ${n} / ${qs.length}`), nextRow(pkg, u));
+        const h = el("h2", null, `答對 ${n} / ${qs.length}`);
+        box.append(h, nextRow(pkg, u));
+        h.scrollIntoView({ block: "center", behavior: "smooth" });
       }
     };
     if (q.kind === "choice" && q.options?.length) {
@@ -407,7 +437,7 @@ function drawReading(box, pkg, u) {
       });
       d.append(opts);
     } else {
-      const ta = el("textarea"); ta.rows = 2; if (lang === "ja") ta.lang = "ja";
+      const ta = grow(el("textarea")); ta.rows = 2; if (lang === "ja") ta.lang = "ja";
       const row = el("div", "row");
       row.append(micButton(lang, ta), button("對答案", "", () => {
         if (answers[k]) return;
@@ -435,7 +465,7 @@ function drawOutput(box, pkg, u) {
   items.forEach((it, k) => {
     const d = el("div", "card");
     d.append(rich("div", null, `${k + 1}. ${it.prompt}`));
-    const ta = el("textarea"); ta.rows = 2; if (lang === "ja") ta.lang = "ja";
+    const ta = grow(el("textarea")); ta.rows = 2; if (lang === "ja") ta.lang = "ja";
     const row = el("div", "row");
     const fb = el("div");
     const mark = (ok) => {
@@ -444,7 +474,9 @@ function drawOutput(box, pkg, u) {
       ta.disabled = true;
       if (marks.filter(Boolean).length === items.length) {
         finishUnit(pkg, u, { items: marks });
-        box.append(el("h2", null, "做完了"), nextRow(pkg, u));
+        const h = el("h2", null, "做完了");
+        box.append(h, nextRow(pkg, u));
+        h.scrollIntoView({ block: "center", behavior: "smooth" });
       }
     };
     row.append(micButton(lang, ta), button("對答案", "", () => {
@@ -463,7 +495,12 @@ function drawOutput(box, pkg, u) {
 function drawConversation(box, pkg, u) {
   const c = pkg.conversation;
   const lang = pkg.lang;
-  if (!c?.system) { box.append(el("p", "muted", "這堂課的對話沒有準備好，先跳過。")); return; }
+  if (!c?.system) {
+    box.append(el("p", "muted", "這堂課的對話沒有準備好，先跳過。"));
+    const d = doneOf(keyOf(pkg)); if (!d.includes(u.index)) d.push(u.index); save();
+    box.append(nextRow(pkg, u));
+    return;
+  }
   const key = keyOf(pkg);
   const conv = (st.convs[key] ??= { started_at: new Date().toISOString(), turns: [{ role: "ai", text: c.opening || "", recast: "" }] });
   save();
@@ -475,21 +512,25 @@ function drawConversation(box, pkg, u) {
     const b = el("div", `bubble ${t.role === "me" ? "me" : ""}`);
     if (t.recast) { const r = el("span", "recast"); r.innerHTML = `↻ ${ruby(t.recast)}`; b.append(r); }
     b.append(rich("span", null, t.text));
-    if (t.role === "ai") { const s = el("button", "btn", "🔊"); s.style.minHeight = "36px"; s.style.marginLeft = "8px"; s.onclick = () => speak(`${t.recast ? `${t.recast}。` : ""}${t.text}`, lang); b.append(s); }
+    if (t.role === "ai") { const s = el("button", "btn again", "🔊"); s.setAttribute("aria-label", "再聽一次"); s.onclick = () => speak(`${t.recast ? `${t.recast}。` : ""}${t.text}`, lang); b.prepend(s); }
     chat.append(b);
-    b.scrollIntoView({ block: "end", behavior: "smooth" });
+    toBottom();
   };
-  conv.turns.forEach(bubble);
-  const bar = el("div", "say");
+  // The bar is fixed at the bottom: keep the newest message above it.
+  const toBottom = () => { chat.style.marginBottom = `${(bar?.offsetHeight ?? 120) + 16}px`; window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" }); };
+  let bar;
+  bar = el("div", "say");
+  const status = el("div", "status"); status.setAttribute("role", "status");
+  bar.append(status);
   const inner = el("div", "inner");
-  const ta = el("textarea"); ta.rows = 1; ta.placeholder = lang === "ja" ? "日本語で話そう" : "Say it in English"; if (lang === "ja") ta.lang = "ja";
+  const ta = grow(el("textarea")); ta.rows = 1; ta.placeholder = lang === "ja" ? "日本語で話そう" : "Say it in English"; if (lang === "ja") ta.lang = "ja";
   const send = button("送出", "main", null);
   inner.append(micButton(lang, ta), ta, send);
   bar.append(inner);
   box.append(bar);
-  const status = el("p", "note"); status.setAttribute("role", "status");
-  box.append(status);
-  const left = () => { status.textContent = me() >= c.turns ? "" : `還有 ${c.turns - me()} 句`; };
+  conv.turns.forEach(bubble);
+  const say = (text, bad = false) => { status.textContent = text; status.className = `status${bad ? " err" : ""}`; };
+  const left = () => say(me() >= c.turns ? "" : `還有 ${c.turns - me()} 句`);
   left();
   const asMessages = () => {
     const m = [{ role: "user", content: c.opening_cue }];
@@ -497,23 +538,25 @@ function drawConversation(box, pkg, u) {
     return m;
   };
   const finish = async () => {
-    bar.remove();
-    status.textContent = "AI 老師正在看你的表現…";
+    inner.remove();
+    say("AI 老師正在看你的表現…");
     const lines = conv.turns.map((t) => (t.role === "ai" ? `[partner] ${(t.recast ? `${t.recast}\n${t.text}` : t.text).replace(/\n/g, " ")}` : `[learner] ${t.text}`)).join("\n");
     try {
       const review = await claude(c.review_system, [{ role: "user", content: `${c.review_user_head}${lines}\n${c.review_user_tail}` }], c.review_schema, c.review_max_tokens || 4000);
       queue({ type: "conversation", course: pkg.course, lesson: pkg.lesson, unit: u.index, started_at: conv.started_at, turns: conv.turns, review });
       const d = doneOf(key); if (!d.includes(u.index)) d.push(u.index);
       delete st.convs[key]; save();
-      status.textContent = "";
+      bar.remove();
+      chat.style.marginBottom = "16px";
       const r = el("div", "card");
       r.append(el("h2", null, "對話完成！"));
       if (review.summary) r.append(el("p", null, review.summary));
       for (const b of review.better ?? []) { const p = el("p", "note"); p.innerHTML = `${esc(b.original)} → <b>${esc(b.suggestion)}</b>　${esc(b.why)}`; r.append(p); }
       box.append(r, nextRow(pkg, u));
+      r.scrollIntoView({ block: "start", behavior: "smooth" });
     } catch (e) {
-      status.textContent = e.message;
-      box.append(button("再試一次", "main", finish));
+      say(e.message, true);
+      if (!bar.querySelector(".retry")) { const again = button("再試一次", "main retry", finish); bar.append(again); }
     }
   };
   const turn = async () => {
@@ -522,7 +565,8 @@ function drawConversation(box, pkg, u) {
     ta.value = ""; send.disabled = true;
     const t = { role: "me", text, recast: "" };
     conv.turns.push(t); save(); bubble(t);
-    status.textContent = "…";
+    ta.style.height = "auto";
+    say("AI 老師在想…");
     try {
       const last = me() >= c.turns;
       const reply = await claude(last ? c.system_last : c.system, asMessages(), c.turn_schema, c.turn_max_tokens || 2000);
@@ -534,7 +578,7 @@ function drawConversation(box, pkg, u) {
     } catch (e) {
       // Take the turn back so it can be sent again.
       conv.turns.pop(); save(); chat.lastChild?.remove(); ta.value = text;
-      status.textContent = e.message;
+      say(e.message, true);
     } finally { send.disabled = false; }
   };
   send.onclick = turn;

@@ -59,7 +59,7 @@ textarea, input[type=text], input[type=password] { width: 100%; border: 1px soli
 label.f { display: block; margin: 12px 0; }
 label.f span { display: block; font-size: 15px; color: var(--muted); margin-bottom: 4px; }
 .model { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--surface); }
-.chat { display: flex; flex-direction: column; gap: 10px; margin-bottom: 120px; }
+.chat { display: flex; flex-direction: column; gap: 10px; margin-bottom: 140px; }
 .bubble { max-width: 85%; padding: 12px 14px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); }
 .bubble.me { align-self: flex-end; background: var(--surface); }
 .bubble .recast { display: block; font-size: 15px; color: var(--ok); margin-bottom: 4px; }
@@ -73,3 +73,10 @@ label.f span { display: block; font-size: 15px; color: var(--muted); margin-bott
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-size: 15px; z-index: 20; max-width: calc(100vw - 32px); }
 .toast.bad { background: var(--err); color: #fff; }
 .skel { height: 18px; border-radius: 8px; background: var(--surface); margin: 10px 0; }
+
+.say .status { max-width: 820px; margin: 0 auto 8px; font-size: 15px; color: var(--muted); min-height: 1em; }
+.say .status.err { color: var(--err); }
+.say .retry { display: block; margin: 0 auto; }
+.bubble .again { float: right; min-height: 40px; min-width: 44px; padding: 4px 10px; margin: 0 0 4px 10px; }
+.units li button.next { border-color: var(--acc-text); }
+.toast { cursor: pointer; }
