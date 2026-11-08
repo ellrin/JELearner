@@ -4,9 +4,12 @@
     "beforeBuildCommand": "cd \"$(git rev-parse --show-toplevel)\" && sh scripts/build-speech.sh"
   },
   "bundle": {
-    "externalBin": ["binaries/jl-speech"],
+    "externalBin": [
+      "binaries/jl-speech"
+    ],
     "macOS": {
-      "minimumSystemVersion": "26.0"
+      "minimumSystemVersion": "26.0",
+      "entitlements": "Entitlements.plist"
     }
   }
 }
