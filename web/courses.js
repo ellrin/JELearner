@@ -476,6 +476,15 @@ const REVIEW_LIMIT = 20;
 function lessonDoneBanner(o) {
   const b = el("div", "lesson-done");
   b.append(icon("check"), el("b", null, "這一課完成了"));
+  // What the lesson gave: its points and the words learned.
+  const pts = (o.plan.units ?? []).reduce((a, u) => a + (u.points ?? 0), 0);
+  const words = (o.plan.words ?? []).map((w) => w.term);
+  if (pts || words.length) {
+    const sum = el("div", "ld-sum");
+    if (pts) sum.append(el("span", "pts", `+${Math.round(pts * 10) / 10} 分`));
+    if (words.length) { sum.append(el("span", null, "學了：")); for (const w of words) sum.append(elr("span", "w", w, o.course.lang)); }
+    b.append(sum);
+  }
   const next = o.course.next;
   const row = el("div", "actions-row");
   // The main button is today's next task (or back to today).
@@ -657,6 +666,24 @@ function stepReading(box, o, u) {
   const words = [...(o.plan.words ?? []).map((w) => w.term), ...(o.plan.review ?? [])];
   // The text and its questions; words and grammar are the next step.
   lessonPaper(paper, o.lesson, o.row, { quiz, highlight: words, parts: ["head", "text", "questions"] });
+  // Sentence by sentence through the whole text: listen, then say it.
+  const text = o.lesson.text?.trim();
+  const tx = paper.querySelector(".lesson-text");
+  if (text && tx) {
+    const lang = o.course.lang;
+    const guide = el("div", "read-guide");
+    const listenOnly = !Speech.canListen(lang);
+    guide.append(el("span", null, listenOnly ? "先一句一句聽，跟著唸出來，再回答下面的問題。" : "先聽一句、跟著唸一句，唸完整篇再回答下面的問題。"));
+    const go = primaryButton(listenOnly ? "逐句聽" : "逐句跟讀", () => {
+      const open = guide.nextElementSibling?.classList.contains("shadow") ? guide.nextElementSibling : null;
+      if (open) { open.remove(); return; }
+      const panel = Speech.shadowPanel(text.replace(/\n+/g, " "), lang);
+      guide.after(panel);
+      panel.scrollIntoView({ block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    }, true);
+    guide.append(go);
+    tx.before(guide);
+  }
   if (!quiz.total) reportUnit(box, o, u, { answers: [] }, "閱讀完成");
 }
 

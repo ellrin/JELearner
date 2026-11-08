@@ -503,7 +503,7 @@ const Speech = (() => {
   loadLocal();
   return {
     available: () => !!synth, hasVoices, canSpeak, canListen, hasRecognition, voicesFor, voiceFor, prefs, setPref,
-    speak, stop, speakerButton, micButton, shadowButton, listen, stopListening, compare, sentences, plain,
+    speak, stop, speakerButton, micButton, shadowButton, shadowPanel, listen, stopListening, compare, sentences, plain,
     refreshButtons, onVoices, SAMPLE, loadVoices, loadLocal, hasLocal, usesLocal, local: () => local,
     quality, TIER, lacksGoodVoice, wav, downsample, MAX_SECONDS,
   };

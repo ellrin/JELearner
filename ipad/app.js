@@ -180,7 +180,7 @@ function micButton(lang, target) {
   b.onclick = async () => {
     if (b.classList.contains("on")) { try { currentRec?.stop(); } catch { /* ended */ } return; }
     b.classList.add("on"); b.textContent = "■"; b.setAttribute("aria-label", "正在聽，再按一下停");
-    try { const t = await listen(lang, (x) => { target.value = x; target.dispatchEvent(new Event("input")); }); target.value = t; target.dispatchEvent(new Event("input")); }
+    try { const t = await listen(lang, (x) => { target.value = x; target.dispatchEvent(new Event("input")); }); idle(); target.value = t; target.dispatchEvent(new Event("input")); }
     catch (e) { toast(e.message, true); }
     finally { idle(); }
   };
@@ -427,6 +427,13 @@ function drawReading(box, pkg, u) {
   const data = pkg.data ?? {};
   const lang = pkg.lang;
   if (u.kind === "reading" && data.text) {
+    // Sentence by sentence: listen, then say it (before the questions).
+    const g = el("div", "card");
+    g.append(el("p", null, Rec ? "先聽一句、跟著唸一句，唸完整篇再回答下面的問題。" : "先一句一句聽，跟著唸出來，再回答下面的問題。"));
+    const gRow = el("div", "row");
+    gRow.append(button(Rec ? "逐句跟讀" : "逐句聽", "main", () => { g.replaceWith(shadowPanel(data.text, lang)); }));
+    g.append(gRow);
+    box.append(g);
     const t = el("div", "card");
     t.append(rich("div", "text", data.text));
     const row = el("div", "row");
@@ -482,6 +489,57 @@ function drawReading(box, pkg, u) {
     d.append(why);
     box.append(d);
   });
+}
+
+/** Sentences of a text (English: . ! ? ; Japanese: 。！？). */
+function sentencesOf(text, lang) {
+  const t = plain(text).replace(/\s*\n+\s*/g, " ").trim();
+  const parts = lang === "ja" ? t.split(/(?<=[。！？!?])/u) : t.split(/(?<=[.!?])\s+(?=[A-Z"'“‘(])/u);
+  return parts.map((x) => x.trim()).filter((x) => x.replace(/[\s.,!?。、！？「」"'“”‘’()-]/g, "").length > 0);
+}
+/** How much of the sentence was said: matched words (characters for Japanese), in percent. */
+function matchScore(target, said, lang) {
+  const norm = (x) => x.toLowerCase().replace(/[.,!?。、！？「」"'“”‘’()]/g, " ");
+  if (lang === "ja") {
+    const a = [...norm(target).replace(/\s/g, "")], b = norm(said).replace(/\s/g, "");
+    return a.length ? Math.round((a.filter((ch) => b.includes(ch)).length / a.length) * 100) : 0;
+  }
+  const a = norm(target).split(/\s+/).filter(Boolean), b = new Set(norm(said).split(/\s+/).filter(Boolean));
+  return a.length ? Math.round((a.filter((w) => b.has(w)).length / a.length) * 100) : 0;
+}
+function shadowPanel(text, lang) {
+  const list = sentencesOf(text, lang);
+  const box = el("div", "card");
+  let i = 0;
+  const draw = () => {
+    box.innerHTML = "";
+    const s = list[i];
+    box.append(el("p", "note", `第 ${i + 1} / ${list.length} 句`), rich("div", "text", s));
+    const heard = el("div", "heard");
+    const result = el("div");
+    const row = el("div", "row");
+    const listenBtn = button("🔊 聽這一句", "", () => speak(s, lang));
+    row.append(listenBtn);
+    if (Rec) {
+      const ta = el("textarea"); ta.hidden = true;
+      const mic = micButton(lang, ta);
+      ta.addEventListener("input", () => {
+        heard.textContent = ta.value;
+        if (mic.classList.contains("on")) return;
+        const sc = matchScore(s, ta.value, lang);
+        result.innerHTML = "";
+        result.append(el("p", sc >= 80 ? "" : "note", sc >= 80 ? `✓ ${sc}%，很好！` : `${sc}%，再聽一次、再唸一次看看`));
+      });
+      row.append(mic);
+    }
+    const nav = el("div", "row");
+    if (i > 0) nav.append(button("上一句", "", () => { i--; draw(); }));
+    nav.append(i < list.length - 1 ? button("下一句", "main", () => { i++; draw(); }) : button("唸完了，去答題", "main", () => { box.remove(); }));
+    box.append(row, heard, result, nav);
+    speak(s, lang);
+  };
+  if (list.length) draw();
+  return box;
 }
 
 // output: write (or say) it, then compare with the model answer
