@@ -10,6 +10,7 @@ Content:
 - Prefer facts that make a good lesson: real place names, everyday details, numbers, contrasts between then and now.
 - Neutral and respectful on politics, religion, crime and race: report what the sources say, attribute opinions, no judgement of your own.
 - Write your own sentences; do not copy whole sentences from the sources.
+- Write it as an ordinary article: never mention "the source(s)", "according to the source" or the articles you were given.
 
 Form:
 - `title`: a short, interesting title in {{ language }}.

@@ -204,6 +204,11 @@ async fn lesson(State(s): State<Shared>, Json(b): Json<LessonBody>) -> R<Value> 
     let a = library::read_article(&md).ok_or_else(|| bad("文章讀不懂"))?;
     let keywords: Vec<String> = a.key_terms.iter().take(3).map(|k| k.term.clone()).chain(t.news.iter().take(2).cloned()).collect();
     let mut course = daily_course(&l, syl.lang, &a.title, keywords, Some(source_of(&a)), String::new(), &date()).await?;
+    // The words to learn are the article's own key terms (not words due elsewhere).
+    let n = course.lessons.first().map(|lp| lp.words.len()).unwrap_or(0).clamp(4, 8);
+    if let Some(lp) = course.lessons.first_mut() {
+        lp.words = a.key_terms.iter().take(n).map(|k| jl_core::course::TargetWord { term: k.term.clone(), reading: String::new(), meaning: k.meaning.clone() }).collect();
+    }
     course.kind = CourseKind::Single;
     course.name = format!("{}：{}", t.cat, t.zh);
     course.summary = a.title.clone();

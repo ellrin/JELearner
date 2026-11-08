@@ -83,7 +83,7 @@ function createPicker() {
     b.onclick = () => { state.courseCreate = kind; render(); };
     return b;
   };
-  box.append(tile("topic", "news", "主題課程", "關鍵字・網址・文章"), tile("fixed", "cards", "固定課程", "單字表・文法表"));
+  box.append(tile("topic", "news", "主題課程", "關鍵字・網址・文章"), tile("fixed", "cards", "固定課程", "單字表・文法表"), tile("library", "book", "主題庫", "事先寫好的文章"));
   return box;
 }
 
@@ -92,6 +92,13 @@ async function renderCourseCreate(page) {
   if (state.courseCreate === "pick") {
     viewbar("新課程", null, back);
     page.append(createPicker());
+    return;
+  }
+  if (state.courseCreate === "library") {
+    viewbar("主題庫", null, ghostButton("back", "換一種", () => { state.courseCreate = "pick"; render(); }));
+    const box = el("div", "create-box kind-library");
+    page.append(box);
+    await drawLibrary(box);
     return;
   }
   const topic = state.courseCreate === "topic";
@@ -979,4 +986,128 @@ function compressImage(file, max, quality) {
     im.onerror = () => { URL.revokeObjectURL(url); reject(new Error("讀不到這張圖片")); };
     im.src = url;
   });
+}
+
+// ── the topic library (decisions §22) ──────────────────
+// Articles written once from references (Wikipedia, Wikivoyage); a lesson is
+// made from one at the learner's level. The admin writes more in the background.
+let libTimer = null;
+async function drawLibrary(box) {
+  let data;
+  try { data = await api("/api/library"); } catch (e) { box.append(el("div", "note err", e.message)); return; }
+  const admin = !!(state.status?.users ?? []).find((x) => x.id === state.status?.user?.id)?.admin;
+  if (!data.collections.length) {
+    box.append(el("p", "note", admin ? "工作區還沒有主題庫。在私人工作區放一個 library/<名稱>/syllabus.toml（主題清單），就會出現在這裡。" : "還沒有主題庫，請家人幫忙準備。"));
+    return;
+  }
+  for (const c of data.collections) {
+    const sec = el("div", "lib");
+    const head = el("div", "lib-head");
+    head.append(el("b", null, c.name), el("span", "n", `${c.written} / ${c.total} 篇・${c.level}`));
+    const help = el("button", "help", "?");
+    help.setAttribute("aria-label", "說明：主題庫");
+    help.dataset.tip = "每個主題事先讀過參考資料（Wikipedia、Wikivoyage），寫成一篇 400–600 字的文章，附出處。按「做成課程」時，再依你的程度產生課文、題目和對話。";
+    head.append(help);
+    sec.append(head);
+    // Writing more articles (admin): a few at a time, in the background.
+    const out = el("div", "lib-out");
+    out.setAttribute("role", "status");
+    let adminRow = null;
+    let wasRunning = false;
+    if (admin && c.written < c.total) {
+      const row = el("div", "actions-row");
+      const sel = el("select");
+      sel.setAttribute("aria-label", "這次寫幾篇");
+      for (const n of [5, 10, 20, 50]) { const o = el("option", null, `${n} 篇`); o.value = String(n); sel.append(o); }
+      const go = primaryButton("寫更多文章", null, true);
+      const poll = async () => {
+        // The page was left: stop asking.
+        if (!out.isConnected) { clearInterval(libTimer); libTimer = null; return; }
+        try {
+          const r = await api("/api/library/build");
+          const p = r.progress;
+          if (!p || p.collection !== c.id) return;
+          out.innerHTML = "";
+          if (p.running) {
+            wasRunning = true;
+            go.disabled = true; go.textContent = "寫作中…";
+            const bar = el("progress"); bar.max = p.total; if (p.done) bar.value = p.done;
+            bar.setAttribute("aria-label", "寫作進度");
+            out.append(bar, el("div", "note", `${p.done} / ${p.total} 篇${p.current ? `・正在寫「${p.current}」` : ""}`));
+          } else {
+            clearInterval(libTimer); libTimer = null;
+            go.disabled = false; go.textContent = "寫更多文章";
+            for (const e of p.errors ?? []) out.append(el("div", "note err", e));
+            // New articles: show them (once per finished run).
+            if (p.done && wasRunning) { flash(`寫好 ${p.done} 篇`); render(); }
+            else if (p.done) out.append(el("div", "note ok", `上次寫好 ${p.done} 篇。`));
+          }
+        } catch { /* next tick */ }
+      };
+      go.onclick = () => busy(go, async () => {
+        if (!state.status?.engine_ready) { openSettings(3); return; }
+        try {
+          await api("/api/library/build", { collection: c.id, limit: Number(sel.value) });
+          clearInterval(libTimer); libTimer = setInterval(poll, 3000); poll();
+        } catch (e) { out.innerHTML = ""; out.append(el("div", "note err", e.message)); }
+      });
+      row.append(sel, go);
+      adminRow = row;
+      poll().then(() => { if (go.disabled) { clearInterval(libTimer); libTimer = setInterval(poll, 3000); } });
+    }
+    // Categories as filters; the written articles first.
+    const shown = admin ? c.topics : c.topics.filter((t) => t.written);
+    const cats = [...new Set(shown.map((t) => t.cat))].filter((k) => admin || c.topics.some((t) => t.cat === k && t.written));
+    const chips = el("div", "topic-chips lib-cats");
+    let pick = state.libCat && cats.includes(state.libCat) ? state.libCat : null;
+    const list = el("ul", "lib-list");
+    const later = el("details", "lib-later");
+    const laterList = el("ul", "lib-list");
+    const drawList = () => {
+      list.innerHTML = ""; laterList.innerHTML = ""; later.innerHTML = "";
+      const ts = shown.filter((t) => !pick || t.cat === pick);
+      const ready = ts.filter((t) => t.written);
+      const todo = ts.filter((t) => !t.written);
+      if (!ready.length) list.append(el("li", "empty-row", admin ? "這一類還沒有寫好的文章，可以用下面的「寫更多文章」。" : "這一類還沒有文章。"));
+      let first = true;
+      for (const t of [...ready, ...todo]) {
+        const target = t.written ? list : laterList;
+        const li = el("li", t.written ? "" : "todo");
+        const txt = el("div", "t");
+        const en = el("span", "en", t.written ? t.title : t.en);
+        en.title = t.written ? t.title : t.en;
+        txt.append(el("b", null, t.zh), en);
+        li.append(el("span", "tag", t.cat), txt);
+        if (t.written) {
+          const b = first ? primaryButton("做成課程", null, true) : ghostButton("plus", "做成課程", null);
+          first = false;
+          b.setAttribute("aria-label", `把「${t.zh}」做成課程`);
+          b.onclick = () => busy(b, async () => {
+            try {
+              const r = await api("/api/library/lesson", { collection: c.id, id: t.id });
+              go("courses", { course: r.id, courseLesson: 1, courseCreate: null });
+            } catch (e) { flash(e.message, true); }
+          });
+          li.append(el("span", "n", `${t.words} 字`), b);
+        } else li.append(el("span", "n", "還沒寫"));
+        target.append(li);
+      }
+      if (todo.length) {
+        later.append(el("summary", null, `還沒寫的 ${todo.length} 篇`), laterList);
+      }
+    };
+    const chip = (label, v) => {
+      const s = el("button", `chip-btn${pick === v ? " on" : ""}`, label);
+      s.setAttribute("aria-pressed", String(pick === v));
+      s.onclick = () => { pick = v; state.libCat = v; $$(".lib-cats .chip-btn", sec).forEach((x) => { const on = x === s; x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on)); }); drawList(); };
+      return s;
+    };
+    chips.append(chip("全部", null), ...cats.map((k) => chip(`${k} ${c.topics.filter((t) => t.cat === k && t.written).length}/${c.topics.filter((t) => t.cat === k).length}`, k)));
+    sec.append(chips, list);
+    if (admin) sec.append(later);
+    if (adminRow) sec.append(adminRow);
+    sec.append(out);
+    drawList();
+    box.append(sec);
+  }
 }

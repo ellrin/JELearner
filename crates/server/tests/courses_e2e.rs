@@ -1170,6 +1170,7 @@ async fn library_articles_from_references_and_a_lesson() {
     assert_eq!(st, StatusCode::OK, "{o}");
     let req = calls.lock().unwrap().iter().rev().find(|b| b["output_config"]["format"]["schema"]["properties"]["text"].is_object() && b["output_config"]["format"]["schema"]["properties"]["conversation"].is_object()).cloned().unwrap();
     assert!(format!("{}{}", req["system"], req["messages"][0]["content"]).contains("restaurants in Edinburgh serve it"), "the lesson is made from the article");
+    assert!(format!("{}{}", req["system"], req["messages"][0]["content"]).contains("savoury"), "the article's key terms are the words to learn");
     assert_eq!(c.post("/api/library/lesson", json!({"collection": "uk", "id": "secret"})).await.0, StatusCode::BAD_REQUEST, "no article yet");
     assert_eq!(c.post("/api/library/lesson", json!({"collection": "../x", "id": "haggis"})).await.0, StatusCode::BAD_REQUEST);
 }
