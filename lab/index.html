@@ -31,7 +31,7 @@
 </head>
 <body>
 <h1>JELearner iPad 實驗頁（階段 0）</h1>
-<p class="sub">只測這台 iPad 做得到哪些事。不會上傳任何資料，key 與 token 只存在這台 iPad（勾選「記住」才存）。全部做完按最下面的「複製結果」貼回給 Claude。</p>
+<p class="sub">版本 2。只測這台 iPad 做得到哪些事。不會上傳任何資料，key 與 token 只存在這台 iPad（勾選「記住」才存）。全部做完按最下面的「複製結果」貼回給 Claude。</p>
 
 <section id="envBox"><h2>0. 環境</h2><div class="log" id="env"></div></section>
 
@@ -62,9 +62,12 @@
   <h2>3. 朗讀與辨識來回 5 輪 <span class="st" id="loopSt">未測</span></h2>
   <div class="row">
     <select id="loopLang"><option value="ja">日文</option><option value="en">英文</option></select>
+    <select id="loopMode"><option value="tap">唸完後我按一下才開始說</option><option value="auto">唸完自動開始聽</option></select>
+    <select id="loopWait"><option value="200">等 0.2 秒</option><option value="800" selected>等 0.8 秒</option><option value="1500">等 1.5 秒</option></select>
     <button class="main" id="loopGo">開始 5 輪</button>
   </div>
-  <p class="note">每一輪 iPad 先唸一句，唸完你跟著說。模擬 AI 對話的來回，用來找出「第二輪起麥克風收不到聲音」的問題。</p>
+  <div class="row"><button id="loopTap" disabled>換我說了（按一下）</button></div>
+  <p class="note">每一輪 iPad 先唸一句，唸完你跟著說。「我按一下才開始說」最接近實際上課（AI 唸完、你按麥克風）。如果聽到的內容包含「〜と言ってください」，代表麥克風收到了 iPad 自己的聲音，會記成「回音」。兩種模式都試一次。</p>
   <div class="log" id="loopLog"></div>
 </section>
 
@@ -127,7 +130,8 @@ function loadVoices() {
   const mine = voices.filter((v) => v.lang.toLowerCase().startsWith(lang));
   $("ttsVoice").innerHTML = "";
   for (const v of mine) { const o = document.createElement("option"); o.value = v.voiceURI; o.textContent = `${v.name}（${v.lang}${v.localService ? "" : "・線上"}）`; $("ttsVoice").append(o); }
-  R.env[`voices_${lang}`] = mine.map((v) => `${v.name}|${v.lang}|${v.localService ? "local" : "remote"}`);
+  for (const l of ["ja", "en"]) R.env[`voices_${l}`] = voices.filter((v) => v.lang.toLowerCase().startsWith(l)).map((v) => `${v.name}|${v.lang}|${v.localService ? "local" : "remote"}`);
+  R.env[`voices_${lang}_shown`] = mine.map((v) => `${v.name}|${v.lang}|${v.localService ? "local" : "remote"}`);
   report();
 }
 speechSynthesis.onvoiceschanged = loadVoices;
@@ -181,7 +185,7 @@ $("srGo").onclick = async () => {
   const r = await listen($("srLang").value, (f, i) => { $("heard").innerHTML = `${f}<i>${i}</i>`; });
   $("srGo").disabled = false; $("srGo").textContent = "按一下開始說";
   log("srLog", r.error ? `${r.lang} 錯誤：${r.error}` : `${r.lang}「${r.text}」第一個字 ${r.firstResultMs} ms，共 ${r.totalMs} ms`);
-  R.sr.push(r);
+  R.sr.push({ ...r, standalone: R.env.standalone });
   const okLangs = new Set(R.sr.filter((x) => !x.error && x.text).map((x) => x.lang));
   mark("srSt", okLangs.size > 0, okLangs.size ? `可以：${[...okLangs].join("、")}` : "有問題");
   report();
@@ -194,6 +198,7 @@ const ROUNDS = {
 };
 $("loopGo").onclick = async () => {
   const lang = $("loopLang").value;
+  const mode = $("loopMode").value, wait = Number($("loopWait").value);
   $("loopGo").disabled = true;
   const results = [];
   for (let i = 0; i < 5; i++) {
@@ -201,16 +206,23 @@ $("loopGo").onclick = async () => {
     const prompt = lang === "ja" ? `「${phrase}」と言ってください。` : `Please say: ${phrase}.`;
     log("loopLog", `第 ${i + 1} 輪：唸「${prompt}」`);
     await speak(prompt, lang, lang === $("ttsLang").value ? $("ttsVoice").value : "");
-    await new Promise((r) => setTimeout(r, 200));
+    if (mode === "tap") {
+      log("loopLog", "　唸完了，按「換我說了」再開口");
+      $("loopTap").disabled = false;
+      await new Promise((r) => { $("loopTap").onclick = r; });
+      $("loopTap").disabled = true;
+    } else await new Promise((r) => setTimeout(r, wait));
     log("loopLog", "　換你說…");
     const r = await listen(lang === "ja" ? "ja-JP" : "en-US");
     const ok = !r.error && r.text.replace(/[\s。、.,!?！？]/g, "").length > 0;
-    log("loopLog", ok ? `　聽到「${r.text}」` : `　沒聽到（${r.error ?? "空白"}）`);
-    results.push({ round: i + 1, ok, heard: r.text, error: r.error });
+    const echo = /言って|と言う|please say/i.test(r.text);
+    log("loopLog", ok ? `　聽到「${r.text}」${echo ? "（回音：收到 iPad 自己的聲音）" : ""}` : `　沒聽到（${r.error ?? "空白"}）`);
+    results.push({ round: i + 1, ok, echo, heard: r.text, error: r.error, firstResultMs: r.firstResultMs });
   }
   const n = results.filter((x) => x.ok).length;
-  R.loop.push({ lang, ok: n, of: 5, results });
-  mark("loopSt", n === 5, `${n} / 5 輪`);
+  const echoes = results.filter((x) => x.echo).length;
+  R.loop.push({ lang, mode, wait: mode === "auto" ? wait : null, standalone: R.env.standalone, ok: n, echoes, of: 5, results });
+  mark("loopSt", n === 5 && !echoes, `${n} / 5 輪${echoes ? `，回音 ${echoes}` : ""}`);
   $("loopGo").disabled = false;
   report();
 };
