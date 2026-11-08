@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="JE 實驗">
+<title>JELearner iPad 實驗頁</title>
+<style>
+  :root { --bg: #f7f5f0; --panel: #fffdf8; --line: #ddd6c8; --text: #222; --muted: #6b6457; --acc: #b3265a; --ok: #1f7a3a; --bad: #b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1b1a17; --panel: #24221e; --line: #3b372f; --text: #eee; --muted: #a9a090; --acc: #ff7aa6; --ok: #7bd88f; --bad: #ff8a80; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 -apple-system, "PingFang TC", sans-serif; padding: 16px max(16px, env(safe-area-inset-left)) 40px; }
+  h1 { font-size: 20px; margin: 4px 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  h2 { font-size: 16px; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
+  .st { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .st.ok { color: var(--ok); border-color: var(--ok); } .st.bad { color: var(--bad); border-color: var(--bad); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+  button { font: inherit; font-size: 15px; padding: 9px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  button.main { background: var(--acc); border-color: var(--acc); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .5; }
+  select, input, textarea { font: inherit; font-size: 16px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); max-width: 100%; }
+  input.wide, textarea { width: 100%; }
+  .log { font: 13px/1.45 ui-monospace, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  .heard { font-size: 18px; min-height: 28px; } .heard i { color: var(--muted); }
+  .note { font-size: 13px; color: var(--muted); }
+  label.chk { font-size: 14px; display: flex; gap: 6px; align-items: center; }
+</style>
+</head>
+<body>
+<h1>JELearner iPad 實驗頁（階段 0）</h1>
+<p class="sub">只測這台 iPad 做得到哪些事。不會上傳任何資料，key 與 token 只存在這台 iPad（勾選「記住」才存）。全部做完按最下面的「複製結果」貼回給 Claude。</p>
+
+<section id="envBox"><h2>0. 環境</h2><div class="log" id="env"></div></section>
+
+<section>
+  <h2>1. 朗讀 <span class="st" id="ttsSt">未測</span></h2>
+  <div class="row">
+    <select id="ttsLang"><option value="ja">日文</option><option value="en">英文</option></select>
+    <select id="ttsVoice"></select>
+    <button class="main" id="ttsPlay">播放</button>
+  </div>
+  <input class="wide" id="ttsText" value="こんにちは。今日はいい天気ですね。">
+  <p class="note">在「設定 › 輔助使用 › 朗讀內容 › 聲音」下載的「加強版」聲音應該會出現在清單裡。每個想用的聲音都按一次播放：有聲音就好，沒聲音（或一下子就結束）會記成「無聲」。</p>
+  <div class="log" id="ttsLog"></div>
+</section>
+
+<section>
+  <h2>2. 語音辨識 <span class="st" id="srSt">未測</span></h2>
+  <div class="row">
+    <select id="srLang"><option value="ja-JP">日文 ja-JP</option><option value="en-US">英文 en-US</option></select>
+    <button class="main" id="srGo">按一下開始說</button>
+  </div>
+  <div class="heard" id="heard"></div>
+  <p class="note">說一句話（例如「電車が好きです」或 "I like trains"）。會看到邊說邊出字（灰色）和最後結果。日文、英文各試一次。</p>
+  <div class="log" id="srLog"></div>
+</section>
+
+<section>
+  <h2>3. 朗讀與辨識來回 5 輪 <span class="st" id="loopSt">未測</span></h2>
+  <div class="row">
+    <select id="loopLang"><option value="ja">日文</option><option value="en">英文</option></select>
+    <button class="main" id="loopGo">開始 5 輪</button>
+  </div>
+  <p class="note">每一輪 iPad 先唸一句，唸完你跟著說。模擬 AI 對話的來回，用來找出「第二輪起麥克風收不到聲音」的問題。</p>
+  <div class="log" id="loopLog"></div>
+</section>
+
+<section>
+  <h2>4. Claude API（Haiku 5.5） <span class="st" id="aiSt">未測</span></h2>
+  <input class="wide" id="aiKey" type="password" placeholder="Claude API key（sk-ant-…）" autocomplete="off">
+  <label class="chk"><input type="checkbox" id="aiRemember">記住在這台 iPad</label>
+  <div class="row"><input class="wide" id="aiText" placeholder="想對 AI 老師說的話（留空就用上面辨識到的句子）"></div>
+  <div class="row"><select id="aiLang"><option value="ja">日文老師（N5）</option><option value="en">英文老師（B1）</option></select><button class="main" id="aiGo">送出</button><button id="aiSay">唸出回答</button></div>
+  <div class="heard" id="aiOut"></div>
+  <div class="log" id="aiLog"></div>
+</section>
+
+<section>
+  <h2>5. GitHub 寫入與讀回 <span class="st" id="ghSt">未測</span></h2>
+  <input class="wide" id="ghRepo" placeholder="測試用 repo，例如 ellrin/JELearner-ipad-test">
+  <input class="wide" id="ghToken" type="password" placeholder="只開這個 repo 的 fine-grained token" autocomplete="off">
+  <label class="chk"><input type="checkbox" id="ghRemember">記住在這台 iPad</label>
+  <div class="row"><button class="main" id="ghGo">寫入一個測試檔再讀回來</button></div>
+  <p class="note">請用一個拋棄式的 private repo，不要用真正的資料 repo。</p>
+  <div class="log" id="ghLog"></div>
+</section>
+
+<section>
+  <h2>結果</h2>
+  <div class="row"><button class="main" id="copy">複製結果</button><button id="clear">清除記住的 key 與 token</button></div>
+  <textarea id="report" rows="8" readonly></textarea>
+</section>
+
+<script type="module">
+import Anthropic from "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm";
+
+const $ = (id) => document.getElementById(id);
+const R = { env: {}, tts: [], sr: [], loop: [], ai: [], gh: [] };
+const now = () => performance.now();
+const log = (id, msg) => { const el = $(id); el.textContent += `${new Date().toLocaleTimeString()}  ${msg}\n`; el.scrollTop = el.scrollHeight; };
+const mark = (id, ok, text) => { const s = $(id); s.className = `st ${ok ? "ok" : "bad"}`; s.textContent = text ?? (ok ? "可以" : "有問題"); };
+const store = { get: (k) => { try { return localStorage.getItem(k) ?? ""; } catch { return ""; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }, del: (k) => { try { localStorage.removeItem(k); } catch {} } };
+const report = () => { $("report").value = JSON.stringify(R, null, 1); };
+
+// ── 0. environment
+const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+R.env = {
+  ua: navigator.userAgent,
+  standalone: !!navigator.standalone || matchMedia("(display-mode: standalone)").matches,
+  secure: window.isSecureContext,
+  speechRecognition: !!Rec,
+  speechSynthesis: "speechSynthesis" in window,
+  screen: `${screen.width}x${screen.height}@${devicePixelRatio}`,
+};
+$("env").textContent = Object.entries(R.env).map(([k, v]) => `${k}: ${v}`).join("\n") + "\n（加入主畫面後再開一次這頁，standalone 會變成 true；兩種都測辨識）";
+report();
+
+// ── 1. TTS
+let voices = [];
+const SAMPLE = { ja: "こんにちは。今日はいい天気ですね。", en: "Hello! It's a lovely day today, isn't it?" };
+function loadVoices() {
+  voices = speechSynthesis.getVoices();
+  const lang = $("ttsLang").value;
+  const mine = voices.filter((v) => v.lang.toLowerCase().startsWith(lang));
+  $("ttsVoice").innerHTML = "";
+  for (const v of mine) { const o = document.createElement("option"); o.value = v.voiceURI; o.textContent = `${v.name}（${v.lang}${v.localService ? "" : "・線上"}）`; $("ttsVoice").append(o); }
+  R.env[`voices_${lang}`] = mine.map((v) => `${v.name}|${v.lang}|${v.localService ? "local" : "remote"}`);
+  report();
+}
+speechSynthesis.onvoiceschanged = loadVoices;
+setTimeout(loadVoices, 300);
+$("ttsLang").onchange = () => { $("ttsText").value = SAMPLE[$("ttsLang").value]; loadVoices(); };
+
+function speak(text, lang, voiceURI) {
+  return new Promise((resolve) => {
+    const u = new SpeechSynthesisUtterance(text);
+    const v = voices.find((x) => x.voiceURI === voiceURI) ?? voices.find((x) => x.lang.toLowerCase().startsWith(lang));
+    if (v) { u.voice = v; u.lang = v.lang; } else u.lang = lang === "ja" ? "ja-JP" : "en-US";
+    let t0 = null;
+    u.onstart = () => { t0 = now(); };
+    u.onend = () => resolve({ voice: v?.name ?? "(default)", ms: t0 ? Math.round(now() - t0) : 0, started: t0 != null });
+    u.onerror = (e) => resolve({ voice: v?.name ?? "(default)", error: e.error, started: t0 != null });
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+    setTimeout(() => resolve({ voice: v?.name ?? "(default)", error: "timeout", started: t0 != null }), 15000);
+  });
+}
+$("ttsPlay").onclick = async () => {
+  const r = await speak($("ttsText").value, $("ttsLang").value, $("ttsVoice").value);
+  const silent = r.error || !r.started || r.ms < 300;
+  log("ttsLog", `${r.voice}: ${r.error ? `錯誤 ${r.error}` : silent ? "無聲（可能沒下載）" : `播放 ${r.ms} ms`}`);
+  R.tts.push({ ...r, silent });
+  mark("ttsSt", R.tts.some((x) => !x.silent), R.tts.some((x) => !x.silent) ? "有聲音" : "都無聲");
+  report();
+};
+
+// ── 2. recognition: a new object every time (iPad audio session issue)
+function listen(lang, onInterim) {
+  return new Promise((resolve) => {
+    if (!Rec) return resolve({ error: "沒有 SpeechRecognition" });
+    const r = new Rec();
+    r.lang = lang; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
+    const t0 = now(); let first = null, final = "", interim = "", err = null;
+    r.onresult = (e) => {
+      if (first == null) first = Math.round(now() - t0);
+      interim = ""; final = "";
+      for (const res of e.results) { if (res.isFinal) final += res[0].transcript; else interim += res[0].transcript; }
+      onInterim?.(final, interim);
+    };
+    r.onerror = (e) => { err = e.error; };
+    r.onend = () => resolve({ lang, text: final || interim, final: !!final, firstResultMs: first, totalMs: Math.round(now() - t0), error: err });
+    try { r.start(); } catch (e) { resolve({ lang, error: String(e) }); }
+    setTimeout(() => { try { r.stop(); } catch {} }, 12000);
+  });
+}
+$("srGo").onclick = async () => {
+  $("srGo").disabled = true; $("srGo").textContent = "聆聽中…";
+  const r = await listen($("srLang").value, (f, i) => { $("heard").innerHTML = `${f}<i>${i}</i>`; });
+  $("srGo").disabled = false; $("srGo").textContent = "按一下開始說";
+  log("srLog", r.error ? `${r.lang} 錯誤：${r.error}` : `${r.lang}「${r.text}」第一個字 ${r.firstResultMs} ms，共 ${r.totalMs} ms`);
+  R.sr.push(r);
+  const okLangs = new Set(R.sr.filter((x) => !x.error && x.text).map((x) => x.lang));
+  mark("srSt", okLangs.size > 0, okLangs.size ? `可以：${[...okLangs].join("、")}` : "有問題");
+  report();
+};
+
+// ── 3. speak → wait 200 ms → listen, five rounds
+const ROUNDS = {
+  ja: ["電車が好きです", "今日は暑いです", "コーヒーをください", "駅はどこですか", "また明日"],
+  en: ["I like trains", "It is hot today", "A coffee, please", "Where is the station", "See you tomorrow"],
+};
+$("loopGo").onclick = async () => {
+  const lang = $("loopLang").value;
+  $("loopGo").disabled = true;
+  const results = [];
+  for (let i = 0; i < 5; i++) {
+    const phrase = ROUNDS[lang][i];
+    const prompt = lang === "ja" ? `「${phrase}」と言ってください。` : `Please say: ${phrase}.`;
+    log("loopLog", `第 ${i + 1} 輪：唸「${prompt}」`);
+    await speak(prompt, lang, lang === $("ttsLang").value ? $("ttsVoice").value : "");
+    await new Promise((r) => setTimeout(r, 200));
+    log("loopLog", "　換你說…");
+    const r = await listen(lang === "ja" ? "ja-JP" : "en-US");
+    const ok = !r.error && r.text.replace(/[\s。、.,!?！？]/g, "").length > 0;
+    log("loopLog", ok ? `　聽到「${r.text}」` : `　沒聽到（${r.error ?? "空白"}）`);
+    results.push({ round: i + 1, ok, heard: r.text, error: r.error });
+  }
+  const n = results.filter((x) => x.ok).length;
+  R.loop.push({ lang, ok: n, of: 5, results });
+  mark("loopSt", n === 5, `${n} / 5 輪`);
+  $("loopGo").disabled = false;
+  report();
+};
+
+// ── 4. Claude API from the browser (the key is the user's own, on this device only)
+$("aiKey").value = store.get("lab.aiKey"); $("aiRemember").checked = !!$("aiKey").value;
+let lastReply = "";
+$("aiGo").onclick = async () => {
+  const key = $("aiKey").value.trim();
+  if (!key) return log("aiLog", "先貼上 API key");
+  if ($("aiRemember").checked) store.set("lab.aiKey", key); else store.del("lab.aiKey");
+  const lang = $("aiLang").value;
+  const said = $("aiText").value.trim() || R.sr.filter((x) => x.text).at(-1)?.text || (lang === "ja" ? "電車が好きです" : "I like train");
+  const system = lang === "ja"
+    ? "You are a friendly Japanese conversation partner for a JLPT N5 learner whose native language is Traditional Chinese. Reply in simple Japanese (one or two short sentences) and ask one question back. If the learner's sentence has a mistake, first repeat it correctly in a natural way."
+    : "You are a friendly English conversation partner for a CEFR B1 learner whose native language is Traditional Chinese. Reply in one or two short sentences and ask one question back. If the learner's sentence has a mistake, first repeat it correctly in a natural way.";
+  const client = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
+  $("aiGo").disabled = true; $("aiOut").textContent = "…";
+  const t0 = now();
+  try {
+    const res = await client.messages.create({
+      model: "claude-haiku-5-5",
+      max_tokens: 1000,
+      output_config: { effort: "low" },
+      system,
+      messages: [{ role: "user", content: said }],
+    });
+    const ms = Math.round(now() - t0);
+    if (res.stop_reason === "refusal") throw new Error(`refusal: ${res.stop_details?.category ?? ""}`);
+    lastReply = res.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    $("aiOut").textContent = lastReply;
+    log("aiLog", `你：「${said}」→ ${ms} ms，stop=${res.stop_reason}，tokens in ${res.usage.input_tokens} / out ${res.usage.output_tokens}`);
+    R.ai.push({ lang, ms, stop: res.stop_reason, inTok: res.usage.input_tokens, outTok: res.usage.output_tokens, reply: lastReply.slice(0, 200) });
+    mark("aiSt", true, `可以（${ms} ms）`);
+  } catch (e) {
+    const kind = e instanceof Anthropic.AuthenticationError ? "key 不對" : e instanceof Anthropic.RateLimitError ? "太頻繁" : e instanceof Anthropic.APIConnectionError ? "連不上（CORS 或網路）" : e instanceof Anthropic.APIError ? `API ${e.status}` : "錯誤";
+    log("aiLog", `${kind}：${e.message}`);
+    R.ai.push({ lang, error: `${kind}: ${String(e.message).slice(0, 200)}` });
+    mark("aiSt", false);
+    $("aiOut").textContent = "";
+  } finally { $("aiGo").disabled = false; report(); }
+};
+$("aiSay").onclick = () => { if (lastReply) speak(lastReply, $("aiLang").value, $("aiLang").value === $("ttsLang").value ? $("ttsVoice").value : ""); };
+
+// ── 5. GitHub contents API: write one file, read it back
+$("ghRepo").value = store.get("lab.ghRepo"); $("ghToken").value = store.get("lab.ghToken"); $("ghRemember").checked = !!$("ghToken").value;
+$("ghGo").onclick = async () => {
+  const repo = $("ghRepo").value.trim().replace(/^https:\/\/github.com\//, "").replace(/\.git$/, "");
+  const token = $("ghToken").value.trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !token) return log("ghLog", "填 owner/repo 與 token");
+  if ($("ghRemember").checked) { store.set("lab.ghRepo", repo); store.set("lab.ghToken", token); } else { store.del("lab.ghRepo"); store.del("lab.ghToken"); }
+  const api = (path, opts = {}) => fetch(`https://api.github.com/repos/${repo}${path}`, { ...opts, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28", ...(opts.headers ?? {}) } });
+  $("ghGo").disabled = true;
+  const t0 = now();
+  try {
+    const path = "lab/ipad-test.json";
+    const cur = await api(`/contents/${path}`);
+    const sha = cur.ok ? (await cur.json()).sha : undefined;
+    if (!cur.ok && cur.status !== 404) throw new Error(`讀取 ${cur.status}：${(await cur.text()).slice(0, 160)}`);
+    const body = { at: new Date().toISOString(), from: "ipad-lab", ua: navigator.userAgent.slice(0, 80) };
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(body, null, 1))));
+    const put = await api(`/contents/${path}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: "ipad lab test", content, sha }) });
+    if (!put.ok) throw new Error(`寫入 ${put.status}：${(await put.text()).slice(0, 160)}`);
+    const back = await api(`/contents/${path}`, { headers: { Accept: "application/vnd.github.raw+json" } });
+    const got = back.ok ? await back.json() : null;
+    const ok = got?.at === body.at;
+    const ms = Math.round(now() - t0);
+    const exp = put.headers.get("github-authentication-token-expiration");
+    log("ghLog", `${ok ? "寫入並讀回一致" : "讀回不一致"}，共 ${ms} ms${exp ? `；token 到期：${exp}` : ""}`);
+    R.gh.push({ ok, ms, tokenExpires: exp });
+    mark("ghSt", ok, ok ? `可以（${ms} ms）` : "讀回不一致");
+  } catch (e) {
+    log("ghLog", String(e.message ?? e));
+    R.gh.push({ error: String(e.message ?? e).slice(0, 200) });
+    mark("ghSt", false);
+  } finally { $("ghGo").disabled = false; report(); }
+};
+
+$("copy").onclick = async () => { report(); try { await navigator.clipboard.writeText($("report").value); $("copy").textContent = "已複製"; } catch { $("report").select(); } };
+$("clear").onclick = () => { ["lab.aiKey", "lab.ghRepo", "lab.ghToken"].forEach(store.del); $("aiKey").value = ""; $("ghToken").value = ""; $("aiRemember").checked = $("ghRemember").checked = false; };
+</script>
+</body>
+</html>
