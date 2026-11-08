@@ -20,6 +20,7 @@ pub mod settings;
 pub mod setup;
 pub mod speech;
 pub mod study;
+pub mod today;
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};

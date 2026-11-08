@@ -336,6 +336,10 @@ pub struct Course {
     /// Engine that wrote the outline.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub engine: String,
+    /// The focus theme this course was made under (plan §19.2.6): its
+    /// lessons take real names from `profiles/<id>/focus/<lang>.toml`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub focus: String,
     #[serde(default, rename = "lesson")]
     pub lessons: Vec<LessonPlan>,
 }

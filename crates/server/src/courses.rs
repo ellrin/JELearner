@@ -41,11 +41,11 @@ pub fn routes() -> Router<Shared> {
 
 // ── helpers ─────────────────────────────────────────────
 
-fn date() -> String {
+pub(crate) fn date() -> String {
     local_today().format("%Y-%m-%d").to_string()
 }
 
-fn course_err(e: CourseError) -> ApiError {
+pub(crate) fn course_err(e: CourseError) -> ApiError {
     match e {
         CourseError::NotFound(m) => ApiError(StatusCode::NOT_FOUND, format!("找不到：{m}")),
         CourseError::Provider(_) => api_err(e),
@@ -58,7 +58,7 @@ fn course_err(e: CourseError) -> ApiError {
 /// all the words in their lists for topic courses, only the ones they have
 /// really learned (interval ≥ 21 days) for fixed courses, which are made from
 /// those very lists.
-async fn learner(l: &Loaded, lang: Lang, mastered_only: bool) -> Result<Learner, ApiError> {
+pub(crate) async fn learner(l: &Loaded, lang: Lang, mastered_only: bool) -> Result<Learner, ApiError> {
     let known: Vec<String> = if mastered_only {
         sqlx::query_scalar(
             "SELECT w.term FROM words w JOIN progress p ON p.item_kind = 'word' AND p.item_id = w.id WHERE w.lang = ? AND p.interval_days >= 21 LIMIT 2000",
@@ -72,7 +72,7 @@ async fn learner(l: &Loaded, lang: Lang, mastered_only: bool) -> Result<Learner,
     Ok(Learner::from_profile(&l.ws.profile, lang, known))
 }
 
-fn templates(ws: &Workspace) -> CourseTemplates {
+pub(crate) fn templates(ws: &Workspace) -> CourseTemplates {
     CourseTemplates::load(Some(&ws.prompts_dir()))
 }
 
@@ -97,7 +97,7 @@ fn activity(c: &Course) -> String {
     c.lessons.iter().flat_map(|l| [l.done.clone(), l.generated.clone()]).flatten().max().unwrap_or_else(|| c.created.clone())
 }
 
-fn load_all(ws: &Workspace, lang: Option<Lang>) -> (Vec<Course>, Vec<String>) {
+pub(crate) fn load_all(ws: &Workspace, lang: Option<Lang>) -> (Vec<Course>, Vec<String>) {
     let (list, skipped) = store::list(ws);
     let courses = list.into_iter().filter(|c| lang.is_none_or(|l| l == c.lang)).filter_map(|c| store::load(ws, &c.id).ok()).collect();
     (courses, skipped)
@@ -548,7 +548,9 @@ async fn open_lesson(State(s): State<Shared>, AxPath((id, n)): AxPath<(String, u
         let c = store::load(&l.ws, &id).map_err(course_err)?;
         let lp = c.lesson(n).cloned().ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("沒有第 {n} 課")))?;
         let lang = c.lang;
-        let ctx = LessonContext { recent_accuracy: recent_accuracy(&l, lang).await?, article: None };
+        // A course made under a focus theme takes its places from the setting sheet (plan §19.2.6).
+        let focus = if c.focus.is_empty() { None } else { jl_core::course::picker::load_focus(&l.ws, lang) };
+        let ctx = LessonContext { recent_accuracy: recent_accuracy(&l, lang).await?, article: None, focus };
         (c, lp, learner(&l, lang, false).await?, templates(&l.ws), ctx)
     };
     let root = ws(&s).await?.ws.root.clone();
@@ -813,7 +815,7 @@ pub(crate) fn conversation_page(l: &Loaded, c: &jl_core::conversation::Conversat
 
 // ── today's lessons and the daily lesson ────────────────
 
-fn general_topics(ws: &Workspace) -> Vec<ctopics::GeneralTopic> {
+pub(crate) fn general_topics(ws: &Workspace) -> Vec<ctopics::GeneralTopic> {
     let (general, _) = jl_core::topics::load_general(&ws.topics_file());
     general.into_iter().map(|t| ctopics::GeneralTopic { id: t.id, name: t.name, group: t.group }).collect()
 }
@@ -965,8 +967,19 @@ async fn start_daily(State(s): State<Shared>, Json(b): Json<DailyBody>) -> R<Val
     if let Some(c) = all.iter().find(|c| c.kind == CourseKind::Daily && c.created == today) {
         return Ok(Json(json!({ "id": c.id, "next": c.next_lesson().map(|x| x.number), "created": false })));
     }
-    let lr = learner(&l, lang, false).await?;
     let (name, _id, _kind) = daily_topic(&l.ws, lang).ok_or_else(|| bad("沒有可用的主題：請在興趣或 topics.toml 加入主題"))?;
+    let mut course = daily_course(&l, lang, &name, vec![name.clone()], None, String::new()).await?;
+    store::save_new(&l.ws, &mut course).map_err(course_err)?;
+    Ok(Json(json!({ "id": course.id, "next": 1, "created": true })))
+}
+
+/// Today's daily course on one topic: the learner's least practised words,
+/// one lesson per sitting. `article` (a news card's) becomes lesson 1's text;
+/// `focus` names the focus theme it was made under.
+pub(crate) async fn daily_course(l: &Loaded, lang: Lang, name: &str, keywords: Vec<String>, article: Option<jl_core::course::SourceText>, focus: String) -> Result<Course, ApiError> {
+    let today = date();
+    let name = name.to_string();
+    let lr = learner(l, lang, false).await?;
     let size = lr.size();
     let targets = jl_core::conversation::pick_targets(&l.db, lang, size.topic_new_words.min.max(3) as usize * lr.lessons_per_day()).await?;
     let per = lr.lessons_per_day();
@@ -982,7 +995,8 @@ async fn start_daily(State(s): State<Shared>, Json(b): Json<DailyBody>) -> R<Val
                 title: if per > 1 { format!("{name}（{}）", i + 1) } else { name.clone() },
                 angle: if per > 1 && i == 1 { "personal life".into() } else { String::new() },
                 purpose: "用自己的單字讀今天的主題，再說出來".into(),
-                search: vec![name.clone()],
+                search: if keywords.is_empty() { vec![name.clone()] } else { keywords.clone() },
+                article: if i == 0 { article.clone() } else { None },
                 conversation_topic: name.clone(),
                 minutes,
                 words,
@@ -991,7 +1005,7 @@ async fn start_daily(State(s): State<Shared>, Json(b): Json<DailyBody>) -> R<Val
             }
         })
         .collect();
-    let mut course = Course {
+    let course = Course {
         id: String::new(),
         kind: CourseKind::Daily,
         name: name.clone(),
@@ -1001,7 +1015,7 @@ async fn start_daily(State(s): State<Shared>, Json(b): Json<DailyBody>) -> R<Val
         status: CourseStatus::Active,
         daily_minutes: lr.daily_minutes,
         summary: name.clone(),
-        keywords: vec![name.clone()],
+        keywords: if keywords.is_empty() { vec![name.clone()] } else { keywords.clone() },
         source_url: String::new(),
         vocab: vec![],
         grammar: vec![],
@@ -1009,8 +1023,8 @@ async fn start_daily(State(s): State<Shared>, Json(b): Json<DailyBody>) -> R<Val
         review_every: 0,
         series: 1,
         engine: String::new(),
+        focus,
         lessons,
     };
-    store::save_new(&l.ws, &mut course).map_err(course_err)?;
-    Ok(Json(json!({ "id": course.id, "next": 1, "created": true })))
+    Ok(course)
 }

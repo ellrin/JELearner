@@ -1039,6 +1039,45 @@ body.family .user-chip [data-icon="chevron"] { display: none; }
 .tl-head .n { margin-left: auto; font: 600 12.5px var(--mono); color: var(--muted); }
 .actions-row.center { justify-content: center; margin-top: 8px; }
 
+/* today: 開始今天的課 and the topic cards (stage F3) */
+.today-start { border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; background: var(--panel); display: flex; flex-direction: column; gap: 12px; }
+.ts-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ts-head h3 { font: 700 17px var(--sans); margin: 0; }
+.ts-focus { margin-left: auto; display: flex; align-items: center; min-height: 30px; }
+.ts-note { margin: 0; color: var(--muted); font-size: 13.5px; }
+.ts-note.bad { color: var(--err); }
+.ts-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); gap: 10px; }
+.ts-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; text-align: left; padding: 12px 14px; min-height: 112px; min-width: 0; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; transition: border-color .12s, background .12s; }
+.ts-card:hover:not(:disabled) { border-color: var(--accent-text); background: var(--surface-hover); }
+.ts-card:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.ts-card:disabled { cursor: default; opacity: .5; }
+.ts-card.picked { opacity: 1; border-color: var(--accent-text); }
+.ts-card.skeleton { cursor: default; padding: 14px; }
+.ts-card.skeleton i { width: 100%; }
+.ts-top { display: flex; gap: 8px; align-items: center; width: 100%; min-width: 0; }
+.ts-cat { min-width: 0; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts-card b { font: 700 15.5px var(--sans); line-height: 1.35; overflow-wrap: anywhere; }
+.ts-why { font-size: 13px; color: var(--muted); line-height: 1.45; overflow-wrap: anywhere; }
+.ts-hint { font-size: 13px; color: var(--muted); }
+.ts-src { min-width: 0; font: 500 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; margin-top: auto; }
+.ts-busy { font-size: 12.5px; color: var(--accent-text); }
+.focus-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border: 1px solid var(--accent-text); border-radius: 999px; color: var(--accent-text); font-size: 13px; }
+.focus-chip svg.i { width: 14px; height: 14px; }
+.focus-chip .x { display: inline-grid; place-items: center; width: 24px; height: 24px; border: 0; border-radius: 50%; background: none; color: inherit; cursor: pointer; }
+.focus-chip .x:hover { background: var(--accent-soft); }
+.focus-set { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.focus-set input { width: 200px; max-width: 100%; }
+.link-btn { border: 0; background: none; color: var(--accent-text); font: inherit; font-size: 13px; cursor: pointer; padding: 4px 2px; }
+.link-btn:hover { text-decoration: underline; }
+.ts-other summary { cursor: pointer; font-size: 13px; color: var(--muted); width: fit-content; }
+.ts-other-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+@media (max-width: 560px) {
+  .today-start { padding: 12px; }
+  .ts-focus { margin-left: 0; width: 100%; }
+  .ts-cards { grid-template-columns: minmax(0, 1fr); }
+  .ts-card { min-height: 0; }
+}
+
 /* news blocked by robots.txt */
 .item.blocked { opacity: .6; cursor: not-allowed; }
 .item.blocked .tag { margin-left: 6px; font-weight: 500; vertical-align: 2px; }

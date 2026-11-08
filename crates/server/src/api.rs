@@ -77,6 +77,7 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .merge(crate::speech::routes())
         .merge(crate::setup::routes())
         .merge(crate::family::routes())
+        .merge(crate::today::routes())
         .fallback_service(ServeDir::new(web))
 }
 
@@ -752,38 +753,44 @@ async fn sources(State(s): State<Shared>) -> R<Value> {
 
 /// Article list for a language; with `refresh=true` the enabled feeds are
 /// fetched first (robots.txt and rate limits apply).
-async fn news_list(State(s): State<Shared>, Query(q): Query<LangQuery>) -> R<Value> {
-    let lang = parse_lang(&q.lang)?;
+/// Fetch the enabled feeds (for one language or all) into the articles
+/// table; returns how many items came in and the feed errors.
+pub(crate) async fn refresh_news(s: &Shared, lang: Option<Lang>) -> Result<(usize, Vec<String>), ApiError> {
     let mut errors = vec![];
     let mut fetched = 0;
-    if q.refresh.unwrap_or(false) {
-        let (sources, err) = {
-            let l = ws(&s).await?;
-            load_sources(&l)
-        };
-        errors.extend(err);
-        for src in sources.iter().filter(|x| x.enabled && lang.is_none_or(|l| l == x.lang)) {
-            match news::fetch_feed(&s.fetcher, src).await {
-                Ok(items) => {
-                    let l = ws(&s).await?;
-                    for it in items.iter().take(30) {
-                        let a = NewArticle {
-                            lang: Some(it.lang),
-                            source: it.source.clone(),
-                            url: it.url.clone(),
-                            title: it.title.clone(),
-                            summary: it.summary.clone(),
-                            body: String::new(),
-                            published_at: it.published_at,
-                        };
-                        l.db.upsert_article(&a, it.lang).await?;
-                        fetched += 1;
-                    }
+    let (sources, err) = {
+        let l = ws(&s).await?;
+        load_sources(&l)
+    };
+    errors.extend(err);
+    for src in sources.iter().filter(|x| x.enabled && lang.is_none_or(|l| l == x.lang)) {
+        match news::fetch_feed(&s.fetcher, src).await {
+            Ok(items) => {
+                let l = ws(&s).await?;
+                for it in items.iter().take(30) {
+                    let a = NewArticle {
+                        lang: Some(it.lang),
+                        source: it.source.clone(),
+                        url: it.url.clone(),
+                        title: it.title.clone(),
+                        summary: it.summary.clone(),
+                        body: String::new(),
+                        published_at: it.published_at,
+                    };
+                    l.db.upsert_article(&a, it.lang).await?;
+                    fetched += 1;
                 }
-                Err(e) => errors.push(e),
             }
+            Err(e) => errors.push(e),
         }
     }
+
+    Ok((fetched, errors))
+}
+
+async fn news_list(State(s): State<Shared>, Query(q): Query<LangQuery>) -> R<Value> {
+    let lang = parse_lang(&q.lang)?;
+    let (fetched, errors) = if q.refresh.unwrap_or(false) { refresh_news(&s, lang).await? } else { (0, vec![]) };
     let list = ws(&s).await?.db.list_articles(lang, q.limit.unwrap_or(60)).await?;
     // Pages robots.txt does not let us fetch are shown but cannot be picked
     // (docs/plan.md §19.1); the answer is cached per site.

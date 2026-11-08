@@ -467,6 +467,7 @@ pub async fn create_topic_course(
         review_every: 0,
         series: 1,
         engine: provider.id(),
+        focus: String::new(),
         lessons,
     })
 }
@@ -549,6 +550,7 @@ pub fn create_fixed_course(learner: &Learner, req: &FixedRequest, date: &str) ->
         review_every,
         series: 1,
         engine: String::new(),
+        focus: String::new(),
         lessons,
     })
 }

@@ -271,11 +271,56 @@ fn course_lesson(user: &str, ja: bool) -> Value {
     })
 }
 
+/// Topic cards for 開始今天的課: the first listed headline as a news card,
+/// then topics not shown yet ("換一批" sends the shown titles).
+fn topic_cards(user: &str) -> Value {
+    let ja = user.contains("Japanese");
+    let shown: Vec<String> = user
+        .lines()
+        .find_map(|l| l.strip_prefix("Already shown today (do not repeat): "))
+        .map(|l| l.split(" / ").map(|x| x.trim().to_string()).filter(|x| x != "(none)").collect())
+        .unwrap_or_default();
+    let first = user.lines().find_map(|l| l.strip_prefix("- [").and_then(|r| r.split(']').next()).and_then(|n| n.parse::<i64>().ok()));
+    let pool: &[(&str, &str, &str)] = if ja {
+        &[("新しい AI 晶片工廠", "最近的新聞，單字實用", "科技"), ("京都的公車與地鐵", "旅行時一定會用到", "交通"), ("便利商店的早餐", "生活日語的好題材", "飲食"), ("雨季的日常", "季節用語", "生活"),
+          ("溫泉旅館的禮儀", "敬語練習", "旅行"), ("日本的垃圾分類", "生活必備", "生活"), ("拉麵的地方特色", "介紹食物的說法", "飲食"), ("新幹線的訂票", "買票的對話", "交通")]
+    } else {
+        &[("AI 晶片的新工廠", "今天的新聞，單字剛好在你的程度", "科技"), ("愛丁堡的電車", "旅行時用得到", "交通"), ("蘇格蘭早餐", "點餐常見的說法", "飲食"), ("雨天的城市生活", "天氣與通勤的用語", "生活"),
+          ("博物館之夜", "描述展覽與歷史", "文化"), ("高地的健行路線", "方向與地形的單字", "地理"), ("超市裡的自有品牌", "比價與購物", "生活"), ("威士忌蒸餾廠", "參觀行程的對話", "飲食")]
+    };
+    let cards: Vec<Value> = pool
+        .iter()
+        .filter(|(t, _, _)| !shown.iter().any(|s| s == *t))
+        .take(4)
+        .enumerate()
+        .map(|(i, (t, why, cat))| {
+            let news = i == 0 && first.is_some() && shown.is_empty();
+            json!({ "title": t, "why": why, "kind": if news { "news" } else if i % 2 == 0 { "interest" } else { "general" }, "article_id": if news { json!(first) } else { Value::Null }, "keywords": if ja { json!(["京都"]) } else { json!(["Edinburgh"]) }, "category": cat })
+        })
+        .collect();
+    json!({ "cards": cards })
+}
+
+/// A focus theme's setting sheet.
+fn focus_sheet(user: &str) -> Value {
+    if user.contains("Japanese") {
+        return json!({ "summary": "京都", "cities": ["京都"], "streets": ["四条通", "河原町通"], "shops": ["ローソン", "錦市場"], "transport": ["京都市バス", "阪急"],
+            "foods": ["湯豆腐"], "drinks": ["抹茶"], "landmarks": ["清水寺"], "daily_life": ["ICOCA"], "news_keywords": ["京都"] });
+    }
+    json!({ "summary": "蘇格蘭與英國", "cities": ["Edinburgh", "Glasgow"], "streets": ["Princes Street", "Royal Mile"], "shops": ["Tesco", "Greggs"],
+        "transport": ["ScotRail", "Edinburgh Trams"], "foods": ["haggis"], "drinks": ["whisky"], "landmarks": ["Edinburgh Castle"],
+        "daily_life": ["pounds and pence"], "news_keywords": ["Edinburgh", "Holyrood"] })
+}
+
 async fn messages(Json(b): Json<Value>) -> Json<Value> {
     let user = b["messages"][0]["content"].as_str().unwrap_or("");
     let ja = user.chars().any(|c| ('\u{3040}'..='\u{30ff}').contains(&c));
     let props = &b["output_config"]["format"]["schema"]["properties"];
-    let (text, wait) = if props["enough_material"].is_object() {
+    let (text, wait) = if props["cards"].is_object() {
+        (topic_cards(user).to_string(), 900)
+    } else if props["news_keywords"].is_object() {
+        (focus_sheet(user).to_string(), 900)
+    } else if props["enough_material"].is_object() {
         (course_outline(user, ja || user.contains("Japanese")).to_string(), 900)
     } else if props["lessons"]["items"]["properties"]["number"].is_object() {
         (fixed_titles().to_string(), 600)

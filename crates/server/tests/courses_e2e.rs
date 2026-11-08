@@ -132,6 +132,35 @@ fn review() -> Value {
     })
 }
 
+/// Topic cards (plan §19.2.6): the first headline in the request becomes a
+/// news card; titles already shown are left out.
+fn topic_cards(user: &str) -> Value {
+    let shown: Vec<String> = user
+        .lines()
+        .find_map(|l| l.strip_prefix("Already shown today (do not repeat): "))
+        .map(|l| l.split(" / ").map(|x| x.trim().to_string()).collect())
+        .unwrap_or_default();
+    let first = user.lines().find_map(|l| l.strip_prefix("- [").and_then(|r| r.split(']').next()).and_then(|n| n.parse::<i64>().ok()));
+    let pool = ["愛丁堡的電車", "AI 晶片的新工廠", "蘇格蘭早餐", "雨天的城市生活", "博物館之夜", "高地的健行路線", "超市裡的自有品牌", "威士忌蒸餾廠"];
+    let cards: Vec<Value> = pool
+        .iter()
+        .filter(|t| !shown.iter().any(|s| s == *t))
+        .take(4)
+        .enumerate()
+        .map(|(i, t)| {
+            let news = i == 0 && first.is_some();
+            json!({ "title": t, "why": "跟你的程度剛好", "kind": if news { "news" } else { "general" }, "article_id": if news { json!(first) } else { Value::Null }, "keywords": ["Edinburgh trams"], "category": "交通" })
+        })
+        .collect();
+    json!({ "cards": cards })
+}
+
+fn focus_sheet() -> Value {
+    json!({ "summary": "蘇格蘭與英國", "cities": ["Edinburgh", "Glasgow"], "streets": ["Princes Street", "Royal Mile"], "shops": ["Tesco", "Greggs"],
+        "transport": ["ScotRail", "Edinburgh Trams"], "foods": ["haggis"], "drinks": ["whisky"], "landmarks": ["Edinburgh Castle"],
+        "daily_life": ["pounds and pence"], "news_keywords": ["Edinburgh", "Holyrood"] })
+}
+
 fn mock_claude(calls: Arc<Mutex<Vec<Value>>>) -> Router {
     Router::new().route(
         "/v1/messages",
@@ -141,7 +170,11 @@ fn mock_claude(calls: Arc<Mutex<Vec<Value>>>) -> Router {
                 calls.lock().unwrap().push(b.clone());
                 let props = &b["output_config"]["format"]["schema"]["properties"];
                 let user = b["messages"][0]["content"].as_str().unwrap_or("").to_string();
-                let text = if props["enough_material"].is_object() {
+                let text = if props["cards"].is_object() {
+                    topic_cards(&user)
+                } else if props["news_keywords"].is_object() {
+                    focus_sheet()
+                } else if props["enough_material"].is_object() {
                     outline(&user)
                 } else if props["lessons"]["items"]["properties"]["number"].is_object() {
                     fixed_titles()
@@ -794,4 +827,96 @@ async fn topic_course_through_the_subscription() {
     assert_eq!(course["total"], 5);
     let args = std::fs::read_to_string(cli_dir.path().join("last-args")).unwrap();
     assert!(args.contains("enough_material") && args.contains("--safe-mode"), "outline schema passed: {args}");
+}
+
+
+/// A news site for the cards: robots.txt allows everything, one feed, one article.
+fn news_site(base: Arc<Mutex<String>>) -> Router {
+    use axum::routing::get;
+    let feed = move || {
+        let b = base.lock().unwrap().clone();
+        async move {
+            let xml = format!(r#"<?xml version="1.0"?><rss version="2.0"><channel><title>Mock</title>
+                <item><title>Edinburgh trams reach Newhaven</title><link>{b}/trams.html</link>
+                  <description>The new line opens.</description><pubDate>Mon, 02 Nov 2026 08:00:00 GMT</pubDate></item>
+                </channel></rss>"#);
+            ([("content-type", "application/rss+xml")], xml)
+        }
+    };
+    Router::new()
+        .route("/robots.txt", get(|| async { "User-agent: *\nAllow: /\n" }))
+        .route("/feed.xml", get(feed))
+        .route("/trams.html", get(|| async {
+            axum::response::Html("<html><head><title>Edinburgh trams reach Newhaven</title></head><body><article>\
+                <p>Edinburgh's trams now run all the way to Newhaven, linking Leith with the city centre.</p>\
+                <p>Passengers can ride from the airport to the coast without changing.</p></article></body></html>")
+        }))
+}
+
+/// 開始今天的課 (plan §19.2.6): cards from news, interests and general topics;
+/// another batch without repeats; a focus theme with its setting sheet; the
+/// lesson written from the news card's article and set in the focus place.
+#[tokio::test]
+async fn today_topic_cards_and_focus() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, calls) = setup(app_dir.path(), &ws_path).await;
+    let base = Arc::new(Mutex::new(String::new()));
+    let site = serve(news_site(base.clone())).await;
+    *base.lock().unwrap() = site.clone();
+    std::fs::write(ws_path.join("sources.toml"), format!("[[source]]\nid = \"mock\"\nname = \"Mock News\"\nlang = \"en\"\nfeed = \"{site}/feed.xml\"\n")).unwrap();
+
+    // No focus yet.
+    let (_, f) = c.get("/api/focus?lang=en").await;
+    assert_eq!(f["focus"], Value::Null, "{f}");
+
+    // First batch: the feed is fetched; the headline becomes a news card.
+    let (st, r) = c.post("/api/today/topics", json!({"lang": "en", "refresh": true})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let cards = r["cards"].as_array().unwrap().clone();
+    assert_eq!(cards.len(), 4, "{r}");
+    assert_eq!(cards[0]["kind"], "news");
+    assert_eq!(cards[0]["article"]["title"], "Edinburgh trams reach Newhaven");
+    let req = calls.lock().unwrap().last().unwrap().clone();
+    assert!(req["messages"][0]["content"].as_str().unwrap().contains("Edinburgh trams reach Newhaven"), "headlines go to the model");
+
+    // Another batch: nothing already shown comes back.
+    let shown: Vec<String> = cards.iter().map(|c| c["title"].as_str().unwrap().to_string()).collect();
+    let (_, r2) = c.post("/api/today/topics", json!({"lang": "en", "exclude": shown})).await;
+    let again: Vec<&str> = r2["cards"].as_array().unwrap().iter().map(|c| c["title"].as_str().unwrap()).collect();
+    assert!(!again.is_empty() && again.iter().all(|t| !shown.iter().any(|s| s == t)), "{again:?} vs {shown:?}");
+
+    // A focus theme: its setting sheet is written to the profile and steers the cards.
+    let (st, f) = c.post("/api/focus", json!({"lang": "en", "name": "蘇格蘭／英國旅遊"})).await;
+    assert_eq!(st, StatusCode::OK, "{f}");
+    assert_eq!(f["focus"]["name"], "蘇格蘭／英國旅遊");
+    let file = ws_path.join(f["file"].as_str().unwrap());
+    assert!(std::fs::read_to_string(&file).unwrap().contains("Princes Street"), "editable file in the workspace");
+    let (_, r3) = c.post("/api/today/topics", json!({"lang": "en"})).await;
+    assert_eq!(r3["focus"], "蘇格蘭／英國旅遊");
+    let sys = calls.lock().unwrap().last().unwrap()["system"].to_string();
+    assert!(sys.contains("蘇格蘭／英國旅遊") && sys.contains("Royal Mile"), "the focus and its names go to the model");
+    assert_eq!(c.post("/api/focus", json!({"lang": "en", "name": " "})).await.0, StatusCode::BAD_REQUEST);
+
+    // Start with the news card: today's course, lesson 1 written from that article, set in Scotland.
+    let card = r3["cards"][0].clone();
+    assert_eq!(card["kind"], "news", "{r3}");
+    let (st, s) = c.post("/api/today/start", json!({"lang": "en", "card": card})).await;
+    assert_eq!(st, StatusCode::OK, "{s}");
+    assert_eq!(s["created"], true);
+    let id = s["id"].as_str().unwrap().to_string();
+    let (st, again) = c.post("/api/today/start", json!({"lang": "en", "card": r3["cards"][1]})).await;
+    assert_eq!((st, again["id"].as_str(), again["created"].as_bool()), (StatusCode::OK, Some(id.as_str()), Some(false)), "one daily course a day");
+    let (st, l) = c.post(&format!("/api/courses/{id}/lessons/1/open"), json!({})).await;
+    assert_eq!(st, StatusCode::OK, "{l}");
+    let req = calls.lock().unwrap().iter().rev().find(|b| b["output_config"]["format"]["schema"]["properties"]["text"].is_object()).cloned().unwrap();
+    let all = format!("{}{}", req["system"], req["messages"][0]["content"]);
+    assert!(all.contains("Newhaven"), "the article is the lesson's source");
+    assert!(all.contains("Princes Street") && all.contains("set the text there"), "the lesson is set in the focus place");
+
+    // Cancel the focus.
+    let (_, d) = c.send(reqwest::Method::DELETE, "/api/focus?lang=en", json!({})).await;
+    assert_eq!(d["removed"], true);
+    assert!(!file.exists());
 }

@@ -218,8 +218,13 @@ $$(".block .toggle").forEach((b) => (b.onclick = () => {
   const open = blk.dataset.open !== "true";
   blk.dataset.open = String(open);
   b.textContent = open ? "−" : "+";
+  b.setAttribute("aria-expanded", String(open));
 }));
-$$(".block").forEach((blk) => ($(".toggle", blk).textContent = blk.dataset.open === "true" ? "−" : "+"));
+$$(".block").forEach((blk) => {
+  const t = $(".toggle", blk);
+  t.textContent = blk.dataset.open === "true" ? "−" : "+";
+  t.setAttribute("aria-expanded", String(blk.dataset.open === "true"));
+});
 
 function segment(root, value, onpick) {
   $$("button", root).forEach((b) => {
@@ -330,7 +335,9 @@ async function greet() {
     const t = await fetchToday();
     const task = t.next != null ? t.tasks[t.next] : null;
     const reached = t.summary && t.summary.goal > 0 && t.summary.today >= t.summary.goal;
-    const nextLine = task ? (task.id === "mistakes" ? `還有 ${task.open} 題錯題，訂正一下吧。` : `${reached ? "想多練可以繼續" : "繼續今天的課"}：${taskName(task)}。`) : "";
+    // Today's lesson not made yet: point at 開始今天的課 (stage F3).
+    const notMade = task?.daily && t.daily;
+    const nextLine = notMade ? "按「開始今天的課」，挑一個今天想學的主題。" : task ? (task.id === "mistakes" ? `還有 ${task.open} 題錯題，訂正一下吧。` : `${reached ? "想多練可以繼續" : "繼續今天的課"}：${taskName(task)}。`) : "";
     if (reached) return say(`${name}今天的目標達成了！${nextLine || "想多練可以再來一段對話。"}`);
     if (task) return say(`${name}${nextLine}`);
   } catch { /* fall back to the numbers below */ }
@@ -1104,6 +1111,9 @@ function updatePicked() {
 
 $("#genRun").onclick = async () => {
   const btn = $("#genRun");
+  // The block starts folded (開始今天的課 is the main way in); its result shows in it.
+  const blk = btn.closest(".block");
+  if (blk.dataset.open !== "true") { blk.dataset.open = "true"; $(".toggle", blk).textContent = "−"; $(".toggle", blk).setAttribute("aria-expanded", "true"); }
   const body = { lang: state.lang, level: $("#genLevel").value };
   if (genMode === "news") {
     if (!state.picked) { flash("先到「新聞」頁選一篇", true); return; }

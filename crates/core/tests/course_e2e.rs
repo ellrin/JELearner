@@ -103,7 +103,7 @@ async fn topic_course_outline_then_lesson_two() {
     assert_eq!(targets, vec!["subsidy", "yield", "capacity"]);
     assert!(plan.review.contains(&"semiconductor".to_string()), "lesson-1 words come back: {:?}", plan.review);
     assert!(!needs_search(&plan), "no news search for a lesson with the learner's page");
-    let ctx = LessonContext { recent_accuracy: Some(0.8), article: None };
+    let ctx = LessonContext { recent_accuracy: Some(0.8), article: None, focus: None };
     let opened = open_lesson(&p, &templates, &ws, &id, 2, &learner, &ctx, "2026-11-06").await.unwrap();
     let g = opened.generated.as_ref().expect("generated now");
     assert!(g.missing.is_empty(), "missing in text: {:?}", g.missing);

@@ -17,6 +17,10 @@ Rules for `text` (today's text, about {{ text_length }}):
 - Write a short original text{% if angle %} from the lesson's angle{% endif %}. If it is about real events, stay general
   and do not invent specific facts, names or numbers.
 {% endif %}
+{% if setting %}
+- The learner's focus theme is {{ setting.name }}: set the text there. Where it fits naturally, mention
+  real places and names from this setting sheet, and only these (do not invent others): {{ setting_names }}.
+{% endif %}
 - Use every new word and every review word at least once, in a natural sentence, and use the grammar pattern(s).
 - Any sentence above the learner's level must be simplified or replaced; only the planned new words and
   grammar may be above it.

@@ -402,6 +402,8 @@ async function renderToday(page) {
     g.tasks.push([task, i]);
   });
   for (const g of groups) {
+    // Today's lesson not made yet: one way in (開始今天的課), plan §19.2.6.
+    if (g.key === "daily" && t.daily) { page.append(todayStart(ready, t.daily.minutes)); continue; }
     const box = el("div", "today-lesson");
     if (g.key !== "other") {
       const les = g.key === "daily" ? null : t.lessons.find((l) => `${l.course}#${l.number}` === g.key);
@@ -432,6 +434,202 @@ async function renderToday(page) {
     done.append(row);
     page.append(done);
   }
+}
+
+// ── 開始今天的課 (stage F3) ─────────────────────────────
+// One button → 3–5 topic cards (news, interests, general topics) → pick one
+// and only today's lesson is made. 換一批 leaves out the cards already shown.
+// The cards stay while the learner looks elsewhere (same user, language, day).
+
+let todayPick = null;
+const pickKey = () => `${state.status?.user?.id ?? ""}/${state.lang}/${new Date().toDateString()}`;
+const CARD_KIND = { news: "新聞", interest: "興趣", general: "通識" };
+
+function todayStart(ready, minutes) {
+  const box = el("div", "today-start");
+  if (todayPick?.key !== pickKey()) todayPick = { key: pickKey(), cards: null, shown: [], refreshed: false, busy: false, err: null, newsErr: false, focus: undefined };
+  // `focusOn`: what gets the keyboard focus after a redraw (the box is redrawn).
+  const draw = (focusOn) => {
+    box.innerHTML = "";
+    box.setAttribute("aria-busy", String(!!todayPick.busy));
+    const head = el("div", "ts-head");
+    head.append(el("h3", null, "今天想學什麼？"));
+    const focusBox = el("div", "ts-focus");
+    head.append(focusBox);
+    box.append(head);
+    drawFocus(focusBox, draw, focusOn);
+    if (!ready) {
+      box.append(el("p", "ts-note", "主題卡與課文由 AI 老師準備，先連接 Claude 或本機模型。"));
+      const row = el("div", "actions-row");
+      row.append(primaryButton("連接 AI 老師", () => openSettings(3)));
+      box.append(row);
+    } else if (!todayPick.cards && !todayPick.busy) {
+      if (todayPick.err) {
+        // One short line; the details are for whoever helps.
+        const n = el("p", "ts-note bad", "AI 老師暫時連不上，等一下再試。");
+        n.setAttribute("role", "alert");
+        n.title = todayPick.err;
+        box.append(n);
+      }
+      const row = el("div", "actions-row");
+      const go1 = primaryButton(todayPick.err ? "再試一次" : "開始今天的課", () => loadCards(draw));
+      row.append(go1);
+      if (!todayPick.err && minutes) row.append(el("span", "ts-hint", `約 ${minutes} 分鐘`));
+      box.append(row);
+      if (focusOn === "main") go1.focus();
+    } else if (todayPick.busy === "cards") {
+      const n = el("p", "ts-note", todayPick.refreshed ? "正在挑主題…" : "正在看今天的新聞、挑主題…");
+      n.setAttribute("role", "status");
+      box.append(n);
+      const grid = el("div", "ts-cards");
+      for (let i = 0; i < 4; i++) { const sk = el("div", "ts-card skeleton"); sk.append(el("i"), el("i"), el("i")); grid.append(sk); }
+      box.append(grid);
+    } else {
+      if (todayPick.newsErr) box.append(el("p", "ts-note", "新聞暫時抓不到，先從興趣與通識挑。"));
+      const grid = el("div", "ts-cards");
+      for (const c of todayPick.cards) grid.append(topicCard(c, draw));
+      box.append(grid);
+      const row = el("div", "actions-row");
+      row.append(ghostButton("refresh", "都不要，換一批", () => loadCards(draw)));
+      box.append(row);
+      if (focusOn === "cards") grid.querySelector(".ts-card")?.focus();
+    }
+    box.append(otherWays());
+  };
+  draw();
+  return box;
+}
+
+async function loadCards(draw) {
+  const p = todayPick;
+  p.busy = "cards"; p.err = null;
+  draw();
+  try {
+    const r = await api("/api/today/topics", { lang: state.lang, exclude: p.shown, refresh: !p.refreshed });
+    p.refreshed = true;
+    p.newsErr = (r.news_errors ?? []).length > 0 && !r.cards.some((c) => c.kind === "news");
+    p.cards = r.cards;
+    p.shown.push(...r.cards.map((c) => c.title));
+  } catch (e) {
+    // 換一批 failed: the cards shown stay; the first batch failed: say why.
+    if (p.cards) flash(e.message, true); else p.err = e.message;
+  } finally { p.busy = false; }
+  if (p === todayPick) draw(p.cards ? "cards" : "main");
+}
+
+function topicCard(c, draw) {
+  const b = el("button", `ts-card kind-${c.kind}`);
+  const top = el("div", "ts-top");
+  top.append(el("span", `tag${c.kind === "news" ? " acc" : ""}`, CARD_KIND[c.kind] ?? c.kind));
+  if (c.category) top.append(el("span", "ts-cat", c.category));
+  b.append(top, el("b", null, c.title));
+  if (c.why) b.append(el("span", "ts-why", c.why));
+  if (c.article) b.append(el("span", "ts-src", `${c.article.source}・${c.article.title}`));
+  const p = todayPick;
+  if (p.busy === "start") {
+    b.disabled = true;
+    if (p.picked === c) {
+      b.classList.add("picked");
+      const n = el("span", "ts-busy", "正在準備今天的課…");
+      n.setAttribute("role", "status");
+      b.append(n);
+    }
+  }
+  b.onclick = async () => {
+    p.busy = "start"; p.picked = c;
+    draw("picked");
+    try {
+      const r = await api("/api/today/start", { lang: state.lang, card: c });
+      todayCache = null;
+      todayPick = null;
+      go("courses", { course: r.id, courseLesson: r.next ?? 1, step: null, fromToday: true, courseCreate: null });
+    } catch (e) {
+      p.busy = false; p.picked = null;
+      flash(e.message, true);
+      draw("cards");
+    }
+  };
+  return b;
+}
+
+/** The focus theme: a chip with ✕, or a small way to set one. */
+async function drawFocus(box, redraw, focusOn) {
+  const p = todayPick;
+  if (p.focus === undefined) {
+    try { p.focus = (await api(`/api/focus?lang=${state.lang}`)).focus?.name ?? null; } catch { p.focus = null; }
+    if (p !== todayPick) return;
+  }
+  box.innerHTML = "";
+  if (p.focus) {
+    const chip = el("span", "focus-chip");
+    chip.title = "這陣子的主題卡與課文都會放在這個地方";
+    chip.append(icon("target"), el("span", null, `重點：${p.focus}`));
+    const x = el("button", "x");
+    x.setAttribute("aria-label", "取消重點主題");
+    x.append(icon("x"));
+    x.onclick = async () => {
+      try {
+        await api(`/api/focus?lang=${state.lang}`, undefined, "DELETE");
+        Object.assign(p, { focus: null, cards: null, shown: [] });
+        redraw("focus");
+      } catch (e) { flash(e.message, true); }
+    };
+    chip.append(x);
+    box.append(chip);
+    if (focusOn === "focus") x.focus();
+    return;
+  }
+  if (p.focusEdit) {
+    const f = el("form", "focus-set");
+    const i = el("input");
+    i.placeholder = state.lang === "ja" ? "例：京都旅行" : "例：蘇格蘭／英國旅遊";
+    i.maxLength = 40;
+    i.setAttribute("aria-label", "重點主題");
+    i.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); p.focusEdit = false; redraw("focus"); } };
+    const ok = el("button", "primary small", "設定");
+    ok.type = "submit";
+    const no = el("button", "ghost", "取消");
+    no.type = "button";
+    no.onclick = () => { p.focusEdit = false; redraw("focus"); };
+    f.append(i, ok, no);
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      if (!i.value.trim()) return i.focus();
+      ok.disabled = i.disabled = true;
+      ok.textContent = "整理在地資料…";
+      try {
+        const r = await api("/api/focus", { lang: state.lang, name: i.value.trim() });
+        Object.assign(p, { focus: r.focus.name, focusEdit: false, cards: null, shown: [] });
+        redraw("focus");
+      } catch (err) {
+        flash(err.message, true);
+        ok.disabled = i.disabled = false;
+        ok.textContent = "設定";
+      }
+    };
+    box.append(f);
+    setTimeout(() => i.focus(), 0);
+    return;
+  }
+  if (!state.status?.engine_ready) return;
+  const add = el("button", "link-btn", "＋ 重點主題");
+  add.title = "例如一趟旅行：主題卡和課文都會換成那裡的街道、店家、交通和新聞";
+  add.onclick = () => { p.focusEdit = true; redraw(); };
+  box.append(add);
+  if (focusOn === "focus") add.focus();
+}
+
+/** The other ways in, folded: an article or address, or a course from a list. */
+function otherWays() {
+  const d = el("details", "ts-other");
+  d.append(el("summary", null, "其他方式"));
+  const row = el("div", "ts-other-row");
+  row.append(
+    ghostButton("link", "貼文章或網址", () => go("courses", { course: null, courseLesson: null, courseCreate: "topic" })),
+    ghostButton("layers", "用單字／文法清單排課", () => go("courses", { course: null, courseLesson: null, courseCreate: "fixed" })),
+  );
+  d.append(row);
+  return d;
 }
 
 /** 第 3 課・Title, without repeating 第 3 課 when the title already starts with it. */

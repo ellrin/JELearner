@@ -31,6 +31,9 @@ pub struct LessonContext {
     /// The lesson's own [`LessonPlan::article`] (a text the learner gave)
     /// wins over this; see [`needs_search`].
     pub article: Option<SourceText>,
+    /// The learner's focus theme (plan §19.2.6): the text is set there and
+    /// mentions real names from its setting sheet.
+    pub focus: Option<super::picker::FocusSheet>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -238,6 +241,8 @@ pub fn build_request(t: &CourseTemplates, course: &Course, plan: &LessonPlan, le
         "article": article,
         "recent_accuracy": ctx.recent_accuracy.map(|a| (a.clamp(0.0, 1.0) * 100.0).round() as u32),
         "known_words": learner.known_words.iter().take(200).collect::<Vec<_>>(),
+        "setting": ctx.focus,
+        "setting_names": ctx.focus.as_ref().map(|f| f.names()).unwrap_or_default(),
     });
     Ok(CompletionRequest {
         system: t.render(LESSON_SYSTEM, c.clone())?,

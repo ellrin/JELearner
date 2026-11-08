@@ -10,8 +10,16 @@ pub const OUTLINE_USER: &str = "course_outline_user.md";
 pub const LESSON_SYSTEM: &str = "course_lesson_system.md";
 pub const LESSON_USER: &str = "course_lesson_user.md";
 pub const LESSON_MARKDOWN: &str = "course_lesson.md.j2";
+pub const TOPICS_SYSTEM: &str = "today_topics_system.md";
+pub const TOPICS_USER: &str = "today_topics_user.md";
+pub const FOCUS_SYSTEM: &str = "focus_sheet_system.md";
+pub const FOCUS_USER: &str = "focus_sheet_user.md";
 
-const BUNDLED: [(&str, &str); 5] = [
+const BUNDLED: [(&str, &str); 9] = [
+    (TOPICS_SYSTEM, include_str!("../../../../prompts/today_topics_system.md")),
+    (TOPICS_USER, include_str!("../../../../prompts/today_topics_user.md")),
+    (FOCUS_SYSTEM, include_str!("../../../../prompts/focus_sheet_system.md")),
+    (FOCUS_USER, include_str!("../../../../prompts/focus_sheet_user.md")),
     (OUTLINE_SYSTEM, include_str!("../../../../prompts/course_outline_system.md")),
     (OUTLINE_USER, include_str!("../../../../prompts/course_outline_user.md")),
     (LESSON_SYSTEM, include_str!("../../../../prompts/course_lesson_system.md")),
