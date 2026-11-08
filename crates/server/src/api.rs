@@ -80,6 +80,7 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .merge(crate::today::routes())
         .merge(crate::interests::routes())
         .merge(crate::prepare::routes())
+        .merge(crate::inbox::routes())
         .fallback_service(ServeDir::new(web))
 }
 
@@ -735,10 +736,25 @@ struct SyncBody {
     message: Option<String>,
 }
 
-async fn git_sync(State(s): State<Shared>, body: Option<Json<SyncBody>>) -> R<git::SyncResult> {
+async fn git_sync(State(s): State<Shared>, body: Option<Json<SyncBody>>) -> R<Value> {
     let root = root_path(&s).await?;
     let msg = body.and_then(|b| b.0.message);
-    Ok(Json(git::sync(&root, msg).await.map_err(bad)?))
+    let first = git::sync(&root, msg).await.map_err(bad)?;
+    // Family members' iPad results came down with the pull: apply them on
+    // the admin's computer and send the outcome back up (plan F5).
+    let is_admin = {
+        let me = s.loaded.read().await.as_ref().map(|l| l.ws.profile.id.clone()).unwrap_or_default();
+        s.root.read().await.as_ref().is_some_and(|o| o.root.is_admin(&me))
+    };
+    let applied = if is_admin { crate::inbox::process_all(&s).await } else { vec![] };
+    let result = if applied.iter().any(|a| a.files > 0) {
+        git::sync(&root, Some("Apply iPad results".into())).await.unwrap_or(first)
+    } else {
+        first
+    };
+    let mut out = serde_json::to_value(&result).map_err(|e| fail(e.to_string()))?;
+    out["inbox"] = json!(applied);
+    Ok(Json(out))
 }
 
 // ── news & articles ─────────────────────────────────────

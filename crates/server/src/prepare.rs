@@ -114,7 +114,7 @@ async fn start(State(s): State<Shared>, Json(b): Json<StartBody>) -> R<Value> {
 }
 
 /// The member as loaded on this computer: their own database, their files read in.
-async fn member_loaded(s: &Shared, member: &str) -> Result<Loaded, ApiError> {
+pub(crate) async fn member_loaded(s: &Shared, member: &str) -> Result<Loaded, ApiError> {
     let settings = s.settings.read().await.clone();
     let root = s.root.read().await;
     let open = root.as_ref().ok_or_else(|| bad("尚未選擇工作區"))?;
@@ -126,6 +126,8 @@ fn day(offset: u32) -> String {
 }
 
 async fn run(s: &Shared, member: &str, lang: Lang, days: u32, choices: u32) -> Result<(), ApiError> {
+    // Results from the iPad first: the new lessons follow her latest level.
+    let _ = crate::inbox::process_member(s, member).await;
     let m = member_loaded(s, member).await?;
     if !m.ws.profile.languages.contains(&lang) {
         return Err(bad(format!("{member} 沒有在學 {}", lang.label())));

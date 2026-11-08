@@ -648,7 +648,7 @@ async fn open_lesson(State(s): State<Shared>, AxPath((id, n)): AxPath<(String, u
 // ── unit results ────────────────────────────────────────
 
 #[derive(Deserialize)]
-struct QuizAnswer {
+pub(crate) struct QuizAnswer {
     index: usize,
     #[serde(default)]
     answer: String,
@@ -656,7 +656,7 @@ struct QuizAnswer {
 }
 
 #[derive(Deserialize)]
-struct OutputAnswer {
+pub(crate) struct OutputAnswer {
     #[serde(default)]
     prompt: String,
     #[serde(default)]
@@ -669,7 +669,7 @@ struct OutputAnswer {
 }
 
 #[derive(Deserialize, Default)]
-struct UnitBody {
+pub(crate) struct UnitBody {
     /// Review: the share of cards remembered (0–1); others are computed.
     score: Option<f64>,
     /// Review: how many cards were done.
@@ -699,6 +699,19 @@ async fn report_unit(State(s): State<Shared>, AxPath((id, n, u)): AxPath<(String
     let today = date();
     let (lang, kind, passed, score, pts, res, course) = {
         let l = ws(&s).await?;
+        apply_unit(&l, &r, &id, n, u, b, &today).await?
+    };
+    after_unit(&s, &r, &id, n, lang, kind, passed, score, pts, res, course).await
+}
+
+pub(crate) type UnitApplied = (Lang, UnitKind, bool, Option<f64>, f64, store::UnitResult, Course);
+
+/// Record one unit's result for the loaded learner: score, mistakes, course
+/// progress and the points line (the same rules for a result sent from the
+/// iPad). Level and difficulty are the caller's next step.
+pub(crate) async fn apply_unit(l: &Loaded, r: &jl_core::rules::Rules, id: &str, n: u32, u: u32, b: UnitBody, today: &str) -> Result<UnitApplied, ApiError> {
+    let id = id.to_string();
+    {
         let mut course = store::load(&l.ws, &id).map_err(course_err)?;
         let lp = course.lesson(n).cloned().ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("沒有第 {n} 課")))?;
         let unit = lp.units.get(u as usize).cloned().ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("第 {n} 課沒有第 {} 個單元", u + 1)))?;
@@ -750,7 +763,7 @@ async fn report_unit(State(s): State<Shared>, AxPath((id, n, u)): AxPath<(String
             }
         };
         let was_done = lp.units_done.contains(&u);
-        let res = store::mark_unit(&mut course, n, u, passed, score.map(|x| x as f32), &today).map_err(course_err)?;
+        let res = store::mark_unit(&mut course, n, u, passed, score.map(|x| x as f32), today).map_err(course_err)?;
         store::save_progress(&l.ws, &course).map_err(course_err)?;
         // A repeat of a passed unit earns nothing and is not written again.
         let pts = if res.points > 0.0 { points::award(true, score, false, &r.points) } else { 0.0 };
@@ -760,9 +773,16 @@ async fn report_unit(State(s): State<Shared>, AxPath((id, n, u)): AxPath<(String
             points::record(&l.ws, &l.db, &rec, None).await.map_err(fail)?;
             l.db.link_course_units().await?;
         }
-        refresh_lesson_page(&l, lesson_id).await;
-        (lang, unit.kind, passed, score, pts, res, course)
-    };
+        refresh_lesson_page(l, lesson_id).await;
+        Ok((lang, unit.kind, passed, score, pts, res, course))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn after_unit(s: &Shared, r: &jl_core::rules::Rules, id: &str, n: u32, lang: Lang, kind: UnitKind, passed: bool, score: Option<f64>, pts: f64, res: store::UnitResult, course: Course) -> R<Value> {
+    let s = s.clone();
+    let r = r.clone();
+    let id = id.to_string();
     let difficulty_change = if matches!(kind, UnitKind::Reading | UnitKind::Quiz) { auto_difficulty(&s, lang).await? } else { None };
     let level_up = try_level_up(&s, lang).await?;
     let l = ws(&s).await?;

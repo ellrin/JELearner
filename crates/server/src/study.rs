@@ -82,16 +82,18 @@ async fn assessment(ws: &Workspace, db: &Db, lang: Lang, rules: &Rules) -> Resul
 /// across a major level). Returns `{ from, to }` when it went up.
 pub(crate) async fn try_level_up(s: &Shared, lang: Lang) -> Result<Option<Value>, ApiError> {
     let r = rules(s).await;
-    let a = {
-        let l = ws(s).await?;
-        assessment(&l.ws, &l.db, lang, &r).await?
-    };
+    let mut g = s.loaded.write().await;
+    let l = g.as_mut().ok_or_else(|| unavailable("請先選擇使用者"))?;
+    level_up_for(l, lang, &r).await
+}
+
+/// The next level when conditions 1–3 are met, for any loaded learner.
+pub(crate) async fn level_up_for(l: &mut crate::Loaded, lang: Lang, r: &Rules) -> Result<Option<Value>, ApiError> {
+    let a = assessment(&l.ws, &l.db, lang, r).await?;
     if !a.eligible {
         return Ok(None);
     }
     let Some(next) = a.next.clone() else { return Ok(None) };
-    let mut g = s.loaded.write().await;
-    let l = g.as_mut().ok_or_else(|| unavailable("請先選擇使用者"))?;
     let mut lp = l.ws.profile.lang(lang);
     if lp.level != a.level {
         return Ok(None); // changed meanwhile
@@ -107,6 +109,10 @@ pub(crate) async fn try_level_up(s: &Shared, lang: Lang) -> Result<Option<Value>
 async fn change_difficulty(s: &Shared, lang: Lang, delta: i32, reason: &str, use_feedback: bool) -> Result<Option<Value>, ApiError> {
     let mut g = s.loaded.write().await;
     let l = g.as_mut().ok_or_else(|| unavailable("請先選擇使用者"))?;
+    change_difficulty_for(l, lang, delta, reason, use_feedback).await
+}
+
+async fn change_difficulty_for(l: &mut crate::Loaded, lang: Lang, delta: i32, reason: &str, use_feedback: bool) -> Result<Option<Value>, ApiError> {
     let mut lp = l.ws.profile.lang(lang);
     let from = lp.difficulty;
     let to = progress::apply(lang, from, delta);
@@ -137,8 +143,14 @@ async fn last_difficulty_change(db: &Db, lang: Lang) -> Result<Option<DateTime<U
 /// After the first lessons: adjust from recent quiz scores.
 pub(crate) async fn auto_difficulty(s: &Shared, lang: Lang) -> Result<Option<Value>, ApiError> {
     let r = rules(s).await;
+    let mut g = s.loaded.write().await;
+    let l = g.as_mut().ok_or_else(|| unavailable("請先選擇使用者"))?;
+    auto_difficulty_for(l, lang, &r).await
+}
+
+/// After the first lessons: adjust from recent quiz scores, for any loaded learner.
+pub(crate) async fn auto_difficulty_for(l: &mut crate::Loaded, lang: Lang, r: &Rules) -> Result<Option<Value>, ApiError> {
     let delta = {
-        let l = ws(s).await?;
         if l.ws.profile.lang(lang).early_feedback_left > 0 {
             return Ok(None);
         }
@@ -149,7 +161,7 @@ pub(crate) async fn auto_difficulty(s: &Shared, lang: Lang) -> Result<Option<Val
     if delta == 0 {
         return Ok(None);
     }
-    change_difficulty(s, lang, delta, if delta > 0 { "accuracy:up" } else { "accuracy:down" }, false).await
+    change_difficulty_for(l, lang, delta, if delta > 0 { "accuracy:up" } else { "accuracy:down" }, false).await
 }
 
 async fn points_on(db: &Db, day: NaiveDate) -> Result<(f64, Vec<(String, f64)>), ApiError> {
@@ -582,6 +594,13 @@ struct StartBody {
     /// The conversation unit of a course lesson: its topic, opening and
     /// target words come from the generated lesson.
     course: Option<conversation::CourseLink>,
+}
+
+/// A finished conversation for this course unit (an iPad result sent twice).
+pub(crate) async fn course_conversation_done(db: &Db, link: &conversation::CourseLink) -> Result<bool, ApiError> {
+    let pat = format!("%\"course\":{}%", serde_json::to_string(link).unwrap_or_default());
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE status = 'done' AND data LIKE ?").bind(pat).fetch_one(db.pool()).await?;
+    Ok(n > 0)
 }
 
 /// The conversation of a course unit, if one was started already.

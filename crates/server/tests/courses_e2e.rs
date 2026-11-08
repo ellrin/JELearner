@@ -1047,4 +1047,64 @@ async fn admin_prepares_lessons_for_a_member() {
     // The admin's own courses are untouched.
     let (_, mine) = c.get("/api/courses?lang=en").await;
     assert_eq!(mine["courses"].as_array().unwrap().len(), 0, "{mine}");
+
+    // The iPad writes back the lesson's results; the admin's computer applies them.
+    let course = pkg["course"].as_str().unwrap().to_string();
+    let n = pkg["lesson"].as_u64().unwrap();
+    let mut results = vec![];
+    for u in pkg["plan"]["units"].as_array().unwrap() {
+        let i = u["index"].as_u64().unwrap();
+        let kind = u["kind"].as_str().unwrap();
+        let base = json!({ "type": "unit", "course": course, "lesson": n, "unit": i });
+        let mut r = base.clone();
+        match kind {
+            "review" => { r["cards"] = json!(5); r["score"] = json!(0.8); }
+            "reading" | "quiz" => {
+                let qs = pkg["data"]["questions"].as_array().map(|q| q.len()).unwrap_or(1);
+                r["answers"] = json!((0..qs).map(|k| json!({ "index": k, "answer": "x", "correct": true })).collect::<Vec<_>>());
+            }
+            "conversation" => {
+                let conv = &pkg["conversation"];
+                let limit = conv["turns"].as_u64().unwrap();
+                let mut turns = vec![json!({ "role": "ai", "text": conv["opening"] })];
+                for k in 0..limit {
+                    turns.push(json!({ "role": "me", "text": format!("I think chips are important for my job, reason {k}.") }));
+                    if k + 1 < limit {
+                        turns.push(json!({ "role": "ai", "text": "Why is that?", "recast": "" }));
+                    }
+                }
+                r = json!({ "type": "conversation", "course": course, "lesson": n, "unit": i, "started_at": "2026-11-08T01:00:00Z", "turns": turns, "review": review() });
+            }
+            _ => { r["items"] = json!([{ "prompt": "p", "answer": "a", "model": "m", "correct": true }, { "prompt": "q", "answer": "b", "model": "n", "hint": "h", "correct": false }]); }
+        }
+        results.push(r);
+    }
+    let inbox_dir = dir.join("inbox");
+    std::fs::create_dir_all(&inbox_dir).unwrap();
+    let file = json!({ "version": 1, "id": "t1", "member": member, "results": results });
+    std::fs::write(inbox_dir.join("2026-11-08T0100-t1.json"), file.to_string()).unwrap();
+    std::fs::write(inbox_dir.join("2026-11-08T0101-bad.json"), "{ not json").unwrap();
+    let (st, a) = c.post("/api/family/inbox", json!({})).await;
+    assert_eq!(st, StatusCode::OK, "{a}");
+    let ap = a["applied"].as_array().unwrap().iter().find(|x| x["member"] == member.as_str()).cloned().unwrap();
+    assert_eq!(ap["files"], 1, "{ap}");
+    assert_eq!(ap["conversations"], 1, "{ap}");
+    assert_eq!(ap["units"].as_u64().unwrap() + 1, results.len() as u64, "{ap}");
+    assert!(ap["points"].as_f64().unwrap() > 0.0, "{ap}");
+    assert_eq!(ap["errors"].as_array().unwrap().len(), 1, "the unreadable file is reported: {ap}");
+    assert!(inbox_dir.join("done/2026-11-08T0100-t1.json").is_file());
+    assert!(inbox_dir.join("bad/2026-11-08T0101-bad.json").is_file());
+    let points_dir = ws_path.join("profiles").join(&member).join("records");
+    let all: String = walk(&points_dir).iter().map(|p| std::fs::read_to_string(p).unwrap_or_default()).collect();
+    assert!(all.contains("conversation"), "points lines in the member's records");
+    assert!(walk(&ws_path.join("profiles").join(&member).join("conversations")).iter().any(|p| p.extension().is_some_and(|e| e == "md")), "the conversation record");
+    // The same file again: nothing more is counted.
+    std::fs::write(inbox_dir.join("2026-11-08T0102-t1-again.json"), file.to_string()).unwrap();
+    let (_, again) = c.post("/api/family/inbox", json!({})).await;
+    let ap2 = again["applied"].as_array().unwrap().iter().find(|x| x["member"] == member.as_str()).cloned().unwrap();
+    assert_eq!(ap2["points"], 0.0, "already counted: {ap2}");
+    // Only an admin applies results.
+    assert_eq!(c.post("/api/users/select", json!({"id": member})).await.0, StatusCode::OK);
+    assert_eq!(c.post("/api/family/inbox", json!({})).await.0, StatusCode::BAD_REQUEST);
 }
+

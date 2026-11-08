@@ -23,6 +23,7 @@ pub mod study;
 pub mod today;
 pub mod interests;
 pub mod prepare;
+pub mod inbox;
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
