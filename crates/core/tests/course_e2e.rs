@@ -127,7 +127,7 @@ async fn topic_course_outline_then_lesson_two() {
     assert!(md.contains("| yield |"), "a word the model left out of the vocabulary is added from the plan");
     assert_eq!(lesson::front_matter(md, "course").as_deref(), Some(id.as_str()));
     assert_eq!(lesson::front_matter(md, "course_lesson").as_deref(), Some("2"));
-    assert_eq!(lesson::front_matter(md, "units").as_deref(), Some("review:5,reading:10,sentence-making:5,conversation:10"));
+    assert_eq!(lesson::front_matter(md, "units").as_deref(), Some("reading:10,review:5,sentence-making:5,conversation:10"));
     assert_eq!(lesson::front_matter(md, "source").as_deref(), Some("https://example.com/fab"));
     let data = lesson::extract_data(md).expect("embedded data reads as a plain lesson");
     assert_eq!(data.vocabulary.len(), 3);

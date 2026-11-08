@@ -120,24 +120,26 @@ fn cap(p: Part) -> u32 {
 
 /// Base minutes of each part by daily goal:
 ///
-/// | goal | review | reading | output | conversation | output 2 |
+/// | goal | reading | review (words and grammar) | output | conversation | output 2 |
 /// | --- | --- | --- | --- | --- | --- |
-/// | < 15 | 3 | 5 | 2 | – | – |
-/// | 15–24 | 3 | 7 | – | 5 | – |
-/// | 25–29 | 3 | 7 | 5 | 10 | – |
-/// | 30–44 | 5 | 10 | 5 | 10 | – |
-/// | ≥ 45 | 5 | 10 | 5 | 10 | 5 |
+/// | < 15 | 5 | 3 | 2 | – | – |
+/// | 15–24 | 7 | 3 | – | 5 | – |
+/// | 25–29 | 7 | 3 | 5 | 10 | – |
+/// | 30–44 | 10 | 5 | 5 | 10 | – |
+/// | ≥ 45 | 10 | 5 | 5 | 10 | 5 |
 ///
 /// Minutes left over are handed out one at a time, in the order
 /// conversation, reading, output, review, output 2, each up to its cap.
 fn base_parts(minutes: u32) -> Vec<(Part, u32)> {
     use Part::*;
     match minutes {
-        0..15 => vec![(Review, 3), (Reading, 5), (Output, 2)],
-        15..25 => vec![(Review, 3), (Reading, 7), (Conversation, 5)],
-        25..30 => vec![(Review, 3), (Reading, 7), (Output, 5), (Conversation, 10)],
-        30..45 => vec![(Review, 5), (Reading, 10), (Output, 5), (Conversation, 10)],
-        _ => vec![(Review, 5), (Reading, 10), (Output, 5), (Conversation, 10), (Output2, 5)],
+        // The order is the lesson's order: the text first, then its words
+        // and grammar (with the review cards), then practice, then talking.
+        0..15 => vec![(Reading, 5), (Review, 3), (Output, 2)],
+        15..25 => vec![(Reading, 7), (Review, 3), (Conversation, 5)],
+        25..30 => vec![(Reading, 7), (Review, 3), (Output, 5), (Conversation, 10)],
+        30..45 => vec![(Reading, 10), (Review, 5), (Output, 5), (Conversation, 10)],
+        _ => vec![(Reading, 10), (Review, 5), (Output, 5), (Conversation, 10), (Output2, 5)],
     }
 }
 
@@ -187,9 +189,10 @@ fn unit(kind: UnitKind, minutes: u32) -> UnitPlan {
 
 /// The units of one lesson.
 ///
-/// - A text lesson (regular, background, article): review round, reading
-///   with questions, output practice, conversation continuing the text.
-///   At 30 minutes: review 5 (20 cards), reading 10 (5 questions),
+/// - A text lesson (regular, background, article): the text with questions,
+///   its words and grammar with a review round, output practice, a
+///   conversation continuing the text. At 30 minutes: reading 10 (5
+///   questions), words and grammar 5 (20 cards),
 ///   output 5 (3 items), conversation 10 (20 turns).
 /// - Output alternates by lesson number: odd lessons translate from the
 ///   learner's language, even ones make sentences; the second output task
@@ -281,8 +284,8 @@ mod tests {
         assert_eq!(
             kinds(&u),
             vec![
-                (UnitKind::Review, 5, 20),
                 (UnitKind::Reading, 10, 5),
+                (UnitKind::Review, 5, 20),
                 (UnitKind::Translation, 5, 4),
                 (UnitKind::Conversation, 10, 20),
             ]
@@ -300,7 +303,7 @@ mod tests {
             assert_eq!(unit_plan(LessonRole::Regular, goal, 1), u, "deterministic");
         }
         let short = unit_plan(LessonRole::Regular, 15, 1);
-        assert_eq!(kinds(&short), vec![(UnitKind::Review, 3, 12), (UnitKind::Reading, 7, 4), (UnitKind::Conversation, 5, 10)]);
+        assert_eq!(kinds(&short), vec![(UnitKind::Reading, 7, 4), (UnitKind::Review, 3, 12), (UnitKind::Conversation, 5, 10)]);
         for goal in [10, 15, 30, 45, 60] {
             for u in unit_plan(LessonRole::Regular, goal, 1).iter().chain(&unit_plan(LessonRole::Regular, goal, 2)) {
                 if !matches!(u.kind, UnitKind::Review | UnitKind::Conversation) {
@@ -342,7 +345,7 @@ mod tests {
     #[test]
     fn review_and_other_roles() {
         let r = unit_plan(LessonRole::Review, 30, 5);
-        assert_eq!(r.iter().map(|u| u.kind).collect::<Vec<_>>(), vec![UnitKind::Review, UnitKind::Cloze, UnitKind::SentenceMaking, UnitKind::Conversation]);
+        assert_eq!(r.iter().map(|u| u.kind).collect::<Vec<_>>(), vec![UnitKind::Cloze, UnitKind::Review, UnitKind::SentenceMaking, UnitKind::Conversation]);
         assert_eq!(kinds(&unit_plan(LessonRole::Conversation, 30, 1)), vec![(UnitKind::Conversation, 30, 30)]);
         let c = unit_plan(LessonRole::Check, 30, 1);
         assert_eq!(total_minutes(&c), 30);

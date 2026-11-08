@@ -638,7 +638,7 @@ function lessonLabel(n, title) {
   return t ? `第 ${n} 課・${t}` : `第 ${n} 課`;
 }
 
-const UNIT_TITLE = { review: "複習卡片", reading: "課文與閱讀", translation: "翻譯", "sentence-making": "造句", cloze: "填空", paraphrase: "換句話說", conversation: "AI 對話", quiz: "測驗", listening: "聽力", dictation: "聽寫", shadowing: "跟讀" };
+const UNIT_TITLE = { review: "單字與文法", reading: "課文", translation: "翻譯", "sentence-making": "造句", cloze: "填空", paraphrase: "換句話說", conversation: "AI 對話", quiz: "測驗", listening: "聽力", dictation: "聽寫", shadowing: "跟讀" };
 const UNIT_ICON = { review: "cards", reading: "book", translation: "pen", "sentence-making": "pen", cloze: "pen", paraphrase: "pen", conversation: "chat", quiz: "check" };
 const unitTitle = (k, lang = state.lang) => (k === "translation" ? (lang === "ja" ? "中翻日" : "中翻英") : UNIT_TITLE[k] ?? k);
 

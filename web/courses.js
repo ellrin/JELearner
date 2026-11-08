@@ -549,9 +549,16 @@ function stepReview(box, o, u) {
   const cards = o.review_cards ?? [];
   const head = el("div", "step-head");
   const help = el("button", "help", "?");
-  help.dataset.tip = "先複習到期的卡片，再複習這一課要用到的字。按「顯示答案」，再選記得的程度。";
-  head.append(el("h2", null, "複習卡片"), el("span", "c", ""), help);
+  help.dataset.tip = "先看這一課的單字和文法，再用卡片練：這一課的字，加上以前到期的卡片。按「顯示答案」，再選記得的程度。";
+  head.append(el("h2", null, "單字與文法"), el("span", "c", ""), help);
   box.append(head);
+  // This lesson's words and grammar first (from the text just read).
+  if (o.lesson?.vocabulary?.length || o.lesson?.grammar?.length) {
+    const paper = el("div", "paper words-first");
+    paper.lang = lang;
+    lessonPaper(paper, o.lesson, o.row, { parts: ["words", "grammar"] });
+    box.append(paper);
+  }
   if (!cards.length) { box.append(el("div", "empty", "沒有要複習的卡片")); return; }
   const bar = ptsBar(0, "thin");
   box.append(bar);
@@ -648,7 +655,8 @@ function stepReading(box, o, u) {
     onDone: (answers) => reportUnit(box, o, u, { answers }, "閱讀完成", o.lesson.questions?.length ?? 0),
   };
   const words = [...(o.plan.words ?? []).map((w) => w.term), ...(o.plan.review ?? [])];
-  lessonPaper(paper, o.lesson, o.row, { quiz, highlight: words });
+  // The text and its questions; words and grammar are the next step.
+  lessonPaper(paper, o.lesson, o.row, { quiz, highlight: words, parts: ["head", "text", "questions"] });
   if (!quiz.total) reportUnit(box, o, u, { answers: [] }, "閱讀完成");
 }
 

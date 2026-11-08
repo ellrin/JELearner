@@ -282,7 +282,11 @@ async fn today(State(s): State<Shared>, Query(q): Query<LangQ>) -> R<Value> {
     if stats.open_mistakes > 0 {
         tasks.push(json!({ "id": "mistakes", "done": false, "open": stats.open_mistakes }));
     }
-    let next = tasks.iter().position(|t| t["done"] != true);
+    // The next step: the first one not done. Without Claude (or the local
+    // model) a step that needs it waits: the first one that does not comes first.
+    let ready = crate::resolve_engine(&s, false).await.is_ok();
+    let open = |t: &&Value| t["done"] != true;
+    let next = if ready { None } else { tasks.iter().position(|t| open(&t) && t["needs_engine"] != true) }.or_else(|| tasks.iter().position(|t| open(&t)));
     Ok(Json(json!({
         "summary": summary(&l.ws, db, lang, &r).await?,
         "lessons": plan["lessons"], "daily": plan["daily"], "per_day": plan["per_day"], "due": stats.due,

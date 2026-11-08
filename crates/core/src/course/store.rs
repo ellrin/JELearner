@@ -413,7 +413,7 @@ mod tests {
         let r = mark_unit(&mut c, 1, 1, false, Some(0.4), "2026-11-05").unwrap();
         assert_eq!(r.points, 0.0);
         let r = mark_unit(&mut c, 1, 1, true, Some(0.8), "2026-11-05").unwrap();
-        assert_eq!((r.points, r.unit, r.skill), (1.0, UnitKind::Reading, Skill::Reading));
+        assert_eq!((r.points, r.unit, r.skill), (1.0, UnitKind::Review, Skill::VocabGrammar), "unit 1 is words and grammar: the text comes first");
         assert_eq!(mark_unit(&mut c, 1, 1, true, None, "2026-11-05").unwrap().points, 0.0, "no second point");
         assert!(mark_unit(&mut c, 1, 9, true, None, "2026-11-05").is_err());
         for u in [0, 2] {

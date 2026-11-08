@@ -315,7 +315,7 @@ async fn topic_course_lesson_units_points_and_notebook() {
     let targets: Vec<String> = plan2["words"].as_array().unwrap().iter().map(|w| w["term"].as_str().unwrap().to_string()).collect();
     assert_eq!(targets, vec!["subsidy", "capacity"]);
     let kinds: Vec<&str> = plan2["units"].as_array().unwrap().iter().map(|u| u["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds, vec!["review", "reading", "sentence-making", "conversation"]);
+    assert_eq!(kinds, vec!["reading", "review", "sentence-making", "conversation"], "the text first, then its words and grammar");
 
     // Open lesson 2: generated now, target words in the text, words added for review.
     let (code, opened) = c.post(&format!("/api/courses/{id}/lessons/2/open"), json!({})).await;
@@ -343,26 +343,27 @@ async fn topic_course_lesson_units_points_and_notebook() {
     assert_eq!(again["lesson_id"], lesson_id);
     assert_eq!(calls.lock().unwrap().len(), n_calls);
 
-    // 1. Review: grade the cards as part of the course (no separate review round).
+    // Words and grammar (unit 1; done here before the text, which is allowed):
+    // grade the cards as part of the course (no separate review round).
     for card in cards.iter().filter(|c| c["item_id"].is_i64()).take(3) {
         let (code, r) = c.post("/api/review", json!({ "kind": card["item_kind"], "id": card["item_id"], "grade": 4, "in_course": true })).await;
         assert_eq!(code, StatusCode::OK);
         assert!(r.get("award").is_none() && r.get("round").is_none(), "{r}");
     }
-    let (code, r) = c.post(&format!("/api/courses/{id}/lessons/2/units/0"), json!({ "cards": 3, "score": 1.0 })).await;
+    let (code, r) = c.post(&format!("/api/courses/{id}/lessons/2/units/1"), json!({ "cards": 3, "score": 1.0 })).await;
     assert_eq!(code, StatusCode::OK, "{r}");
     assert_eq!(r["passed"], true);
     assert_eq!(r["points"], 1.5, "all remembered: bonus");
-    assert_eq!(r["next"]["unit"], 1);
+    assert_eq!(r["next"]["unit"], 0, "the text is still to read");
 
-    // 2. Reading: answer every question (choice answers checked by the server).
+    // The text (unit 0): answer every question (choice answers checked by the server).
     let qn = opened["lesson"]["questions"].as_array().unwrap().len();
     for i in 0..qn {
         let (code, _) = c.post(&format!("/api/lessons/{lesson_id}/answers"), json!({ "answers": [{ "index": i, "answer": "Yes" }] })).await;
         assert_eq!(code, StatusCode::OK);
     }
     let answers: Vec<Value> = (0..qn).map(|i| json!({ "index": i, "answer": "Yes" })).collect();
-    let (code, r) = c.post(&format!("/api/courses/{id}/lessons/2/units/1"), json!({ "answers": answers })).await;
+    let (code, r) = c.post(&format!("/api/courses/{id}/lessons/2/units/0"), json!({ "answers": answers })).await;
     assert_eq!(code, StatusCode::OK, "{r}");
     assert_eq!(r["score"], 1.0);
     assert!(r["notebook"].is_string(), "the notebook page exists after a unit");
@@ -406,7 +407,7 @@ async fn topic_course_lesson_units_points_and_notebook() {
     // Points CSV: one line per unit, per skill, the lesson file with the unit index.
     let csv = read_dir_text(&ws_path.join("profiles/ellrin/records/points"));
     assert!(csv.contains(",en,review,vocab,1.5,1,lessons/en/"), "{csv}");
-    assert!(csv.contains(",en,reading,reading,1.5,1,lessons/en/") && csv.contains("-02.md#1"), "{csv}");
+    assert!(csv.contains(",en,reading,reading,1.5,1,lessons/en/") && csv.contains("-02.md#0"), "{csv}");
     assert!(csv.contains(",en,sentence-making,writing,"), "{csv}");
     assert!(csv.contains(",en,conversation,writing,"), "{csv}");
     assert_eq!(csv.matches(",conversation,").count(), 1, "the conversation's point is written once");
@@ -468,7 +469,7 @@ async fn topic_course_lesson_units_points_and_notebook() {
     // Another wrong answer later: the app section is regenerated, the notes stay.
     let (code, _) = c.post(&format!("/api/lessons/{lesson_id}/answers"), json!({ "answers": [{ "index": 0, "answer": "No" }] })).await;
     assert_eq!(code, StatusCode::OK);
-    let (code, r) = c.post(&format!("/api/courses/{id}/lessons/2/units/1"), json!({ "answers": [{ "index": 0, "answer": "No" }] })).await;
+    let (code, r) = c.post(&format!("/api/courses/{id}/lessons/2/units/0"), json!({ "answers": [{ "index": 0, "answer": "No" }] })).await;
     assert_eq!(code, StatusCode::OK, "{r}");
     assert_eq!(r["points"], 0.0, "a passed unit earns once");
     let text = std::fs::read_to_string(&file).unwrap();
@@ -635,7 +636,7 @@ async fn daily_lesson_on_today() {
     assert!(today["daily"]["topic"]["name"].is_string(), "{today}");
     let tasks = today["tasks"].as_array().unwrap();
     assert!(tasks.iter().all(|t| t["daily"] == true));
-    assert_eq!(tasks.iter().map(|t| t["kind"].as_str().unwrap()).collect::<Vec<_>>().first(), Some(&"review"));
+    assert_eq!(tasks.iter().map(|t| t["kind"].as_str().unwrap()).collect::<Vec<_>>().first(), Some(&"reading"));
     assert_eq!(today["next"], 0, "one primary step");
 
     let (code, d) = c.post("/api/daily", json!({ "lang": "en" })).await;
@@ -693,7 +694,7 @@ async fn started_daily_lesson_stays_on_today() {
     let daily_id = d["id"].as_str().unwrap().to_string();
     let (code, opened) = c.post(&format!("/api/courses/{daily_id}/lessons/1/open"), json!({})).await;
     assert_eq!(code, StatusCode::OK, "{opened}");
-    let (code, r) = c.post(&format!("/api/courses/{daily_id}/lessons/1/units/0"), json!({ "cards": 3, "score": 1.0 })).await;
+    let (code, r) = c.post(&format!("/api/courses/{daily_id}/lessons/1/units/1"), json!({ "cards": 3, "score": 1.0 })).await;
     assert_eq!(code, StatusCode::OK, "{r}");
 
     // A new fixed course: the half-done daily lesson is still today's lesson.
@@ -708,8 +709,8 @@ async fn started_daily_lesson_stays_on_today() {
     assert_eq!(ls[0]["course"], daily_id.as_str(), "{today}");
     assert_eq!(ls.len(), 1, "one lesson a day: the started one");
     let tasks = today["tasks"].as_array().unwrap();
-    assert_eq!(tasks[0]["done"], true, "{today}");
-    assert_eq!(today["next"], 1);
+    assert_eq!((tasks[0]["kind"].as_str(), tasks[1]["kind"].as_str(), tasks[1]["done"].as_bool()), (Some("reading"), Some("review"), Some(true)), "{today}");
+    assert_eq!(today["next"], 0, "the text is still to read");
 }
 
 /// The daily lesson's review step before the lesson exists is a quick
@@ -729,7 +730,7 @@ async fn quick_review_step_done_by_round_rules() {
     let rv = review_task(&today);
     assert_eq!(rv["done"], false, "{rv}");
     assert_eq!(rv["round"], json!({ "done": 0, "size": 500 }));
-    assert_eq!(today["next"], 0);
+    assert_eq!((rv["unit"].as_u64(), today["next"].as_u64()), (Some(1), Some(0)), "words and grammar come after the text");
     let (_, due) = c.get("/api/review?lang=en&limit=100").await;
     let due = due.as_array().unwrap().clone();
     assert!(due.len() >= 2, "the starter workspace has due cards");
@@ -744,7 +745,6 @@ async fn quick_review_step_done_by_round_rules() {
     let rv = review_task(&today);
     assert_eq!(rv["done"], false);
     assert_eq!(rv["round"]["done"], 2);
-    assert_eq!(today["next"], 0);
 
     // All due cards graded, fewer than a round: done, without points.
     for d in &due[2..] {
@@ -755,7 +755,7 @@ async fn quick_review_step_done_by_round_rules() {
     let rv = review_task(&today);
     assert_eq!(rv["done"], true, "{rv}");
     assert!(rv["points"].is_null(), "no round finished, no point: {rv}");
-    assert_eq!(today["next"], 1);
+    assert_eq!(today["next"], 0, "the text is still next");
 
     // A round finished: the step carries the points actually awarded.
     std::fs::write(ws_path.join("progress.toml"), "[points]\nreview_round = 1\n").unwrap();

@@ -756,7 +756,7 @@ async fn typed_conversation_until_locked() {
     let (_, today) = c.get("/api/today?lang=en").await;
     assert!(today["daily"]["topic"]["name"].is_string(), "{today}");
     let kinds: Vec<&str> = today["tasks"].as_array().unwrap().iter().filter_map(|t| t["kind"].as_str()).collect();
-    assert_eq!(kinds.first(), Some(&"review"), "{today}");
+    assert_eq!(kinds.first(), Some(&"reading"), "the text first: {today}");
     assert!(kinds.contains(&"conversation") && kinds.contains(&"reading"), "{today}");
     assert_eq!(today["next"], 0);
     assert_eq!(today["summary"]["streak"], 1);

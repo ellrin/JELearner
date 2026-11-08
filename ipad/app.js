@@ -47,7 +47,7 @@ function toast(msg, bad = false) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), bad ? 7000 : 3500);
 }
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
-const UNIT = { review: "複習卡片", reading: "課文與閱讀", quiz: "測驗", translation: "翻譯", "sentence-making": "造句", cloze: "填空", paraphrase: "換句話說", conversation: "AI 對話" };
+const UNIT = { review: "單字與文法", reading: "課文", quiz: "測驗", translation: "翻譯", "sentence-making": "造句", cloze: "填空", paraphrase: "換句話說", conversation: "AI 對話" };
 
 // ── views and navigation ────────────────────────────────
 const stack = [];
@@ -361,6 +361,36 @@ function openUnit(pkg, u) {
 
 // review: flash cards from the lesson's due cards
 function drawReview(box, pkg, u) {
+  // This lesson's words and grammar first, then the cards.
+  const words = pkg.data?.vocabulary ?? [];
+  const grammar = pkg.data?.grammar ?? [];
+  if (words.length || grammar.length) {
+    const c = el("div", "card");
+    if (words.length) {
+      c.append(el("h2", null, "單字"));
+      for (const w of words) {
+        const row = el("div", "q");
+        const t = rich("b", null, w.term);
+        const say = button("🔊", "", () => speak(w.term, pkg.lang)); say.setAttribute("aria-label", `唸 ${plain(w.term)}`); say.style.minHeight = "36px"; say.style.marginLeft = "8px";
+        row.append(t, say, el("div", "why", `${w.reading ? `${w.reading}・` : ""}${w.meaning}`));
+        if (w.example) { const ex = rich("div", null, w.example); ex.append(el("div", "why", w.example_translation ?? "")); row.append(ex); }
+        c.append(row);
+      }
+    }
+    if (grammar.length) {
+      c.append(el("h2", null, "文法"));
+      for (const g of grammar) {
+        const row = el("div", "q");
+        row.append(rich("b", null, g.pattern), el("div", "why", `${g.meaning}　${g.explanation ?? ""}`));
+        if (g.example) { const ex = rich("div", null, g.example); ex.append(el("div", "why", g.example_translation ?? "")); row.append(ex); }
+        c.append(row);
+      }
+    }
+    box.append(c);
+  }
+  const cardsBox = el("div");
+  box.append(cardsBox);
+  box = cardsBox;
   const cards = (pkg.review_cards ?? []).slice(0, Math.max(1, u.items || 20));
   if (!cards.length) { box.append(el("p", "muted", "今天沒有要複習的卡片。")); finishUnit(pkg, u, { cards: 1, score: 1 }); box.append(nextRow(pkg, u)); return; }
   let i = 0, good = 0;
