@@ -14,6 +14,11 @@
 #   (terms forbid text and data mining and scraping), The Guardian Open Platform
 #   (no AI use, no adapting, 24-hour storage), Wikinews (closed in 2026),
 #   NHK (robots.txt blocks AI crawlers).
+# - Also checked and not used (terms forbid modifying or AI use, or robots.txt
+#   blocks AI crawlers): STV, The Scotsman, The Herald / The National, Daily
+#   Record, Evening Standard, Sky News, Edinburgh Reporter, scotchwhisky.com,
+#   Whisky Magazine, Historic Environment Scotland, VisitBritain, Network Rail,
+#   Harris Tweed Authority, Drapers, Retail Gazette, BFI, AG Barr.
 # - The Conversation UK: CC BY-ND 4.0 — adapting for one's own study is allowed,
 #   sharing the adapted text is not. Personal, non-public use only.
 #
@@ -62,6 +67,33 @@ lang = "en"
 feed = "https://theconversation.com/uk/articles.atom"
 # CC BY-ND 4.0: adapted versions for one's own study are allowed, not sharing
 # them; no use for training AI models. Personal use only.
+
+[[source]]
+id = "govuk-food-standards"
+name = "GOV.UK – Food Standards Agency"
+lang = "en"
+feed = "https://www.gov.uk/government/organisations/food-standards-agency.atom"
+
+[[source]]
+id = "ons-releases"
+name = "Office for National Statistics – release calendar"
+lang = "en"
+feed = "https://www.ons.gov.uk/releasecalendar?rss"
+# OGL v3.
+
+[[source]]
+id = "bank-of-england"
+name = "Bank of England – news"
+lang = "en"
+feed = "https://www.bankofengland.co.uk/rss/news"
+# Terms: download and display for personal use. Personal, non-public use only.
+
+[[source]]
+id = "global-voices-uk"
+name = "Global Voices – United Kingdom"
+lang = "en"
+feed = "https://globalvoices.org/-/world/western-europe/united-kingdom/feed/"
+# CC BY 3.0 (attribution). The site asks for Crawl-delay 10; the crawler follows it.
 
 [[source]]
 id = "kantei"

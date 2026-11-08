@@ -89,7 +89,7 @@ JELearner-private/
 
 ## 新聞與教材
 
-- 新聞來源寫在工作區的 `sources.toml`（預設 GOV.UK 各部會新聞〔Open Government Licence〕、The Conversation UK〔CC BY-ND，僅個人使用〕、首相官邸新著情報；NHK、ITmedia、NPR 預設關閉）。只放條款允許改寫的來源，見 docs/decisions.md 第 21 節。每個網址抓取前都會檢查該網站的 `robots.txt`，同一網站的請求至少間隔 1.5 秒，User-Agent 標明 `JELearnerBot`。教材只供個人學習，請勿轉載原文。
+- 新聞來源寫在工作區的 `sources.toml`（預設 GOV.UK 各部會與食品標準局、ONS〔Open Government Licence〕、The Conversation UK〔CC BY-ND〕、Bank of England〔個人使用〕、Global Voices 英國〔CC BY〕、首相官邸新著情報；NHK、ITmedia、NPR 預設關閉）。只放條款允許改寫的來源，見 docs/decisions.md 第 21 節。每個網址抓取前都會檢查該網站的 `robots.txt`，同一網站的請求至少間隔 1.5 秒，User-Agent 標明 `JELearnerBot`。教材只供個人學習，請勿轉載原文。
 - 「產生教材」可以選新聞、貼網址或貼文字。模型回傳固定格式的 JSON（單字、文法、問答），再由 [`prompts/lesson.md.j2`](prompts/lesson.md.j2) 排成 Markdown；提示詞也在 [`prompts/`](prompts/)。想改格式就在工作區的 `prompts/` 放同名檔案，會取代內建版本。
 - 教材存成 `profiles/<使用者>/lessons/<語言>/<日期>-<標題>.md`，單字與文法同時加入複習；問答答錯的自動進錯題本。
 
