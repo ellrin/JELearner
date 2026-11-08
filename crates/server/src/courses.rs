@@ -112,7 +112,7 @@ async fn lesson_ids(l: &Loaded, c: &Course) -> Result<Vec<Option<i64>>, ApiError
     Ok(out)
 }
 
-fn unit_json(lp: &LessonPlan) -> Vec<Value> {
+pub(crate) fn unit_json(lp: &LessonPlan) -> Vec<Value> {
     lp.units
         .iter()
         .enumerate()
@@ -474,7 +474,7 @@ async fn extend_course(State(s): State<Shared>, AxPath(id): AxPath<String>) -> R
 /// articles matching the lesson's search keywords, fetched when needed
 /// (robots.txt checked), the one with the most target words; an article
 /// lesson of a topic course takes the best keyword match even without them.
-async fn find_article(s: &Shared, lang: Lang, lp: &LessonPlan) -> Option<SourceText> {
+pub(crate) async fn find_article(s: &Shared, lang: Lang, lp: &LessonPlan) -> Option<SourceText> {
     let terms: Vec<String> = lp.words.iter().map(|w| w.term.clone()).chain(lp.review.iter().cloned()).collect();
     let mut rows: Vec<(i64, String, String, String, String)> = vec![];
     {
@@ -520,7 +520,7 @@ async fn find_article(s: &Shared, lang: Lang, lp: &LessonPlan) -> Option<SourceT
     (lp.role != LessonRole::Regular).then(|| cands.into_iter().next()).flatten()
 }
 
-async fn recent_accuracy(l: &Loaded, lang: Lang) -> Result<Option<f32>, ApiError> {
+pub(crate) async fn recent_accuracy(l: &Loaded, lang: Lang) -> Result<Option<f32>, ApiError> {
     let scores = points::recent_scores(&l.db, lang, 10, None, None).await?;
     Ok((!scores.is_empty()).then(|| (scores.iter().sum::<f64>() / scores.len() as f64) as f32))
 }
@@ -528,7 +528,7 @@ async fn recent_accuracy(l: &Loaded, lang: Lang) -> Result<Option<f32>, ApiError
 /// Add a generated course lesson to the database like `api.rs` does for a
 /// single lesson: the lesson row (marked with its course) and its new words
 /// and grammar for review.
-async fn index_lesson(l: &Loaded, course: &Course, number: u32, file: &str, markdown: &str, engine: &str) -> Result<i64, ApiError> {
+pub(crate) async fn index_lesson(l: &Loaded, course: &Course, number: u32, file: &str, markdown: &str, engine: &str) -> Result<i64, ApiError> {
     let raw = lesson::extract_raw(markdown).ok_or_else(|| fail("教材檔沒有內嵌資料"))?;
     let cl: CourseLesson = serde_json::from_value(raw.clone()).map_err(|e| fail(e.to_string()))?;
     let level = lesson::front_matter(markdown, "level").unwrap_or_else(|| course.level.clone());
@@ -543,7 +543,7 @@ async fn index_lesson(l: &Loaded, course: &Course, number: u32, file: &str, mark
 /// Cards for the lesson's review round: due cards first, then the lesson's
 /// review words and new words (as stored in the database, so grading them
 /// moves them in the review schedule), at most `n`.
-async fn review_cards(l: &Loaded, lang: Lang, lp: &LessonPlan, cl: Option<&CourseLesson>, n: u32) -> Result<Vec<Value>, ApiError> {
+pub(crate) async fn review_cards(l: &Loaded, lang: Lang, lp: &LessonPlan, cl: Option<&CourseLesson>, n: u32) -> Result<Vec<Value>, ApiError> {
     let n = n.max(1) as usize;
     let mut out: Vec<Value> = vec![];
     let mut seen = std::collections::HashSet::new();
@@ -1004,7 +1004,7 @@ async fn start_daily(State(s): State<Shared>, Json(b): Json<DailyBody>) -> R<Val
         return Ok(Json(json!({ "id": c.id, "next": c.next_lesson().map(|x| x.number), "created": false })));
     }
     let (name, _id, _kind) = daily_topic(&l.ws, lang).ok_or_else(|| bad("沒有可用的主題：請在興趣或 topics.toml 加入主題"))?;
-    let mut course = daily_course(&l, lang, &name, vec![name.clone()], None, String::new()).await?;
+    let mut course = daily_course(&l, lang, &name, vec![name.clone()], None, String::new(), &date()).await?;
     store::save_new(&l.ws, &mut course).map_err(course_err)?;
     Ok(Json(json!({ "id": course.id, "next": 1, "created": true })))
 }
@@ -1012,8 +1012,8 @@ async fn start_daily(State(s): State<Shared>, Json(b): Json<DailyBody>) -> R<Val
 /// Today's daily course on one topic: the learner's least practised words,
 /// one lesson per sitting. `article` (a news card's) becomes lesson 1's text;
 /// `focus` names the focus theme it was made under.
-pub(crate) async fn daily_course(l: &Loaded, lang: Lang, name: &str, keywords: Vec<String>, article: Option<jl_core::course::SourceText>, focus: String) -> Result<Course, ApiError> {
-    let today = date();
+pub(crate) async fn daily_course(l: &Loaded, lang: Lang, name: &str, keywords: Vec<String>, article: Option<jl_core::course::SourceText>, focus: String, created: &str) -> Result<Course, ApiError> {
+    let today = created.to_string();
     let name = name.to_string();
     let lr = learner(l, lang, false).await?;
     let size = lr.size();

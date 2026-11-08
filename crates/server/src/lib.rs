@@ -22,6 +22,7 @@ pub mod speech;
 pub mod study;
 pub mod today;
 pub mod interests;
+pub mod prepare;
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};

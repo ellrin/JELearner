@@ -42,7 +42,7 @@ struct TopicsBody {
 }
 
 /// Recent headlines for the cards; with a focus, the ones about it first.
-async fn headlines(s: &Shared, lang: Lang, focus: Option<&FocusSheet>) -> Result<Vec<Headline>, ApiError> {
+pub(crate) async fn headlines(s: &Shared, lang: Lang, focus: Option<&FocusSheet>) -> Result<Vec<Headline>, ApiError> {
     let l = ws(s).await?;
     let mut out: Vec<Headline> = vec![];
     if let Some(f) = focus {
@@ -77,39 +77,14 @@ async fn topics(State(s): State<Shared>, Json(b): Json<TopicsBody>) -> R<Value> 
     let lang = need_lang(&b.lang)?;
     // The feeds may be down or offline: the cards still come from interests and general topics.
     let news_errors = if b.refresh { crate::api::refresh_news(&s, Some(lang)).await.map(|(_, e)| e).unwrap_or_else(|e| vec![e.1]) } else { vec![] };
-    let (input_parts, focus, t) = {
+    let (cards, heads, focus) = {
         let l = ws(&s).await?;
-        let interests: Vec<String> = ctopics::parse_interests(&std::fs::read_to_string(l.ws.interests_file()).unwrap_or_default())
-            .into_iter()
-            .filter(|i| i.lang.is_none_or(|x| x == lang))
-            .map(|i| i.keyword)
-            .collect();
-        let general: Vec<String> = general_topics(&l.ws).into_iter().map(|g| g.name).collect();
-        let level = jl_core::level::from_score(lang, l.ws.profile.lang(lang).difficulty);
-        let parts = (interests, general, jl_core::level::describe(lang, &level), l.ws.profile.native_language.clone(), l.ws.profile.conversation.interest_ratio);
-        (parts, picker::load_focus(&l.ws, lang), templates(&l.ws))
+        let (parts, focus, t) = card_inputs(&l, lang);
+        drop(l);
+        let heads = headlines(&s, lang, focus.as_ref()).await?;
+        let cards = ask_cards(&s, lang, parts, focus.as_ref(), &t, &heads, &b.exclude, 4, 5).await?;
+        (cards, heads, focus)
     };
-    let heads = headlines(&s, lang, focus.as_ref()).await?;
-    let (interests, general, level_description, native_language, interest_ratio) = input_parts;
-    let req = picker::cards_request(
-        &t,
-        &CardsInput {
-            lang,
-            level_description,
-            native_language,
-            interests: &interests,
-            general: &general,
-            interest_ratio,
-            headlines: &heads,
-            exclude: &b.exclude,
-            focus: focus.as_ref(),
-            count: 4,
-        },
-    )
-    .map_err(course_err)?;
-    let provider = crate::provider(&s).await?;
-    let reply = provider.complete(&req).await.map_err(crate::study::api_err)?;
-    let cards = picker::parse_cards(&reply, &heads, &b.exclude, 5).map_err(course_err)?;
     // A news card shows where its article is from.
     let cards: Vec<Value> = cards
         .into_iter()
@@ -122,6 +97,46 @@ async fn topics(State(s): State<Shared>, Json(b): Json<TopicsBody>) -> R<Value> 
         })
         .collect();
     Ok(Json(json!({ "cards": cards, "focus": focus.map(|f| f.name), "news_errors": news_errors })))
+}
+
+type CardParts = (Vec<String>, Vec<String>, String, String, f32);
+
+/// What the cards are made from, for one learner (the active user, or a
+/// family member when the admin prepares lessons for them).
+pub(crate) fn card_inputs(l: &crate::Loaded, lang: Lang) -> (CardParts, Option<FocusSheet>, jl_core::course::prompts::CourseTemplates) {
+    let interests: Vec<String> = ctopics::parse_interests(&std::fs::read_to_string(l.ws.interests_file()).unwrap_or_default())
+        .into_iter()
+        .filter(|i| i.lang.is_none_or(|x| x == lang))
+        .map(|i| i.keyword)
+        .collect();
+    let general: Vec<String> = general_topics(&l.ws).into_iter().map(|g| g.name).collect();
+    let level = jl_core::level::from_score(lang, l.ws.profile.lang(lang).difficulty);
+    let parts = (interests, general, jl_core::level::describe(lang, &level), l.ws.profile.native_language.clone(), l.ws.profile.conversation.interest_ratio);
+    (parts, picker::load_focus(&l.ws, lang), templates(&l.ws))
+}
+
+/// Ask the model for `count` cards (at most `max` kept).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn ask_cards(
+    s: &Shared,
+    lang: Lang,
+    parts: CardParts,
+    focus: Option<&FocusSheet>,
+    t: &jl_core::course::prompts::CourseTemplates,
+    heads: &[Headline],
+    exclude: &[String],
+    count: usize,
+    max: usize,
+) -> Result<Vec<Card>, ApiError> {
+    let (interests, general, level_description, native_language, interest_ratio) = parts;
+    let req = picker::cards_request(
+        t,
+        &CardsInput { lang, level_description, native_language, interests: &interests, general: &general, interest_ratio, headlines: heads, exclude, focus, count },
+    )
+    .map_err(course_err)?;
+    let provider = crate::provider(s).await?;
+    let reply = provider.complete(&req).await.map_err(crate::study::api_err)?;
+    picker::parse_cards(&reply, heads, exclude, max).map_err(course_err)
 }
 
 #[derive(Deserialize)]
@@ -163,7 +178,7 @@ async fn start(State(s): State<Shared>, Json(b): Json<StartBody>) -> R<Value> {
     }
     let l = ws(&s).await?;
     let focus = picker::load_focus(&l.ws, lang).map(|f| f.name).unwrap_or_default();
-    let mut course = daily_course(&l, lang, b.card.title.trim(), b.card.keywords.clone(), article, focus).await?;
+    let mut course = daily_course(&l, lang, b.card.title.trim(), b.card.keywords.clone(), article, focus, &date()).await?;
     store::save_new(&l.ws, &mut course).map_err(course_err)?;
     Ok(Json(json!({ "id": course.id, "next": 1, "created": true })))
 }

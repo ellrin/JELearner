@@ -299,6 +299,34 @@ pub fn turn_request(t: &Templates, c: &Conversation, learner: &Learner) -> Resul
     Ok(ChatRequest { system, messages, max_tokens: 2_000, json_schema: Some(turn_schema()) })
 }
 
+/// Everything a device without the app needs to hold this conversation
+/// (the iPad, plan stage F5): the prompts rendered here, so the device only
+/// sends them. `system` is for every turn but the last, `system_last` for the
+/// reply to the learner's last turn; the evaluation's user text is
+/// `review_user_head`, one line per turn (`[partner] …` / `[learner] …`),
+/// then `review_user_tail`.
+pub fn offline_package(t: &Templates, c: &Conversation, learner: &Learner) -> Result<Value, ConversationError> {
+    let system_t = if c.lang == Lang::Ja { &t.ja } else { &t.en };
+    let file = if c.lang == Lang::Ja { JA_FILE } else { EN_FILE };
+    Ok(json!({
+        "lang": c.lang.code(),
+        "topic": c.topic.name,
+        "level": c.level,
+        "targets": c.targets,
+        "turns": c.turns_limit,
+        "opening_cue": OPENING_CUE,
+        "system": render(file, system_t, context(c, learner, 0))?,
+        "system_last": render(file, system_t, context(c, learner, c.turns_limit))?,
+        "turn_schema": turn_schema(),
+        "turn_max_tokens": 2_000,
+        "review_system": render(REVIEW_FILE, &t.review, context(c, learner, c.turns_limit))?,
+        "review_schema": review_schema(),
+        "review_max_tokens": 4_000,
+        "review_user_head": format!("Topic: {}\nTarget words: {}\n\n<conversation>\n", c.topic.name, c.targets.iter().map(|t| t.term.as_str()).collect::<Vec<_>>().join(", ")),
+        "review_user_tail": "</conversation>\n\nEvaluate the learner's turns.",
+    }))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnReply {
     pub recast: String,
@@ -796,5 +824,27 @@ mod tests {
         assert_eq!(topic_history(&db, Lang::En).await.unwrap()[0].0, "school");
         let row = &list(&db, Some(Lang::En), 10).await.unwrap()[0];
         assert_eq!(row.status, "locked");
+    }
+
+    #[test]
+    fn offline_package_matches_the_live_requests() {
+        let t = Templates::bundled();
+        let mut c = conv(Lang::En, 2);
+        let p = offline_package(&t, &c, &learner()).unwrap();
+        // The opening request uses `system`; the last reply uses `system_last`.
+        assert_eq!(p["system"], turn_request(&t, &c, &learner()).unwrap().system);
+        for (i, text) in ["I study design", "I like it"].iter().enumerate() {
+            c.turns.push(Turn { role: Speaker::Me, text: text.to_string(), recast: String::new(), starters: vec![], used: vec![], at: Utc::now() });
+            if i == 0 {
+                c.turns.push(Turn { role: Speaker::Ai, text: "Why?".into(), recast: String::new(), starters: vec![], used: vec![], at: Utc::now() });
+            }
+        }
+        assert_eq!(p["system_last"], turn_request(&t, &c, &learner()).unwrap().system);
+        assert_ne!(p["system"], p["system_last"]);
+        let review = review_request(&t, &c, &learner()).unwrap();
+        assert_eq!(p["review_system"], review.system);
+        assert!(review.user.starts_with(p["review_user_head"].as_str().unwrap()) && review.user.ends_with(p["review_user_tail"].as_str().unwrap()));
+        assert_eq!(p["turn_schema"], turn_schema());
+        assert_eq!(p["opening_cue"], OPENING_CUE);
     }
 }

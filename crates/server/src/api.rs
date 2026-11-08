@@ -79,6 +79,7 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .merge(crate::family::routes())
         .merge(crate::today::routes())
         .merge(crate::interests::routes())
+        .merge(crate::prepare::routes())
         .fallback_service(ServeDir::new(web))
 }
 

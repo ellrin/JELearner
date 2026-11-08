@@ -515,7 +515,7 @@ async fn finish_lesson(State(s): State<Shared>, AxPath(id): AxPath<i64>, Json(b)
 
 // ── conversations ───────────────────────────────────────
 
-fn learner(ws: &Workspace, lang: Lang, level_label: &str) -> Learner {
+pub(crate) fn conv_learner(ws: &Workspace, lang: Lang, level_label: &str) -> Learner {
     let lv = level::parse(lang, level_label).unwrap_or_else(|| ws.profile.difficulty(lang));
     Learner { native_language: ws.profile.native_language.clone(), level_description: level::describe(lang, &lv) }
 }
@@ -592,7 +592,7 @@ async fn course_conversation(db: &Db, link: &conversation::CourseLink) -> Result
 
 /// A course unit's conversation: topic, opening line, turns and targets
 /// from the lesson (no model call for the opening).
-async fn course_start(l: &crate::Loaded, lang: Lang, link: &conversation::CourseLink) -> Result<(Topic, Vec<conversation::Target>, u32, String), ApiError> {
+pub(crate) async fn course_start(l: &crate::Loaded, lang: Lang, link: &conversation::CourseLink) -> Result<(Topic, Vec<conversation::Target>, u32, String), ApiError> {
     use jl_core::course::{plan::CourseLesson, store, UnitKind};
     let c = store::load(&l.ws, &link.course).map_err(|e| bad(e.to_string()))?;
     let lp = c.lesson(link.lesson).ok_or_else(|| bad("找不到這一課"))?;
@@ -665,7 +665,7 @@ async fn start_conversation(State(s): State<Shared>, Json(b): Json<StartBody>) -
             points: None,
             course: b.course.clone(),
         };
-        (c, learner(&l.ws, lang, &level), ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.conversation.seconds_per_turn, opening)
+        (c, conv_learner(&l.ws, lang, &level), ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.conversation.seconds_per_turn, opening)
     };
     let p = crate::provider_task(&s, crate::Task::Realtime).await?;
     c.engine = p.id();
@@ -734,7 +734,7 @@ async fn conversation_turn(State(s): State<Shared>, AxPath(id): AxPath<i64>, Que
             return Err(bad("多寫幾個字吧"));
         }
         let before = c.turns_done();
-        let lr = learner(&l.ws, c.lang, &c.level);
+        let lr = conv_learner(&l.ws, c.lang, &c.level);
         (c, before, lr, ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.conversation.seconds_per_turn, l.ws.profile.id.clone())
     };
     let detected = conversation::detect_used(&text, &c.targets, c.lang);
@@ -779,7 +779,7 @@ async fn finish_conversation(State(s): State<Shared>, AxPath(id): AxPath<i64>, Q
         if !c.locked() {
             return Err(bad(format!("還有 {} 回合", c.turns_limit - c.turns_done())));
         }
-        let lr = learner(&l.ws, c.lang, &c.level);
+        let lr = conv_learner(&l.ws, c.lang, &c.level);
         (c, lr, ConvTemplates::load(Some(&l.ws.prompts_dir())), l.ws.profile.id.clone())
     };
     let req = conversation::review_request(&templates, &c, &learner).map_err(|e| bad(e.to_string()))?;

@@ -980,3 +980,71 @@ async fn upload_feedback_interests_and_outline_preview() {
     bad["vocab"] = json!(["../../outside.csv"]);
     assert_eq!(c.post("/api/courses/confirm", json!({"course": bad})).await.0, StatusCode::BAD_REQUEST);
 }
+
+/// The admin prepares a family member's lessons for the iPad (plan F5 step 2):
+/// daily courses in the member's folder, a package per lesson with the
+/// conversation prompts rendered, an index per day; only an admin may.
+#[tokio::test]
+async fn admin_prepares_lessons_for_a_member() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, _calls) = setup(app_dir.path(), &ws_path).await;
+    let base = Arc::new(Mutex::new(String::new()));
+    let site = serve(news_site(base.clone())).await;
+    *base.lock().unwrap() = site.clone();
+    std::fs::write(ws_path.join("sources.toml"), format!("[[source]]\nid = \"mock\"\nname = \"Mock News\"\nlang = \"en\"\nfeed = \"{site}/feed.xml\"\n")).unwrap();
+    // The news is fetched on the admin's computer.
+    assert_eq!(c.post("/api/today/topics", json!({"lang": "en", "refresh": true})).await.0, StatusCode::OK);
+    let (_, me) = c.get("/api/status").await;
+    let admin = me["user"]["id"].as_str().unwrap().to_string();
+    let (st, r) = c.post("/api/users", json!({ "name": "daidai", "languages": ["en"], "majors": { "en": "A2" }, "interests": ["travel"] })).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let member = r["user"]["id"].as_str().unwrap().to_string();
+    // As the member: not allowed.
+    assert_eq!(c.post("/api/family/prepare", json!({"member": admin, "lang": "en"})).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(c.post("/api/users/select", json!({"id": admin})).await.0, StatusCode::OK);
+    assert_eq!(c.post("/api/family/prepare", json!({"member": admin, "lang": "en"})).await.0, StatusCode::BAD_REQUEST, "not for oneself");
+    assert_eq!(c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 9})).await.0, StatusCode::BAD_REQUEST);
+
+    let (st, r) = c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 2, "choices": 2})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let mut p = Value::Null;
+    for _ in 0..200 {
+        p = c.get("/api/family/prepare").await.1["progress"].clone();
+        if p["running"] == false {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(p["running"], false, "{p}");
+    assert_eq!(p["errors"], json!([]), "{p}");
+    assert_eq!(p["done"], 4, "{p}");
+
+    let dir = ws_path.join("profiles").join(&member).join("ipad");
+    let index: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
+    let days = index["days"].as_object().unwrap();
+    assert_eq!(days.len(), 2, "{index}");
+    let first = days.values().next().unwrap().as_array().unwrap();
+    assert!(first.len() >= 2, "two topics to choose from each day: {index}");
+    let titles: Vec<&str> = days.values().flat_map(|d| d.as_array().unwrap().iter().map(|e| e["title"].as_str().unwrap())).collect();
+    let mut uniq = titles.clone();
+    uniq.sort();
+    uniq.dedup();
+    assert_eq!(uniq.len(), 4, "four different topics: {titles:?}");
+
+    let pkg: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(first[0]["file"].as_str().unwrap().trim_start_matches("ipad/"))).unwrap()).unwrap();
+    assert_eq!(pkg["member"], member.as_str());
+    assert!(pkg["data"].is_object() && pkg["plan"]["units"].as_array().is_some_and(|u| !u.is_empty()), "{pkg}");
+    assert!(ws_path.join(pkg["file"].as_str().unwrap()).is_file(), "the lesson file is in the member's folder");
+    assert!(pkg["file"].as_str().unwrap().starts_with(&format!("profiles/{member}/")));
+    assert!(pkg["plan"]["units"].as_array().unwrap().iter().any(|u| u["kind"] == "conversation"), "a daily lesson has a conversation: {}", pkg["plan"]);
+    {
+        let conv = &pkg["conversation"];
+        assert!(conv["system"].as_str().is_some_and(|s| !s.is_empty()) && conv["system_last"].is_string() && conv["review_system"].is_string(), "{conv}");
+        assert!(conv["turn_schema"].is_object() && conv["opening"].is_string());
+    }
+    // The admin's own courses are untouched.
+    let (_, mine) = c.get("/api/courses?lang=en").await;
+    assert_eq!(mine["courses"].as_array().unwrap().len(), 0, "{mine}");
+}
