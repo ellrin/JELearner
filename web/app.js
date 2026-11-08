@@ -1281,15 +1281,158 @@ function loadUserStep() {
   $("#setEmail").value = u?.report_email ?? "";
   const ul = $("#setMembers");
   ul.innerHTML = "";
+  const iAmAdmin = !!(s?.users ?? []).find((x) => x.id === u?.id)?.admin;
   for (const m of s?.users ?? []) {
     const li = el("li");
     const dot = el("span", "dot"); dot.style.background = m.color;
     li.append(dot, el("span", "n", m.name), el("span", "tag", m.kind === "owner" ? "擁有者" : "家庭成員"));
     if (m.admin) li.append(el("span", "tag acc", "管理員"));
     if (m.id === u?.id) li.append(el("span", "tag ok", "目前"));
-    else { const b = el("button", "ghost", "切換"); b.onclick = async () => { await switchUser(m.id); loadUserStep(); }; li.append(b); }
+    else {
+      // The admin prepares a family member's lessons for their iPad (plan F5).
+      if (iAmAdmin) { const p = el("button", "ghost", "備課"); p.setAttribute("aria-label", `替 ${m.name} 備課`); p.onclick = () => openPrep(m); li.append(p); }
+      const b = el("button", "ghost", "切換"); b.onclick = async () => { await switchUser(m.id); loadUserStep(); }; li.append(b);
+    }
     ul.append(li);
   }
+  // A preparation still running (the settings were closed meanwhile) shows its progress.
+  if (iAmAdmin) api("/api/family/prepare").then((r) => { if (r.progress?.running) openPrep(s.users.find((x) => x.id === r.progress.member) ?? { id: r.progress.member, name: r.progress.member }, true); }).catch(() => {});
+}
+
+// 替家人備課 (plan F5 stage 2): a few days of lessons made here with this
+// computer's Claude; the next sync takes them to the member's iPad. Their
+// results from the iPad come back with the sync and are applied here.
+let prepTimer = null;
+function openPrep(m, watching = false) {
+  const box = $("#setPrep");
+  box.hidden = false;
+  box.innerHTML = "";
+  box.dataset.member = m.id;
+  const head = el("div", "seg-row");
+  head.append(el("b", null, `替 ${m.name} 備課（給 iPad）`));
+  const help = el("button", "help", "?");
+  help.setAttribute("aria-label", "說明：替家人備課");
+  help.dataset.tip = `用這台電腦的 Claude 替 ${m.name} 做好接下來幾天的課，每天幾個主題可以在 iPad 上挑。課存在 ${m.name} 的資料夾，按同步就會送到 iPad；在 iPad 上的作答也是同步時收回來、在這裡算分。備過的主題不會再出現。`;
+  head.append(help);
+  const close = el("button", "ghost", "收起");
+  const backTo = () => [...$$("#setMembers button")].find((b) => b.getAttribute("aria-label") === `替 ${m.name} 備課`);
+  close.onclick = () => { clearInterval(prepTimer); prepTimer = null; box.hidden = true; backTo()?.focus(); };
+  head.append(el("span", "grow"), close);
+  box.append(head);
+  const form = el("div", "prep-form");
+  const sel = (label, opts, v) => {
+    const l = el("label");
+    const s = el("select");
+    s.setAttribute("aria-label", label);
+    for (const [val, text] of opts) { const o = el("option", null, text); o.value = val; if (val === v) o.selected = true; s.append(o); }
+    l.append(el("span", null, label), s);
+    form.append(l);
+    return s;
+  };
+  const lang = sel("語言", [["en", "英文"], ["ja", "日文"]], state.lang);
+  const days = sel("天數", [1, 2, 3, 5, 7].map((d) => [String(d), `${d} 天`]), "3");
+  const choices = sel("每天可選", [1, 2, 3, 4].map((c) => [String(c), `${c} 個主題`]), "3");
+  box.append(form);
+  const row = el("div", "actions-row");
+  const go = primaryButton("開始備課", null, true);
+  const collect = ghostButton("download", "收回作答", null);
+  row.append(go, collect);
+  box.append(row);
+  const out = el("div", "prep-out");
+  box.append(out);
+  let startedHere = false;
+  let lastKey = "";
+  /** One line, plus a button that does the next thing when there is one. */
+  const say = (cls, text, action) => {
+    const d = el("div", `note ${cls}`, text);
+    if (action) { const b = ghostButton(action.icon, action.label, action.onclick); b.classList.add("small"); d.append(" ", b); }
+    return d;
+  };
+  const toClaude = { icon: "gear", label: "去設定 Claude", onclick: () => openSettings(3) };
+  const errLine = (e) => {
+    const f = friendly(e);
+    const d = say("err", f, f !== e ? toClaude : null);
+    if (f !== e) d.title = e;
+    return d;
+  };
+  const show = (p) => {
+    // Re-draw only when something changed (the status line is read out once).
+    const key = JSON.stringify(p ?? null);
+    if (key === lastKey) return;
+    lastKey = key;
+    out.innerHTML = "";
+    go.disabled = false;
+    go.textContent = "開始備課";
+    if (!p) return;
+    if (p.running && p.member !== m.id) {
+      out.append(say("", `正在替 ${p.member} 備課，做完才能開始下一位。`));
+      go.disabled = true;
+      return;
+    }
+    if (p.running) {
+      go.disabled = true;
+      go.textContent = "備課中…";
+      const bar = el("progress");
+      bar.max = Math.max(1, p.total);
+      if (p.done > 0) bar.value = p.done; // empty: the moving bar while topics are chosen
+      bar.setAttribute("aria-label", "備課進度");
+      out.append(bar, el("div", "note", `${p.done} / ${p.total} 堂${p.current ? `・正在做「${p.current}」` : "・正在挑主題"}`));
+      for (const e of p.errors ?? []) out.append(errLine(e));
+      return;
+    }
+    if (p.member !== m.id) return;
+    const prefix = startedHere ? "" : "上次：";
+    const status = el("div");
+    status.setAttribute("role", "status");
+    if (p.done) {
+      status.append(say("ok", `${prefix}做好 ${p.done} 堂。按同步就會送到 ${m.name} 的 iPad。`));
+      if (p.done < p.total) status.append(say("", `比預定的 ${p.total} 堂少：想不出更多沒備過的主題。可以設定重點主題，或過幾天再備。`));
+    } else if (!(p.errors ?? []).length) {
+      status.append(say("", `${prefix}這次沒有做出課：想不出沒備過的主題。可以設定重點主題，或過幾天再備。`));
+    }
+    out.append(status);
+    if (p.made?.length) out.append(el("div", "note", p.made.join("、")));
+    for (const e of p.errors ?? []) out.append(/新的主題|換一批/.test(e) ? say("", "想不出更多沒備過的主題。可以設定重點主題，或過幾天再備。") : errLine(e));
+  };
+  const poll = async () => {
+    // The settings were closed: stop asking.
+    if (!$("#dlgSettings").open || box.hidden) { clearInterval(prepTimer); prepTimer = null; return; }
+    try {
+      const r = await api("/api/family/prepare");
+      show(r.progress);
+      if (!r.progress?.running) { clearInterval(prepTimer); prepTimer = null; }
+    } catch { /* try again on the next tick */ }
+  };
+  const watch = () => { clearInterval(prepTimer); prepTimer = setInterval(poll, 2000); poll(); };
+  go.onclick = () => busy(go, async () => {
+    if (!state.status?.engine_ready) {
+      lastKey = "";
+      out.innerHTML = "";
+      out.append(say("err", "這台電腦的 Claude 還沒連上，備課要用它。", toClaude));
+      return;
+    }
+    try {
+      startedHere = true;
+      await api("/api/family/prepare", { member: m.id, lang: lang.value, days: Number(days.value), choices: Number(choices.value) });
+      watch();
+    } catch (e) { lastKey = ""; out.innerHTML = ""; out.append(errLine(e.message)); }
+  });
+  collect.onclick = () => busy(collect, async () => {
+    lastKey = "";
+    try {
+      const r = await api("/api/family/inbox", {});
+      const a = (r.applied ?? []).find((x) => x.member === m.id);
+      out.innerHTML = "";
+      const st = el("div");
+      st.setAttribute("role", "status");
+      st.append(say("ok", a?.files ? `收回 ${a.files} 份作答：${a.units} 個單元、${a.conversations} 段對話，共 ${Math.round(a.points * 10) / 10} 分。` : `目前沒有新的作答。先按同步，把 ${m.name} 的 iPad 送來的作答拉下來。`));
+      out.append(st);
+      for (const e of a?.errors ?? []) out.append(errLine(e));
+    } catch (e) { out.innerHTML = ""; out.append(errLine(e.message)); }
+  });
+  if (watching) watch();
+  else poll();
+  lang.focus();
 }
 $("#setSaveUser").onclick = () => busy($("#setSaveUser"), async () => {
   try {

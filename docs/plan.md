@@ -810,11 +810,12 @@ per_day = 10                # 每天帶入幾個新字
   - 費用估計（未實測）：iPad 上的即時部分用 Haiku，每月約 NT$25；課程由管理員的 Mac 產生。
   - [x] 階段 0 可行性（iPad mini 第 6 代，Safari 26.4，2026-11）：Kyoko 朗讀可用；朗讀與辨識來回 5 輪都收得到聲音；從 Safari 直接呼叫 Claude API（Haiku 5.5）約 1.7 秒、CORS 不擋。發現：自動在朗讀後 0.2 秒開麥克風時，辨識收到 iPad 自己唸的句子（回音）；單句辨識第一個字 11 秒（待重測）。待測：更新到 iPadOS 27.2 後重測、英文辨識與聲音、加入主畫面後的辨識、「按一下才開始說」與等待 0.8 秒是否消除回音、GitHub 寫入（延到階段 3 用正式 token 測）。測試頁：`gh-pages` 分支的 `lab/`（https://ellrin.github.io/JELearner/lab/）。
   - [x] 階段 1 Mac 的模型分工：產生課程（課文、大綱、主題卡、重點設定集、興趣推測）用 `[claude] model`（預設 Sonnet 5.5），即時的 AI 對話與對話評分用 `[claude] realtime_model`（預設 Haiku 5.5、effort low）；訂閱與 API key 兩條路都適用；Haiku 不送伺服器端拒答備援（Haiku 沒有）；設定頁「進階」可各自選。
-  - [ ] 階段 2 替家人備課與收回作答（設計 2026-11）：
+  - [x] 階段 2 替家人備課與收回作答（2026-11；`prepare.rs`、`inbox.rs`）：
     - 管理員在設定頁按「替 <家人> 備課」：用管理員的 Claude（Sonnet），依她的難度、興趣與重點主題，一次產生接下來幾天的每日課程（預設 3 天、每天 3 個主題讓她選），新聞用管理員這邊抓到的；寫進她的 `profiles/<她>/`，下次同步推上 repo。產生很久，在背景跑、設定頁顯示進度。
     - 每堂課另外寫一個給 iPad 的包裹 `profiles/<她>/ipad/<日期>/<課程>-<課>.json`：課程計畫與單元、整份課文資料、備課當下到期的複習卡、AI 對話（主題、目標單字、開場白、預先算好的系統提示詞〔一般回合與最後一回合〕、評分提示詞、兩個 JSON schema）；`ipad/index.json` 列出每天可選的課。iPad 只讀這些 JSON，不解析 Markdown、不組提示詞。輸出練習本來就是學習者對照參考答案自評，不需要模型；iPad 上唯一即時呼叫 AI 的是對話（Haiku）。
     - iPad 寫回原始作答到 `profiles/<她>/ipad/inbox/*.json`（單元結果、對話逐字稿與 Haiku 的評分）；管理員的 Mac 同步或備課時用現有規則處理收件匣（積分、錯題、複習、難度、對話紀錄），處理完移到 `inbox/done/`。積分規則只有一份，在 Mac 上。
     - 測試：mock Claude 備課 → 檢查包裹內容與 index；模擬的收件匣檔 → 積分、錯題、課程進度正確，重複處理不會重複記分。
+    - 介面：設定 › 使用者，管理員在每位家人旁有「備課」（語言、天數、每天可選幾個主題、進度）與「收回作答」。同步（`/api/git/sync`）之後自動處理家人的收件匣、再同步一次把結果送上去。
   - [ ] 階段 3 iPad 上課 App：GitHub Pages 上的網頁 App、加入主畫面、讀課（GitHub API）、各單元畫面、即時辨識（每次新的辨識物件、按一下才開始說）、朗讀、Haiku 對話與批改、作答紀錄一次一個 commit 寫回（遇到管理員剛推就以最新版本重做，只寫自己的資料夾所以不會衝突）、離線可複習、QR code 設定；測試（Playwright WebKit、iPad mini 尺寸、mock GitHub 與 Claude；真的 Haiku 與拋棄式 repo 各一次）
   - [ ] 階段 4 實機：作者的 iPad mini 依檢查表測完，再裝到她的 iPad
   - 不做：在 Windows 筆電或作者 Mac 上替她跑 server、原生 iPad App（iOS 不能執行 git／claude，App 要簽章）、Whisper（沒有 GPU，對話會卡）。
