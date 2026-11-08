@@ -81,6 +81,11 @@ impl Fetcher {
 
     /// GET a URL as text, after the robots.txt check and the per-host delay.
     pub async fn get_text(&self, url: &str) -> Result<String, CrawlError> {
+        Ok(decode(&self.get_bytes(url).await?))
+    }
+
+    /// GET a URL as bytes (a picture), with the same checks as [`Self::get_text`].
+    pub async fn get_bytes(&self, url: &str) -> Result<Vec<u8>, CrawlError> {
         let u = Url::parse(url).map_err(|e| CrawlError::BadUrl(e.to_string()))?;
         if !matches!(u.scheme(), "http" | "https") {
             return Err(CrawlError::BadUrl(format!("只支援 http / https：{url}")));
@@ -107,7 +112,7 @@ impl Fetcher {
         if bytes.len() > MAX_BYTES {
             return Err(CrawlError::TooLarge);
         }
-        Ok(decode(&bytes))
+        Ok(bytes.to_vec())
     }
 
     async fn wait_turn(&self, origin: &str, delay: Duration) {

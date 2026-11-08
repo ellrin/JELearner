@@ -22,6 +22,7 @@ scraper = "0.20"
 minijinja = { version = "2", features = ["json"] }
 url = "2"
 base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 [dev-dependencies]
 tempfile.workspace = true

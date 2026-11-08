@@ -18,6 +18,8 @@ use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use jl_core::course::library::{self, Article, LessonFocus, SourceDoc, Syllabus, Topic};
+use jl_core::course::picture::{self, ImageRef};
+use std::collections::HashMap;
 use jl_core::course::{store, CourseKind, SourceText, TargetWord};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -31,6 +33,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/library", get(list))
         .route("/api/library/build", get(status).post(start))
         .route("/api/library/lesson", post(lesson))
+        .route("/api/courses/{id}/picture", get(picture_file))
 }
 
 /// The reference text sent per source (the start of a page is the overview).
@@ -171,19 +174,29 @@ async fn start(State(s): State<Shared>, Json(b): Json<BuildBody>) -> R<Value> {
 async fn work_on_theme(s: &Shared, root: &Path, collection: &str, syl: &Syllabus, t: &Topic, native: &str, room: usize) -> Result<usize, ApiError> {
     update(|p| p.current = format!("讀參考資料：{}", t.zh));
     let mut docs: Vec<(String, SourceDoc)> = vec![];
+    // Each reference page's lead picture (by its URL).
+    let mut lead: HashMap<String, String> = HashMap::new();
     let mut problems = vec![];
     for r in &t.refs {
         let Some(page) = library::ref_page(r) else { continue };
-        match jl_core::news::fetch_article(&s.fetcher, &page.url, page.selector).await {
-            Ok(a) if !a.paragraphs.is_empty() => {
+        match s.fetcher.get_text(&page.url).await {
+            Ok(html) => {
+                let a = jl_core::news::extract_article(&html, page.selector);
+                if a.paragraphs.is_empty() {
+                    problems.push(format!("{r}：沒有內文"));
+                    continue;
+                }
+                if let Some(img) = picture::og_image(&html, &page.url) {
+                    lead.insert(page.url.clone(), img);
+                }
                 let text = library::clean_reference_text(&a.paragraphs, REF_CHARS);
                 let title = a.title.trim_end_matches(" - Wikipedia").trim_end_matches(" – Travel guide at Wikivoyage").to_string();
                 docs.push((r.clone(), SourceDoc { title, url: page.url.clone(), licence: page.licence.into(), text }));
             }
-            Ok(_) => problems.push(format!("{r}：沒有內文")),
             Err(e) => problems.push(format!("{r}：{e}")),
         }
     }
+    let mut licences: HashMap<String, Option<ImageRef>> = HashMap::new();
     if docs.is_empty() {
         return Err(bad(format!("一個參考資料都讀不到（{}）", problems.join("；"))));
     }
@@ -218,7 +231,20 @@ async fn work_on_theme(s: &Shared, root: &Path, collection: &str, syl: &Syllabus
             let req = library::article_request(&tpl, syl, t, ls, native, &sources).map_err(course_err)?;
             let reply = provider.complete(&req).await.map_err(crate::study::api_err)?;
             let a = library::parse_article(&reply, syl, &sources).map_err(course_err)?;
-            let md = library::render_article(syl, collection, t, ls, &a, &sources, &provider.id(), &date());
+            // A free picture from the first used source that has one.
+            let mut image = None;
+            for i in &a.used_sources {
+                let Some(img) = sources.get(i - 1).and_then(|d| lead.get(&d.url)) else { continue };
+                if !licences.contains_key(img) {
+                    let found = free_picture(s, img).await;
+                    licences.insert(img.clone(), found);
+                }
+                if let Some(Some(r)) = licences.get(img) {
+                    image = Some(r.clone());
+                    break;
+                }
+            }
+            let md = library::render_article(syl, collection, t, ls, &a, &sources, image.as_ref(), &provider.id(), &date());
             let path = library::article_path(root, collection, t, &ls.id);
             std::fs::create_dir_all(path.parent().expect("has a parent")).map_err(|e| bad(e.to_string()))?;
             // Never overwrite: a text written meanwhile (or by hand) stays.
@@ -240,6 +266,51 @@ async fn work_on_theme(s: &Shared, root: &Path, collection: &str, syl: &Syllabus
         }
     }
     Ok(n)
+}
+
+/// A Commons picture with its author and a free licence, or nothing.
+async fn free_picture(s: &Shared, img: &str) -> Option<ImageRef> {
+    let page = picture::commons_page(img)?;
+    let html = s.fetcher.get_text(&page).await.ok()?;
+    let (author, licence, licence_url) = picture::parse_commons(&html)?;
+    picture::free_licence(&licence).then(|| ImageRef { url: img.to_string(), page, author, licence, licence_url })
+}
+
+// ── a lesson's picture: stored while the lesson is open ─
+
+fn picture_paths(ws: &jl_core::workspace::Workspace, lang: jl_core::Lang, course: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = ws.lessons_dir(lang).join("images");
+    (dir.join(format!("{course}.jpg")), dir.join(format!("{course}.json")))
+}
+
+/// The picture of a course's lesson, as the lesson page shows it.
+pub(crate) fn picture_info(ws: &jl_core::workspace::Workspace, lang: jl_core::Lang, course: &str) -> Option<Value> {
+    let (jpg, meta) = picture_paths(ws, lang, course);
+    if !jpg.is_file() {
+        return None;
+    }
+    let r: ImageRef = serde_json::from_str(&std::fs::read_to_string(meta).ok()?).ok()?;
+    Some(json!({ "src": format!("/api/courses/{}/picture", urlencoding(course)), "author": r.author, "licence": r.licence, "licence_url": r.licence_url, "page": r.page }))
+}
+
+fn urlencoding(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// A finished lesson does not keep its picture (the credit stays in the text).
+pub(crate) fn remove_picture(ws: &jl_core::workspace::Workspace, lang: jl_core::Lang, course: &str) {
+    let (jpg, meta) = picture_paths(ws, lang, course);
+    let _ = std::fs::remove_file(jpg);
+    let _ = std::fs::remove_file(meta);
+}
+
+async fn picture_file(State(s): State<Shared>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<axum::response::Response, ApiError> {
+    use axum::response::IntoResponse;
+    let l = ws(&s).await?;
+    let c = store::load(&l.ws, &id).map_err(course_err)?;
+    let (jpg, _) = picture_paths(&l.ws, c.lang, &c.id);
+    let bytes = std::fs::read(jpg).map_err(|_| ApiError(axum::http::StatusCode::NOT_FOUND, "沒有圖片".into()))?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "image/jpeg"), (axum::http::header::CACHE_CONTROL, "private, max-age=3600")], bytes).into_response())
 }
 
 // ── a lesson from a text ────────────────────────────────
@@ -282,5 +353,22 @@ async fn lesson(State(s): State<Shared>, Json(b): Json<LessonBody>) -> R<Value> 
     course.name = format!("{}：{}", t.zh, ls.zh);
     course.summary = ls.goal.clone();
     store::save_new(&l.ws, &mut course).map_err(course_err)?;
-    Ok(Json(json!({ "id": course.id, "next": 1, "lessons": course.lessons.len() })))
+    // The picture: downloaded and shrunk now, removed when the lesson is done.
+    let mut picture = false;
+    if let Some(img) = &a.image {
+        let lang = syl.lang;
+        let ws_ = l.ws.clone();
+        let id = course.id.clone();
+        drop(l);
+        if let Ok(bytes) = s.fetcher.get_bytes(&img.url).await
+            && let Ok(jpg) = picture::compress(&bytes)
+        {
+            let (p, meta) = picture_paths(&ws_, lang, &id);
+            if std::fs::create_dir_all(p.parent().expect("has a parent")).is_ok() && std::fs::write(&p, jpg).is_ok() {
+                picture = std::fs::write(meta, serde_json::to_string_pretty(img).unwrap_or_default()).is_ok();
+            }
+        }
+        return Ok(Json(json!({ "id": id, "next": 1, "lessons": 1, "picture": picture })));
+    }
+    Ok(Json(json!({ "id": course.id, "next": 1, "lessons": course.lessons.len(), "picture": picture })))
 }

@@ -18,6 +18,7 @@ pub mod model;
 pub mod outline;
 pub mod library;
 pub mod picker;
+pub mod picture;
 pub mod plan;
 pub mod prompts;
 pub mod sizing;

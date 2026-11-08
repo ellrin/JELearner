@@ -379,7 +379,7 @@ pub fn parse_article(text: &str, syl: &Syllabus, sources: &[SourceDoc]) -> Resul
 /// The text file: `key: <json>` lines (like lesson files), the text, key
 /// terms and references.
 #[allow(clippy::too_many_arguments)]
-pub fn render_article(syl: &Syllabus, collection: &str, topic: &Topic, lesson: &LessonFocus, a: &ArticleOut, sources: &[SourceDoc], engine: &str, date: &str) -> String {
+pub fn render_article(syl: &Syllabus, collection: &str, topic: &Topic, lesson: &LessonFocus, a: &ArticleOut, sources: &[SourceDoc], image: Option<&super::picture::ImageRef>, engine: &str, date: &str) -> String {
     let used: Vec<&SourceDoc> = a.used_sources.iter().filter_map(|i| sources.get(i - 1)).collect();
     let mut s = String::from("---\n");
     let line = |k: &str, v: Value| format!("{k}: {v}\n");
@@ -400,6 +400,9 @@ pub fn render_article(syl: &Syllabus, collection: &str, topic: &Topic, lesson: &
     s += &line("summary", json!(a.summary));
     s += &line("key_terms", json!(a.key_terms));
     s += &line("sources", json!(used));
+    if let Some(img) = image {
+        s += &line("image", json!(img));
+    }
     s += &line("engine", json!(engine));
     s += &line("created", json!(date));
     s += "---\n\n";
@@ -410,6 +413,9 @@ pub fn render_article(syl: &Syllabus, collection: &str, topic: &Topic, lesson: &
     s += "\n## References\n\n";
     for (i, src) in used.iter().enumerate() {
         s += &format!("{}. {} — <{}> ({})\n", i + 1, src.title, src.url, src.licence);
+    }
+    if let Some(img) = image {
+        s += &format!("\nPicture: {} — {} (<{}>)\n", img.author, img.licence, img.page);
     }
     s
 }
@@ -429,6 +435,8 @@ pub struct Article {
     pub news: Vec<String>,
     pub sources: Vec<SourceDoc>,
     pub key_terms: Vec<KeyTerm>,
+    /// A free picture for the text (downloaded only when a lesson is made).
+    pub image: Option<super::picture::ImageRef>,
 }
 
 pub fn read_article(md: &str) -> Option<Article> {
@@ -454,6 +462,7 @@ pub fn read_article(md: &str) -> Option<Article> {
         news: fm("news").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
         sources: fm("sources").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
         key_terms: fm("key_terms").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
+        image: fm("image").and_then(|v| serde_json::from_value(v).ok()),
         text,
     })
 }
@@ -541,13 +550,16 @@ topic = [
         assert_eq!(a.used_sources, vec![1]);
         assert!(parse_article(&json!({ "title": "x", "text": text, "key_terms": [], "used_sources": [5], "summary": "" }).to_string(), &s, &src()).is_err(), "no real source");
         assert!(parse_article(&json!({ "title": "x", "text": "too short", "key_terms": [], "used_sources": [1], "summary": "" }).to_string(), &s, &src()).is_err());
-        let md = render_article(&s, "uk", &s.topic[0], &focus(), &a, &src(), "claude:sonnet", "2026-11-08");
+        let img = super::super::picture::ImageRef { url: "https://thumb.wikimedia.org/x/800px-a.jpg".into(), page: "https://commons.wikimedia.org/wiki/File:a.jpg".into(), author: "D. K.".into(), licence: "CC BY-SA 3.0".into(), licence_url: String::new() };
+        let md = render_article(&s, "uk", &s.topic[0], &focus(), &a, &src(), Some(&img), "claude:sonnet", "2026-11-08");
+        assert!(md.contains("Picture: D. K. — CC BY-SA 3.0"));
         assert!(md.contains("## References") && md.contains("CC BY-SA"));
         let back = read_article(&md).unwrap();
         assert_eq!((back.id.as_str(), back.theme.as_str(), back.title.as_str(), back.words), ("whisky-1", "whisky", "A Dram, Please", 360));
         assert_eq!((back.lesson_zh.as_str(), back.goal.as_str()), ("點一杯威士忌", "能在酒吧點威士忌"));
         assert_eq!(back.text, text);
         assert_eq!(back.key_terms[0].meaning, "一小杯");
+        assert_eq!(back.image, Some(img));
         assert_eq!(article_path(Path::new("/w"), "uk", &s.topic[0], "whisky-1"), PathBuf::from("/w/library/uk/飲食/whisky-1.md"));
     }
 }

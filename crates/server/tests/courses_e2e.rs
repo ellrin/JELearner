@@ -1130,8 +1130,15 @@ async fn library_themes_split_into_lessons_with_texts() {
     let wiki = serve(
         Router::new()
             .route("/robots.txt", get(|| async { "User-agent: *\nDisallow: /private/\n" }))
-            .route("/wiki/Haggis", get(|| async { axum::response::Html("<html><head><title>Haggis - Wikipedia</title></head><body><div id='mw-content-text'><div class='mw-parser-output'><p>Haggis is a savoury pudding containing sheep's pluck.[1][2] It is traditionally eaten on Burns Night.[citation needed]</p><p>Today it is served in restaurants across Scotland and sold in supermarkets.</p></div></div></body></html>") }))
-            .route("/private/secret", get(|| async { "<p>should never be read, robots.txt forbids it</p>" })),
+            .route("/wiki/Haggis", get(|| async { axum::response::Html("<html><head><title>Haggis - Wikipedia</title><meta property=\"og:image\" content=\"/wikipedia/commons/thumb/a/ab/Haggis.png/960px-Haggis.png?utm_source=x\"></head><body><div id='mw-content-text'><div class='mw-parser-output'><p>Haggis is a savoury pudding containing sheep's pluck.[1][2] It is traditionally eaten on Burns Night.[citation needed]</p><p>Today it is served in restaurants across Scotland and sold in supermarkets.</p></div></div></body></html>") }))
+            .route("/private/secret", get(|| async { "<p>should never be read, robots.txt forbids it</p>" }))
+            .route("/wikipedia/commons/thumb/a/ab/Haggis.png/960px-Haggis.png", get(|| async {
+                let img = image::RgbImage::from_fn(1200, 600, |x, y| image::Rgb([(x % 255) as u8, (y % 255) as u8, 90]));
+                let mut png = Vec::new();
+                image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+                ([("content-type", "image/png")], png)
+            }))
+            .route("/wiki/File:Haggis.png", get(|| async { axum::response::Html("<table><tr><td id=\"fileinfotpl&#95;aut\">Author</td><td>A. Cook</td></tr></table><span class=\"licensetpl&#95;short\">CC BY-SA 4.0</span>") })),
     )
     .await;
     let dir = ws_path.join("library/uk");
@@ -1193,4 +1200,41 @@ async fn library_themes_split_into_lessons_with_texts() {
     assert!(all.contains("savoury"), "the text's key terms are the words to learn");
     assert_eq!(c.post("/api/library/lesson", json!({"collection": "uk", "id": "secret-1"})).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(c.post("/api/library/lesson", json!({"collection": "../x", "id": "haggis-1"})).await.0, StatusCode::BAD_REQUEST);
+
+    // The picture: its credit in the text; downloaded and shrunk for the lesson; gone when the lesson is done.
+    let md = std::fs::read_to_string(dir.join("飲食/haggis-1.md")).unwrap();
+    assert!(md.contains("image: ") && md.contains("A. Cook") && md.contains("Picture: A. Cook — CC BY-SA 4.0"), "{md}");
+    assert_eq!(les["picture"], true, "{les}");
+    let pic = o["picture"].clone();
+    assert_eq!((pic["author"].as_str(), pic["licence"].as_str()), (Some("A. Cook"), Some("CC BY-SA 4.0")), "{pic}");
+    let got = c.http.get(format!("{}{}", c.base, pic["src"].as_str().unwrap())).send().await.unwrap();
+    assert_eq!(got.headers()["content-type"], "image/jpeg");
+    let jpg = image::load_from_memory(&got.bytes().await.unwrap()).unwrap();
+    assert_eq!((jpg.width(), jpg.height()), (800, 400), "shrunk to 800 wide");
+    let units = o["plan"]["units"].as_array().unwrap().clone();
+    for u in &units {
+        let i = u["index"].as_u64().unwrap();
+        match u["kind"].as_str().unwrap() {
+            "reading" => {
+                let qn = o["lesson"]["questions"].as_array().map(|q| q.len()).unwrap_or(0);
+                let answers: Vec<Value> = (0..qn).map(|k| json!({ "index": k, "answer": "x", "correct": true })).collect();
+                assert_eq!(c.post(&format!("/api/courses/{id}/lessons/1/units/{i}"), json!({ "answers": answers })).await.0, StatusCode::OK);
+            }
+            "review" => { assert_eq!(c.post(&format!("/api/courses/{id}/lessons/1/units/{i}"), json!({ "cards": 3, "score": 1.0 })).await.0, StatusCode::OK); }
+            "conversation" => {
+                let (_, conv) = c.post("/api/conversations", json!({ "lang": "en", "course": { "course": id, "lesson": 1, "unit": i } })).await;
+                let cid = conv["id"].as_i64().unwrap();
+                for k in 0..conv["turns_limit"].as_u64().unwrap() {
+                    c.post(&format!("/api/conversations/{cid}/turns"), json!({ "text": format!("I would like haggis with neeps and tatties, please, number {k}.") })).await;
+                }
+                assert_eq!(c.post(&format!("/api/conversations/{cid}/finish"), json!({})).await.0, StatusCode::OK);
+            }
+            _ => { assert_eq!(c.post(&format!("/api/courses/{id}/lessons/1/units/{i}"), json!({ "items": [{ "prompt": "p", "answer": "a", "model": "m", "correct": true }] })).await.0, StatusCode::OK); }
+        }
+    }
+    let (_, course) = c.get(&format!("/api/courses/{id}")).await;
+    assert_eq!(course["lessons"][0]["status"], "done", "{course}");
+    let got = c.http.get(format!("{}{}", c.base, pic["src"].as_str().unwrap())).send().await.unwrap();
+    assert_eq!(got.status().as_u16(), 404, "the picture is removed once the lesson is done");
+    assert!(std::fs::read_to_string(dir.join("飲食/haggis-1.md")).unwrap().contains("A. Cook"), "the credit stays in the text");
 }

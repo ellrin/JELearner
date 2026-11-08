@@ -408,7 +408,7 @@ const Speech = (() => {
    * The shadowing panel for a paragraph: one sentence at a time, listen,
    * then say it; the words that matched light up, with a percentage.
    */
-  function shadowPanel(text, lang) {
+  function shadowPanel(text, lang, onDone) {
     const list = sentences(text, lang);
     const box = el("div", "shadow");
     let i = 0;
@@ -429,7 +429,6 @@ const Speech = (() => {
       listenBtn.classList.add("big");
       const say = micButton(lang, (t) => { heard.textContent = t; }, "換你說");
       say.classList.add("big");
-      say.hidden = false;
       const heard = el("div", "sh-heard");
       if (lang === "ja") heard.lang = "ja";
       // When listening ends: the comparison.
@@ -464,6 +463,8 @@ const Speech = (() => {
         const acts = el("div", "sh-acts");
         if (!last()) {
           if (good) acts.append(primaryButton("下一句", () => goTo(i + 1), true));
+        } else if (onDone) {
+          acts.append(primaryButton("唸完了，去答題", () => { stopListening(); stop(); onDone(); }, true), ghostButton("speaker", "再聽整段", () => speak(text, lang)));
         } else {
           const again = ghostButton("speaker", "再聽整段", () => speak(text, lang));
           if (good) { again.className = "primary small"; again.textContent = "再聽整段"; }
@@ -472,6 +473,13 @@ const Speech = (() => {
         if (acts.childElementCount) out.append(acts);
       };
       row.append(listenBtn, say);
+      // Without recognition (listen only): the way on is always a main button.
+      if (!canListen(lang)) {
+        const acts = el("div", "sh-acts");
+        if (!last()) acts.append(primaryButton("下一句", () => goTo(i + 1), true));
+        else if (onDone) acts.append(primaryButton("唸完了，去答題", () => { stop(); onDone(); }, true));
+        out.append(acts);
+      }
       if (list.length > 1) {
         const prev = iconButton("back", "上一句", () => goTo(i - 1));
         const next = iconButton("arrow", "下一句", () => goTo(i + 1));

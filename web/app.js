@@ -498,6 +498,13 @@ function go(view, extra = {}) {
   render();
 }
 
+// The view bar's height (it wraps on narrow screens): sticky bars below it use it.
+(() => {
+  const vb = document.querySelector("#viewbar");
+  if (!vb || !window.ResizeObserver) return;
+  new ResizeObserver(() => document.documentElement.style.setProperty("--vb-h", `${vb.offsetHeight}px`)).observe(vb);
+})();
+
 function viewbar(title, count, ...extra) {
   const vb = $("#viewbar");
   vb.innerHTML = "";

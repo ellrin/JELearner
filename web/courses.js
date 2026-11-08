@@ -393,18 +393,25 @@ async function renderCourseLesson(page) {
 
   // Steps: done ✓, current lit, the rest waiting.
   const steps = el("ol", "steps-bar");
+  steps.setAttribute("aria-label", "課程步驟");
   units.forEach((u, i) => {
     const li = el("li", `${u.done ? "done" : ""}${i === cur ? " cur" : ""}`);
     const b = el("button");
     const c = el("span", "c");
     if (u.done) c.append(icon("check")); else c.append(icon(UNIT_ICON[u.kind] ?? "book"));
     b.append(c, el("span", "l", unitTitle(u.kind, lang)));
+    if (u.done) b.append(el("span", "sr-only", "（已完成）"));
     b.setAttribute("aria-current", i === cur ? "step" : "false");
     b.onclick = () => { state.step = i; render(); };
     li.append(b);
     steps.append(li);
   });
   page.append(steps);
+  // A new step starts at its top (render keeps the scroll position otherwise).
+  if (state.shownStep !== `${id}#${n}#${cur}`) {
+    state.shownStep = `${id}#${n}#${cur}`;
+    requestAnimationFrame(() => (document.querySelector(".page-area") ?? document.scrollingElement)?.scrollTo(0, 0));
+  }
   if (units.every((u) => u.done)) page.append(lessonDoneBanner(o));
 
   const box = el("div", "step-box");
@@ -481,7 +488,7 @@ function lessonDoneBanner(o) {
   const words = (o.plan.words ?? []).map((w) => w.term);
   if (pts || words.length) {
     const sum = el("div", "ld-sum");
-    if (pts) sum.append(el("span", "pts", `+${Math.round(pts * 10) / 10} 分`));
+    if (pts) sum.append(el("span", "pts", `+${fmtPts(pts)} 分`));
     if (words.length) { sum.append(el("span", null, "學了：")); for (const w of words) sum.append(elr("span", "w", w, o.course.lang)); }
     b.append(sum);
   }
@@ -608,7 +615,7 @@ function stepReview(box, o, u) {
       b.append(el("small", null, "空白鍵"));
       b.onclick = show;
       g.append(b);
-      setTimeout(() => b.focus(), 30);
+      setTimeout(() => b.focus({ preventScroll: true }), 30);
     } else {
       // Only 記得 is the main button; each grade has its own soft tint and key.
       [[1, "忘了"], [3, "模糊"], [4, "記得"], [5, "很熟"]].forEach(([grade, label], k) => {
@@ -673,16 +680,45 @@ function stepReading(box, o, u) {
     const lang = o.course.lang;
     const guide = el("div", "read-guide");
     const listenOnly = !Speech.canListen(lang);
+    const label = listenOnly ? "逐句聽" : "逐句跟讀";
     guide.append(el("span", null, listenOnly ? "先一句一句聽，跟著唸出來，再回答下面的問題。" : "先聽一句、跟著唸一句，唸完整篇再回答下面的問題。"));
-    const go = primaryButton(listenOnly ? "逐句聽" : "逐句跟讀", () => {
-      const open = guide.nextElementSibling?.classList.contains("shadow") ? guide.nextElementSibling : null;
-      if (open) { open.remove(); return; }
-      const panel = Speech.shadowPanel(text.replace(/\n+/g, " "), lang);
+    const toggle = primaryButton(label, null, true);
+    toggle.setAttribute("aria-expanded", "false");
+    const smooth = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    const close = () => {
+      guide.nextElementSibling?.classList.contains("shadow") && guide.nextElementSibling.remove();
+      toggle.textContent = label; toggle.setAttribute("aria-expanded", "false");
+    };
+    toggle.onclick = () => {
+      if (toggle.getAttribute("aria-expanded") === "true") { close(); return; }
+      // At the end: on to the questions.
+      const toQuestions = () => {
+        close();
+        // The 問答 heading (the last h2 of the text step).
+        const hs = paper.querySelectorAll("h2");
+        const q = hs[hs.length - 1];
+        (q ?? paper).scrollIntoView({ block: "start", behavior: smooth });
+      };
+      const panel = Speech.shadowPanel(text.replace(/\n+/g, " "), lang, toQuestions);
       guide.after(panel);
-      panel.scrollIntoView({ block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-    }, true);
-    guide.append(go);
+      toggle.textContent = "收起"; toggle.setAttribute("aria-expanded", "true");
+      panel.scrollIntoView({ block: "nearest", behavior: smooth });
+      panel.querySelector("button.big, button")?.focus({ preventScroll: true });
+    };
+    guide.append(toggle);
     tx.before(guide);
+  }
+  // The lesson's picture, with its credit (kept only while the lesson is open).
+  if (o.picture && tx) {
+    const fig = el("figure", "lesson-pic");
+    const img = el("img");
+    img.src = o.picture.src; img.alt = ""; img.loading = "lazy";
+    const cap = el("figcaption");
+    const a = el("a", null, `${o.picture.author}・${o.picture.licence}`);
+    a.href = o.picture.page; a.target = "_blank"; a.rel = "noopener noreferrer";
+    cap.append("圖片：", a);
+    fig.append(img, cap);
+    paper.querySelector(".read-guide")?.before(fig) ?? tx.before(fig);
   }
   if (!quiz.total) reportUnit(box, o, u, { answers: [] }, "閱讀完成");
 }
