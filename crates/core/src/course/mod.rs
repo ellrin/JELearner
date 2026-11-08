@@ -16,6 +16,7 @@
 pub mod fixed;
 pub mod model;
 pub mod outline;
+pub mod library;
 pub mod picker;
 pub mod plan;
 pub mod prompts;

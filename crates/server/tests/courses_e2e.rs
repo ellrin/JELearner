@@ -176,6 +176,9 @@ fn mock_claude(calls: Arc<Mutex<Vec<Value>>>) -> Router {
                     focus_sheet()
                 } else if props["keywords"].is_object() && props["summary"].is_object() && props.as_object().map_or(0, |o| o.len()) == 2 {
                     json!({ "summary": "一篇關於晶片工廠的新聞", "keywords": ["半導體", "music", "AI 晶片"] })
+                } else if props["used_sources"].is_object() {
+                    let text = (0..12).map(|i| format!("Haggis has been eaten in Scotland for centuries and paragraph {i} explains how cooks prepared it then and how restaurants in Edinburgh serve it to visitors today.")).collect::<Vec<_>>().join(" ");
+                    json!({ "title": "A Pudding with a Past", "text": text, "key_terms": [{ "term": "savoury", "meaning": "鹹的" }], "used_sources": [1], "summary": "哈吉斯從古到今" })
                 } else if props["enough_material"].is_object() {
                     outline(&user)
                 } else if props["lessons"]["items"]["properties"]["number"].is_object() {
@@ -1109,3 +1112,64 @@ async fn admin_prepares_lessons_for_a_member() {
     assert_eq!(c.post("/api/family/inbox", json!({})).await.0, StatusCode::BAD_REQUEST);
 }
 
+/// The topic library (decisions §22): references read (robots.txt checked),
+/// an article written once with its sources, a lesson made from it.
+#[tokio::test]
+async fn library_articles_from_references_and_a_lesson() {
+    use axum::routing::get;
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, calls) = setup(app_dir.path(), &ws_path).await;
+    let wiki = serve(
+        Router::new()
+            .route("/robots.txt", get(|| async { "User-agent: *\nDisallow: /private/\n" }))
+            .route("/wiki/Haggis", get(|| async { axum::response::Html("<html><head><title>Haggis - Wikipedia</title></head><body><div id='mw-content-text'><div class='mw-parser-output'><p>Haggis is a savoury pudding containing sheep's pluck.[1][2] It is traditionally eaten on Burns Night.[citation needed]</p><p>Today it is served in restaurants across Scotland and sold in supermarkets.</p></div></div></body></html>") }))
+            .route("/private/secret", get(|| async { "<p>should never be read, robots.txt forbids it</p>" })),
+    )
+    .await;
+    let dir = ws_path.join("library/uk");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("syllabus.toml"),
+        format!(
+            "name = \"蘇格蘭與英國\"\nlang = \"en\"\ntopic = [\n  {{ id = \"haggis\", cat = \"飲食\", zh = \"哈吉斯\", en = \"Haggis\", refs = [\"{wiki}/wiki/Haggis\", \"{wiki}/wiki/Missing\"], news = [\"haggis\"] }},\n  {{ id = \"secret\", cat = \"人文\", zh = \"禁止\", en = \"Forbidden\", refs = [\"{wiki}/private/secret\"] }},\n]\n"
+        ),
+    )
+    .unwrap();
+    let (_, l) = c.get("/api/library").await;
+    assert_eq!(l["collections"][0]["total"], 2, "{l}");
+    assert_eq!(l["collections"][0]["written"], 0);
+
+    let (st, r) = c.post("/api/library/build", json!({"collection": "uk"})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let mut p = Value::Null;
+    for _ in 0..200 {
+        p = c.get("/api/library/build").await.1["progress"].clone();
+        if p["running"] == false { break; }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(p["done"], 1, "{p}");
+    assert!(p["errors"][0].as_str().unwrap().contains("禁止"), "robots.txt keeps the forbidden page out: {p}");
+    let req = calls.lock().unwrap().iter().rev().find(|b| b["output_config"]["format"]["schema"]["properties"]["used_sources"].is_object()).cloned().unwrap();
+    let user = req["messages"][0]["content"].as_str().unwrap();
+    assert!(user.contains("savoury pudding containing sheep's pluck. It is traditionally"), "citation marks removed: {user}");
+    assert!(!user.contains("should never be read"));
+    let md = std::fs::read_to_string(dir.join("飲食/haggis.md")).unwrap();
+    assert!(md.contains("## References") && md.contains("/wiki/Haggis") && md.contains("A Pudding with a Past"), "{md}");
+    // Never rewritten; nothing left to write.
+    assert_eq!(c.post("/api/library/build", json!({"collection": "uk", "ids": ["haggis"]})).await.0, StatusCode::BAD_REQUEST);
+    let (_, l) = c.get("/api/library").await;
+    assert_eq!(l["collections"][0]["written"], 1);
+
+    // A lesson from the article, written from its text when opened.
+    let (st, les) = c.post("/api/library/lesson", json!({"collection": "uk", "id": "haggis"})).await;
+    assert_eq!(st, StatusCode::OK, "{les}");
+    let id = les["id"].as_str().unwrap().to_string();
+    let (st, o) = c.post(&format!("/api/courses/{id}/lessons/1/open"), json!({})).await;
+    assert_eq!(st, StatusCode::OK, "{o}");
+    let req = calls.lock().unwrap().iter().rev().find(|b| b["output_config"]["format"]["schema"]["properties"]["text"].is_object() && b["output_config"]["format"]["schema"]["properties"]["conversation"].is_object()).cloned().unwrap();
+    assert!(format!("{}{}", req["system"], req["messages"][0]["content"]).contains("restaurants in Edinburgh serve it"), "the lesson is made from the article");
+    assert_eq!(c.post("/api/library/lesson", json!({"collection": "uk", "id": "secret"})).await.0, StatusCode::BAD_REQUEST, "no article yet");
+    assert_eq!(c.post("/api/library/lesson", json!({"collection": "../x", "id": "haggis"})).await.0, StatusCode::BAD_REQUEST);
+}

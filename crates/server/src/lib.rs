@@ -24,6 +24,7 @@ pub mod today;
 pub mod interests;
 pub mod prepare;
 pub mod inbox;
+pub mod library;
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
