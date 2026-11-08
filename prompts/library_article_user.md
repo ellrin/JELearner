@@ -4,4 +4,4 @@ Sources:
 {{ s.text }}
 
 {% endfor %}
-Write the article about: {{ topic_en }}
+Write the text for the lesson: {{ lesson_en }} — {{ focus }}

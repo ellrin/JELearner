@@ -1,17 +1,22 @@
-//! A topic library: reading articles prepared ahead (a "pre-RAG").
+//! A topic library: reading texts prepared ahead (a "pre-RAG").
 //!
 //! A collection (e.g. `library/uk/`) has a syllabus written by the author
-//! (`syllabus.toml`: topics, each with reference pages and news keywords).
-//! For each topic the model reads the references and writes one article of
-//! 400–600 words at one level (B2), from its history to today, with the
-//! sources it used. Articles are Markdown files in the workspace
-//! (`library/<collection>/<category>/<id>.md`); lessons are made from them
-//! later, at each learner's level, so the references are read only once.
+//! (`syllabus.toml`): themes, each with reference pages and news keywords.
+//! The point is learning the language, one thing per lesson:
+//!
+//! 1. **Split**: the model reads a theme's references and plans 3–6 lessons,
+//!    each about one thing, with an English goal (a situation or a group of
+//!    words) and the vocabulary to use (`plans/<theme>.toml`, editable).
+//! 2. **Write**: for each lesson, a 300–450-word text at one level (B2) that
+//!    stays on that one thing and uses the vocabulary, with the sources used
+//!    (`<category>/<lesson id>.md`).
+//! 3. Lessons are made from a text later, at each learner's level; the
+//!    references are read only once.
 //!
 //! References: `w:<title>` = English Wikipedia, `v:<title>` = English
 //! Wikivoyage (both CC BY-SA, their ordinary article pages), or a full URL.
 
-use super::prompts::{CourseTemplates, LIBRARY_SYSTEM, LIBRARY_USER};
+use super::prompts::{CourseTemplates, LIBRARY_SPLIT_SYSTEM, LIBRARY_SPLIT_USER, LIBRARY_SYSTEM, LIBRARY_USER};
 use super::{parse_json, strict_object, CourseError};
 use crate::lang::Lang;
 use crate::provider::CompletionRequest;
@@ -25,8 +30,12 @@ pub struct Syllabus {
     pub lang: Lang,
     #[serde(default = "b2")]
     pub level: String,
+    /// Words per lesson text.
     #[serde(default = "words")]
     pub words: [u32; 2],
+    /// Lessons per theme.
+    #[serde(default = "lessons")]
+    pub lessons: [u32; 2],
     #[serde(default)]
     pub topic: Vec<Topic>,
 }
@@ -34,9 +43,13 @@ fn b2() -> String {
     "B2".into()
 }
 fn words() -> [u32; 2] {
-    [400, 600]
+    [300, 450]
+}
+fn lessons() -> [u32; 2] {
+    [3, 6]
 }
 
+/// A theme of the syllabus.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct Topic {
     pub id: String,
@@ -49,7 +62,7 @@ pub struct Topic {
     pub news: Vec<String>,
 }
 
-/// A reference page to read for a topic.
+/// A reference page to read for a theme.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RefPage {
     pub url: String,
@@ -96,19 +109,152 @@ pub fn collections(root: &Path) -> Vec<String> {
     v
 }
 
-pub fn load_syllabus(root: &Path, collection: &str) -> Result<Syllabus, CourseError> {
-    if collection.is_empty() || collection.contains(['/', '\\', '.']) {
-        return Err(CourseError::Invalid("主題庫名稱不對".into()));
+fn check_name(name: &str) -> Result<(), CourseError> {
+    if name.is_empty() || name.contains(['/', '\\', '.']) {
+        return Err(CourseError::Invalid("名稱不對".into()));
     }
+    Ok(())
+}
+
+pub fn load_syllabus(root: &Path, collection: &str) -> Result<Syllabus, CourseError> {
+    check_name(collection)?;
     let p = library_dir(root).join(collection).join("syllabus.toml");
     let text = std::fs::read_to_string(&p).map_err(|_| CourseError::NotFound(format!("{}", p.display())))?;
     let s: Syllabus = toml::from_str(&text).map_err(|e| CourseError::Invalid(format!("syllabus.toml：{e}")))?;
     Ok(s)
 }
 
-/// `library/<collection>/<category>/<id>.md`.
-pub fn article_path(root: &Path, collection: &str, t: &Topic) -> PathBuf {
-    library_dir(root).join(collection).join(&t.cat).join(format!("{}.md", t.id))
+// ── step 1: a theme split into lessons ──────────────────
+
+/// One lesson of a theme: one thing, with an English goal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LessonFocus {
+    pub id: String,
+    pub zh: String,
+    pub en: String,
+    pub focus: String,
+    pub goal: String,
+    #[serde(default)]
+    pub vocabulary: Vec<String>,
+    /// Numbers of the sources given when the plan was made (1-based).
+    #[serde(default)]
+    pub sources: Vec<usize>,
+    /// Those sources as the theme's references (`w:…`), which stay valid when
+    /// a page cannot be read another time.
+    #[serde(default)]
+    pub refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ThemePlan {
+    pub theme: String,
+    #[serde(default)]
+    pub lesson: Vec<LessonFocus>,
+}
+
+/// `library/<collection>/plans/<theme>.toml` (the author may edit it).
+pub fn plan_path(root: &Path, collection: &str, t: &Topic) -> PathBuf {
+    library_dir(root).join(collection).join("plans").join(format!("{}.toml", t.id))
+}
+
+pub fn load_plan(root: &Path, collection: &str, t: &Topic) -> Option<ThemePlan> {
+    toml::from_str(&std::fs::read_to_string(plan_path(root, collection, t)).ok()?).ok().filter(|p: &ThemePlan| !p.lesson.is_empty())
+}
+
+pub fn save_plan(root: &Path, collection: &str, t: &Topic, plan: &ThemePlan) -> Result<(), CourseError> {
+    let p = plan_path(root, collection, t);
+    std::fs::create_dir_all(p.parent().expect("has a parent"))?;
+    let body = toml::to_string(plan).map_err(|e| CourseError::Invalid(e.to_string()))?;
+    let head = format!("# {}（{}）：拆成幾堂課，每堂只講一件事。可以改 focus、goal、vocabulary，或刪掉一堂；\n# 已經寫好的文章不會因為這裡改了而重寫（刪掉那篇 .md 才會重寫）。\n\n", t.zh, t.en);
+    std::fs::write(p, format!("{head}{body}"))?;
+    Ok(())
+}
+
+pub fn split_schema() -> Value {
+    let s = json!({ "type": "string" });
+    strict_object(json!({
+        "lessons": { "type": "array", "items": strict_object(json!({
+            "zh": s, "en": s, "focus": s, "goal": s,
+            "vocabulary": { "type": "array", "items": s },
+            "sources": { "type": "array", "items": { "type": "integer" } },
+        })) }
+    }))
+}
+
+fn base_context(syl: &Syllabus, topic: &Topic, native_language: &str, sources: &[SourceDoc]) -> Value {
+    json!({
+        "collection": syl.name,
+        "language": syl.lang.english_name(),
+        "native_language": crate::lesson::native_name(native_language),
+        "level": syl.level,
+        "min_words": syl.words[0],
+        "max_words": syl.words[1],
+        "min_lessons": syl.lessons[0],
+        "max_lessons": syl.lessons[1],
+        "topic_en": topic.en,
+        "topic_zh": topic.zh,
+        "category": topic.cat,
+        "sources": sources.iter().map(|s| json!({ "title": s.title, "url": s.url, "text": s.text })).collect::<Vec<_>>(),
+    })
+}
+
+pub fn split_request(t: &CourseTemplates, syl: &Syllabus, topic: &Topic, native_language: &str, sources: &[SourceDoc]) -> Result<CompletionRequest, CourseError> {
+    let c = base_context(syl, topic, native_language, sources);
+    Ok(CompletionRequest { system: t.render(LIBRARY_SPLIT_SYSTEM, c.clone())?, user: t.render(LIBRARY_SPLIT_USER, c)?, max_tokens: 3000, json_schema: Some(split_schema()) })
+}
+
+#[derive(Deserialize)]
+struct SplitOut {
+    lessons: Vec<SplitLesson>,
+}
+#[derive(Deserialize)]
+struct SplitLesson {
+    #[serde(default)]
+    zh: String,
+    #[serde(default)]
+    en: String,
+    #[serde(default)]
+    focus: String,
+    #[serde(default)]
+    goal: String,
+    #[serde(default)]
+    vocabulary: Vec<String>,
+    #[serde(default)]
+    sources: Vec<usize>,
+}
+
+/// The planned lessons, checked: each has a focus, a goal and a real source;
+/// at most the syllabus' number; ids `<theme>-1`, `<theme>-2`, …
+pub fn parse_split(text: &str, syl: &Syllabus, topic: &Topic, n_sources: usize) -> Result<ThemePlan, CourseError> {
+    let out: SplitOut = parse_json(text)?;
+    let mut lesson = vec![];
+    for l in out.lessons {
+        let mut sources: Vec<usize> = l.sources.into_iter().filter(|i| *i >= 1 && *i <= n_sources).collect();
+        sources.sort();
+        sources.dedup();
+        if l.focus.trim().is_empty() || l.goal.trim().is_empty() || l.en.trim().is_empty() || sources.is_empty() {
+            continue;
+        }
+        let vocabulary: Vec<String> = l.vocabulary.into_iter().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(10).collect();
+        lesson.push(LessonFocus { id: String::new(), zh: l.zh.trim().to_string(), en: l.en.trim().to_string(), focus: l.focus.trim().to_string(), goal: l.goal.trim().to_string(), vocabulary, sources, refs: vec![] });
+        if lesson.len() as u32 == syl.lessons[1] {
+            break;
+        }
+    }
+    if lesson.is_empty() {
+        return Err(CourseError::Invalid("拆不出可用的課（每堂要有重點、英文目標與出處）".into()));
+    }
+    for (i, l) in lesson.iter_mut().enumerate() {
+        l.id = format!("{}-{}", topic.id, i + 1);
+    }
+    Ok(ThemePlan { theme: topic.id.clone(), lesson })
+}
+
+// ── step 2: one text per lesson ─────────────────────────
+
+/// `library/<collection>/<category>/<lesson id>.md`.
+pub fn article_path(root: &Path, collection: &str, t: &Topic, lesson_id: &str) -> PathBuf {
+    library_dir(root).join(collection).join(&t.cat).join(format!("{lesson_id}.md"))
 }
 
 /// A reference as read: what goes to the model and into the article's sources.
@@ -174,20 +320,15 @@ pub fn article_schema() -> Value {
     }))
 }
 
-pub fn article_request(t: &CourseTemplates, syl: &Syllabus, topic: &Topic, native_language: &str, sources: &[SourceDoc]) -> Result<CompletionRequest, CourseError> {
-    let c = json!({
-        "collection": syl.name,
-        "language": syl.lang.english_name(),
-        "native_language": crate::lesson::native_name(native_language),
-        "level": syl.level,
-        "min_words": syl.words[0],
-        "max_words": syl.words[1],
-        "topic_en": topic.en,
-        "topic_zh": topic.zh,
-        "category": topic.cat,
-        "sources": sources.iter().map(|s| json!({ "title": s.title, "url": s.url, "text": s.text })).collect::<Vec<_>>(),
-    });
-    Ok(CompletionRequest { system: t.render(LIBRARY_SYSTEM, c.clone())?, user: t.render(LIBRARY_USER, c)?, max_tokens: 4000, json_schema: Some(article_schema()) })
+/// The text of one lesson; `sources` are the ones the plan gave this lesson.
+pub fn article_request(t: &CourseTemplates, syl: &Syllabus, topic: &Topic, lesson: &LessonFocus, native_language: &str, sources: &[SourceDoc]) -> Result<CompletionRequest, CourseError> {
+    let mut c = base_context(syl, topic, native_language, sources);
+    c["lesson_en"] = json!(lesson.en);
+    c["lesson_zh"] = json!(lesson.zh);
+    c["focus"] = json!(lesson.focus);
+    c["goal"] = json!(lesson.goal);
+    c["vocabulary"] = json!(lesson.vocabulary);
+    Ok(CompletionRequest { system: t.render(LIBRARY_SYSTEM, c.clone())?, user: t.render(LIBRARY_USER, c)?, max_tokens: 3000, json_schema: Some(article_schema()) })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -212,8 +353,8 @@ pub fn word_count(text: &str) -> usize {
     text.split_whitespace().count()
 }
 
-/// The model's article, checked: a text of about the right length, at least
-/// one real source used (an article without a source is not kept).
+/// The model's text, checked: about the right length, at least one real
+/// source used (a text without a source is not kept).
 pub fn parse_article(text: &str, syl: &Syllabus, sources: &[SourceDoc]) -> Result<ArticleOut, CourseError> {
     let mut a: ArticleOut = parse_json(text)?;
     a.used_sources.retain(|i| *i >= 1 && *i <= sources.len());
@@ -235,17 +376,22 @@ pub fn parse_article(text: &str, syl: &Syllabus, sources: &[SourceDoc]) -> Resul
     Ok(a)
 }
 
-/// The article file: `key: <json>` lines (like lesson files), the text,
-/// key terms and references.
-pub fn render_article(syl: &Syllabus, collection: &str, topic: &Topic, a: &ArticleOut, sources: &[SourceDoc], engine: &str, date: &str) -> String {
+/// The text file: `key: <json>` lines (like lesson files), the text, key
+/// terms and references.
+#[allow(clippy::too_many_arguments)]
+pub fn render_article(syl: &Syllabus, collection: &str, topic: &Topic, lesson: &LessonFocus, a: &ArticleOut, sources: &[SourceDoc], engine: &str, date: &str) -> String {
     let used: Vec<&SourceDoc> = a.used_sources.iter().filter_map(|i| sources.get(i - 1)).collect();
     let mut s = String::from("---\n");
     let line = |k: &str, v: Value| format!("{k}: {v}\n");
-    s += &line("id", json!(topic.id));
+    s += &line("id", json!(lesson.id));
+    s += &line("theme", json!(topic.id));
     s += &line("collection", json!(collection));
     s += &line("title", json!(a.title));
-    s += &line("topic", json!(topic.en));
-    s += &line("topic_zh", json!(topic.zh));
+    s += &line("lesson", json!(lesson.en));
+    s += &line("lesson_zh", json!(lesson.zh));
+    s += &line("focus", json!(lesson.focus));
+    s += &line("goal", json!(lesson.goal));
+    s += &line("theme_zh", json!(topic.zh));
     s += &line("category", json!(topic.cat));
     s += &line("lang", json!(syl.lang.code()));
     s += &line("level", json!(syl.level));
@@ -268,13 +414,15 @@ pub fn render_article(syl: &Syllabus, collection: &str, topic: &Topic, a: &Artic
     s
 }
 
-/// An article file read back: its front matter values and the text alone.
+/// A text file read back: its front matter values and the text alone.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Article {
     pub id: String,
+    pub theme: String,
     pub title: String,
     pub category: String,
-    pub topic_zh: String,
+    pub lesson_zh: String,
+    pub goal: String,
     pub level: String,
     pub words: usize,
     pub text: String,
@@ -296,9 +444,11 @@ pub fn read_article(md: &str) -> Option<Article> {
     let text = after_title.split("\n## Key terms").next().unwrap_or("").trim().to_string();
     Some(Article {
         id: s("id"),
+        theme: s("theme"),
         title: s("title"),
         category: s("category"),
-        topic_zh: s("topic_zh"),
+        lesson_zh: s("lesson_zh"),
+        goal: s("goal"),
         level: s("level"),
         words: fm("words").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
         news: fm("news").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default(),
@@ -318,20 +468,28 @@ mod tests {
 name = "蘇格蘭與英國"
 lang = "en"
 topic = [
-  { id = "haggis", cat = "飲食", zh = "哈吉斯", en = "Haggis", refs = ["w:Haggis", "v:Edinburgh", "https://example.org/x"], news = ["haggis"] },
+  { id = "whisky", cat = "飲食", zh = "威士忌", en = "Scotch whisky", refs = ["w:Scotch whisky", "v:Edinburgh", "https://example.org/x"], news = ["whisky"] },
 ]
 "#,
         )
         .unwrap()
     }
+    fn src() -> Vec<SourceDoc> {
+        vec![
+            SourceDoc { title: "Scotch whisky".into(), url: "https://en.wikipedia.org/wiki/Scotch_whisky".into(), licence: "CC BY-SA 4.0 (Wikipedia)".into(), text: "Whisky is aged three years.".into() },
+            SourceDoc { title: "Edinburgh".into(), url: "https://en.wikivoyage.org/wiki/Edinburgh".into(), licence: "CC BY-SA 4.0 (Wikivoyage)".into(), text: "Pubs on the Royal Mile.".into() },
+        ]
+    }
+    fn focus() -> LessonFocus {
+        LessonFocus { id: "whisky-1".into(), zh: "點一杯威士忌".into(), en: "Ordering a dram".into(), focus: "How to order whisky in a Scottish pub.".into(), goal: "能在酒吧點威士忌".into(), vocabulary: vec!["dram".into(), "neat".into()], sources: vec![1, 2], refs: vec![] }
+    }
 
     #[test]
-    fn syllabus_and_references() {
+    fn syllabus_defaults_and_references() {
         let s = syl();
-        assert_eq!((s.level.as_str(), s.words), ("B2", [400, 600]));
-        let t = &s.topic[0];
-        let r: Vec<RefPage> = t.refs.iter().filter_map(|r| ref_page(r)).collect();
-        assert_eq!(r[0].url, "https://en.wikipedia.org/wiki/Haggis");
+        assert_eq!((s.level.as_str(), s.words, s.lessons), ("B2", [300, 450], [3, 6]));
+        let r: Vec<RefPage> = s.topic[0].refs.iter().filter_map(|r| ref_page(r)).collect();
+        assert_eq!(r[0].url, "https://en.wikipedia.org/wiki/Scotch_whisky");
         assert_eq!(r[1].url, "https://en.wikivoyage.org/wiki/Edinburgh");
         assert_eq!(ref_page("w:King's Cross station").unwrap().url, "https://en.wikipedia.org/wiki/King's_Cross_station");
         assert_eq!(ref_page("w:Platform 9¾").unwrap().url, "https://en.wikipedia.org/wiki/Platform_9%C2%BE");
@@ -348,35 +506,48 @@ topic = [
     }
 
     #[test]
-    fn articles_need_a_source_and_the_right_length_and_round_trip() {
+    fn a_theme_is_split_into_one_thing_lessons() {
         let s = syl();
-        let src = vec![SourceDoc { title: "Haggis".into(), url: "https://en.wikipedia.org/wiki/Haggis".into(), licence: "CC BY-SA 4.0 (Wikipedia)".into(), text: "x".into() }];
-        let text = std::iter::repeat_n("word", 480).collect::<Vec<_>>().join(" ");
-        let ok = json!({ "title": "A Pudding", "text": text, "key_terms": [{ "term": "savoury", "meaning": "鹹的" }], "used_sources": [1, 1, 7], "summary": "哈吉斯的歷史" }).to_string();
-        let a = parse_article(&ok, &s, &src).unwrap();
-        assert_eq!(a.used_sources, vec![1]);
-        let none = json!({ "title": "x", "text": text, "key_terms": [], "used_sources": [5], "summary": "" }).to_string();
-        assert!(parse_article(&none, &s, &src).is_err(), "no real source: not kept");
-        let short = json!({ "title": "x", "text": "too short", "key_terms": [], "used_sources": [1], "summary": "" }).to_string();
-        assert!(parse_article(&short, &s, &src).is_err());
-
-        let md = render_article(&s, "uk", &s.topic[0], &a, &src, "claude:sonnet", "2026-11-08");
-        assert!(md.contains("## References") && md.contains("CC BY-SA"));
-        let back = read_article(&md).unwrap();
-        assert_eq!((back.id.as_str(), back.title.as_str(), back.category.as_str(), back.words), ("haggis", "A Pudding", "飲食", 480));
-        assert_eq!(back.text, text);
-        assert_eq!(back.sources[0].url, "https://en.wikipedia.org/wiki/Haggis");
-        assert_eq!(back.key_terms[0].meaning, "鹹的");
-        assert_eq!(back.news, vec!["haggis".to_string()]);
+        let t = CourseTemplates::bundled();
+        let req = split_request(&t, &s, &s.topic[0], "zh-TW", &src()).unwrap();
+        assert!(req.system.contains("One lesson = one thing") && req.system.contains("Language first") && req.system.contains("3–6"));
+        assert!(req.user.contains("[2] Edinburgh"));
+        let reply = json!({ "lessons": [
+            { "zh": "點一杯威士忌", "en": "Ordering a dram", "focus": "How to order.", "goal": "能點酒", "vocabulary": ["dram", " neat ", ""], "sources": [2, 2, 9] },
+            { "zh": "沒出處", "en": "No source", "focus": "x", "goal": "y", "vocabulary": [], "sources": [7] },
+            { "zh": "沒重點", "en": "No focus", "focus": " ", "goal": "y", "vocabulary": [], "sources": [1] },
+            { "zh": "三年規定", "en": "Three years in oak", "focus": "The ageing rule.", "goal": "能說明熟成", "vocabulary": ["cask"], "sources": [1] },
+        ] }).to_string();
+        let plan = parse_split(&reply, &s, &s.topic[0], 2).unwrap();
+        assert_eq!(plan.lesson.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(), vec!["whisky-1", "whisky-2"]);
+        assert_eq!(plan.lesson[0].vocabulary, vec!["dram", "neat"]);
+        assert_eq!(plan.lesson[0].sources, vec![2]);
+        assert!(parse_split(&json!({ "lessons": [] }).to_string(), &s, &s.topic[0], 2).is_err());
+        // Saved and read back (the author may edit it).
+        let dir = tempfile::tempdir().unwrap();
+        save_plan(dir.path(), "uk", &s.topic[0], &plan).unwrap();
+        assert_eq!(load_plan(dir.path(), "uk", &s.topic[0]).unwrap(), plan);
     }
 
     #[test]
-    fn request_carries_the_sources_and_rules() {
+    fn texts_need_a_source_and_the_right_length_and_round_trip() {
         let s = syl();
         let t = CourseTemplates::bundled();
-        let src = vec![SourceDoc { title: "Haggis".into(), url: "https://en.wikipedia.org/wiki/Haggis".into(), licence: String::new(), text: "Haggis is a savoury pudding.".into() }];
-        let req = article_request(&t, &s, &s.topic[0], "zh-TW", &src).unwrap();
-        assert!(req.system.contains("B2") && req.system.contains("400–600") && req.system.contains("Do not invent"));
-        assert!(req.user.contains("[1] Haggis (https://en.wikipedia.org/wiki/Haggis)") && req.user.contains("savoury pudding"));
+        let req = article_request(&t, &s, &s.topic[0], &focus(), "zh-TW", &src()).unwrap();
+        assert!(req.system.contains("one thing only") && req.system.contains("dram, neat") && req.system.contains("300–450") && req.system.contains("Do not invent"));
+        let text = std::iter::repeat_n("word", 360).collect::<Vec<_>>().join(" ");
+        let ok = json!({ "title": "A Dram, Please", "text": text, "key_terms": [{ "term": "dram", "meaning": "一小杯" }], "used_sources": [1, 1, 7], "summary": "點酒" }).to_string();
+        let a = parse_article(&ok, &s, &src()).unwrap();
+        assert_eq!(a.used_sources, vec![1]);
+        assert!(parse_article(&json!({ "title": "x", "text": text, "key_terms": [], "used_sources": [5], "summary": "" }).to_string(), &s, &src()).is_err(), "no real source");
+        assert!(parse_article(&json!({ "title": "x", "text": "too short", "key_terms": [], "used_sources": [1], "summary": "" }).to_string(), &s, &src()).is_err());
+        let md = render_article(&s, "uk", &s.topic[0], &focus(), &a, &src(), "claude:sonnet", "2026-11-08");
+        assert!(md.contains("## References") && md.contains("CC BY-SA"));
+        let back = read_article(&md).unwrap();
+        assert_eq!((back.id.as_str(), back.theme.as_str(), back.title.as_str(), back.words), ("whisky-1", "whisky", "A Dram, Please", 360));
+        assert_eq!((back.lesson_zh.as_str(), back.goal.as_str()), ("點一杯威士忌", "能在酒吧點威士忌"));
+        assert_eq!(back.text, text);
+        assert_eq!(back.key_terms[0].meaning, "一小杯");
+        assert_eq!(article_path(Path::new("/w"), "uk", &s.topic[0], "whisky-1"), PathBuf::from("/w/library/uk/飲食/whisky-1.md"));
     }
 }

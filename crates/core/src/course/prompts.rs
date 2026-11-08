@@ -18,8 +18,12 @@ pub const INTERESTS_SYSTEM: &str = "interests_suggest_system.md";
 pub const INTERESTS_USER: &str = "interests_suggest_user.md";
 pub const LIBRARY_SYSTEM: &str = "library_article_system.md";
 pub const LIBRARY_USER: &str = "library_article_user.md";
+pub const LIBRARY_SPLIT_SYSTEM: &str = "library_split_system.md";
+pub const LIBRARY_SPLIT_USER: &str = "library_split_user.md";
 
-const BUNDLED: [(&str, &str); 13] = [
+const BUNDLED: [(&str, &str); 15] = [
+    (LIBRARY_SPLIT_SYSTEM, include_str!("../../../../prompts/library_split_system.md")),
+    (LIBRARY_SPLIT_USER, include_str!("../../../../prompts/library_split_user.md")),
     (LIBRARY_SYSTEM, include_str!("../../../../prompts/library_article_system.md")),
     (LIBRARY_USER, include_str!("../../../../prompts/library_article_user.md")),
     (INTERESTS_SYSTEM, include_str!("../../../../prompts/interests_suggest_system.md")),

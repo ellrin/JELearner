@@ -83,7 +83,7 @@ function createPicker() {
     b.onclick = () => { state.courseCreate = kind; render(); };
     return b;
   };
-  box.append(tile("topic", "news", "主題課程", "關鍵字・網址・文章"), tile("fixed", "cards", "固定課程", "單字表・文法表"), tile("library", "book", "主題庫", "事先寫好的文章"));
+  box.append(tile("topic", "news", "主題課程", "關鍵字・網址・文章"), tile("fixed", "cards", "固定課程", "單字表・文法表"), tile("library", "book", "主題庫", "一堂講一件事"));
   return box;
 }
 
@@ -989,8 +989,10 @@ function compressImage(file, max, quality) {
 }
 
 // ── the topic library (decisions §22) ──────────────────
-// Articles written once from references (Wikipedia, Wikivoyage); a lesson is
-// made from one at the learner's level. The admin writes more in the background.
+// Themes split into lessons that each introduce one thing, with an English
+// goal; a lesson text is written once from references (Wikipedia,
+// Wikivoyage) and made into a lesson at the learner's level. The admin
+// writes more in the background.
 let libTimer = null;
 async function drawLibrary(box) {
   let data;
@@ -1003,25 +1005,24 @@ async function drawLibrary(box) {
   for (const c of data.collections) {
     const sec = el("div", "lib");
     const head = el("div", "lib-head");
-    head.append(el("b", null, c.name), el("span", "n", `${c.written} / ${c.total} 篇・${c.level}`));
+    head.append(el("b", null, c.name), el("span", "n", `${c.written} 堂可上・${c.themes} 個主題・${c.level}`));
     const help = el("button", "help", "?");
     help.setAttribute("aria-label", "說明：主題庫");
-    help.dataset.tip = "每個主題事先讀過參考資料（Wikipedia、Wikivoyage），寫成一篇 400–600 字的文章，附出處。按「做成課程」時，再依你的程度產生課文、題目和對話。";
+    help.dataset.tip = "每個主題拆成幾堂課，每堂只講一件事，並有一個英文目標（一個生活情境或一組字詞）。課文事先讀過參考資料（Wikipedia、Wikivoyage）寫好、附出處；按「做成課程」時，再依你的程度產生題目和對話。";
     head.append(help);
     sec.append(head);
-    // Writing more articles (admin): a few at a time, in the background.
     const out = el("div", "lib-out");
     out.setAttribute("role", "status");
     let adminRow = null;
     let wasRunning = false;
-    if (admin && c.written < c.total) {
+    const workLeft = c.topics.some((t) => !t.split || t.lessons.some((l) => !l.written));
+    if (admin && workLeft) {
       const row = el("div", "actions-row");
       const sel = el("select");
-      sel.setAttribute("aria-label", "這次寫幾篇");
-      for (const n of [5, 10, 20, 50]) { const o = el("option", null, `${n} 篇`); o.value = String(n); sel.append(o); }
-      const go = primaryButton("寫更多文章", null, true);
+      sel.setAttribute("aria-label", "這次寫幾堂");
+      for (const n of [5, 10, 20, 50]) { const o = el("option", null, `${n} 堂`); o.value = String(n); sel.append(o); }
+      const go = primaryButton("寫更多課", null, true);
       const poll = async () => {
-        // The page was left: stop asking.
         if (!out.isConnected) { clearInterval(libTimer); libTimer = null; return; }
         try {
           const r = await api("/api/library/build");
@@ -1033,14 +1034,13 @@ async function drawLibrary(box) {
             go.disabled = true; go.textContent = "寫作中…";
             const bar = el("progress"); bar.max = p.total; if (p.done) bar.value = p.done;
             bar.setAttribute("aria-label", "寫作進度");
-            out.append(bar, el("div", "note", `${p.done} / ${p.total} 篇${p.current ? `・正在寫「${p.current}」` : ""}`));
+            out.append(bar, el("div", "note", `${p.done} / ${p.total} 堂${p.current ? `・${p.current}` : ""}`));
           } else {
             clearInterval(libTimer); libTimer = null;
-            go.disabled = false; go.textContent = "寫更多文章";
+            go.disabled = false; go.textContent = "寫更多課";
             for (const e of p.errors ?? []) out.append(el("div", "note err", e));
-            // New articles: show them (once per finished run).
-            if (p.done && wasRunning) { flash(`寫好 ${p.done} 篇`); render(); }
-            else if (p.done) out.append(el("div", "note ok", `上次寫好 ${p.done} 篇。`));
+            if (p.done && wasRunning) { flash(`寫好 ${p.done} 堂`); render(); }
+            else if (p.done) out.append(el("div", "note ok", `上次寫好 ${p.done} 堂。`));
           }
         } catch { /* next tick */ }
       };
@@ -1055,54 +1055,57 @@ async function drawLibrary(box) {
       adminRow = row;
       poll().then(() => { if (go.disabled) { clearInterval(libTimer); libTimer = setInterval(poll, 3000); } });
     }
-    // Categories as filters; the written articles first.
-    const shown = admin ? c.topics : c.topics.filter((t) => t.written);
-    const cats = [...new Set(shown.map((t) => t.cat))].filter((k) => admin || c.topics.some((t) => t.cat === k && t.written));
+    // Written lessons, by category; themes with lessons still to write are folded (admin).
+    const ready = c.topics.flatMap((t) => t.lessons.filter((l) => l.written).map((l) => ({ ...l, theme: t })));
+    const cats = [...new Set(c.topics.map((t) => t.cat))].filter((k) => admin || ready.some((l) => l.theme.cat === k));
     const chips = el("div", "topic-chips lib-cats");
     let pick = state.libCat && cats.includes(state.libCat) ? state.libCat : null;
     const list = el("ul", "lib-list");
     const later = el("details", "lib-later");
-    const laterList = el("ul", "lib-list");
     const drawList = () => {
-      list.innerHTML = ""; laterList.innerHTML = ""; later.innerHTML = "";
-      const ts = shown.filter((t) => !pick || t.cat === pick);
-      const ready = ts.filter((t) => t.written);
-      const todo = ts.filter((t) => !t.written);
-      if (!ready.length) list.append(el("li", "empty-row", admin ? "這一類還沒有寫好的文章，可以用下面的「寫更多文章」。" : "這一類還沒有文章。"));
-      let first = true;
-      for (const t of [...ready, ...todo]) {
-        const target = t.written ? list : laterList;
-        const li = el("li", t.written ? "" : "todo");
+      list.innerHTML = ""; later.innerHTML = "";
+      const rs = ready.filter((l) => !pick || l.theme.cat === pick);
+      if (!rs.length) list.append(el("li", "empty-row", admin ? "這一類還沒有寫好的課，可以用下面的「寫更多課」。" : "這一類還沒有課。"));
+      rs.forEach((l, i) => {
+        const li = el("li");
         const txt = el("div", "t");
-        const en = el("span", "en", t.written ? t.title : t.en);
-        en.title = t.written ? t.title : t.en;
-        txt.append(el("b", null, t.zh), en);
-        li.append(el("span", "tag", t.cat), txt);
-        if (t.written) {
-          const b = first ? primaryButton("做成課程", null, true) : ghostButton("plus", "做成課程", null);
-          first = false;
-          b.setAttribute("aria-label", `把「${t.zh}」做成課程`);
-          b.onclick = () => busy(b, async () => {
-            try {
-              const r = await api("/api/library/lesson", { collection: c.id, id: t.id });
-              go("courses", { course: r.id, courseLesson: 1, courseCreate: null });
-            } catch (e) { flash(e.message, true); }
-          });
-          li.append(el("span", "n", `${t.words} 字`), b);
-        } else li.append(el("span", "n", "還沒寫"));
-        target.append(li);
-      }
-      if (todo.length) {
-        later.append(el("summary", null, `還沒寫的 ${todo.length} 篇`), laterList);
+        const sub = el("span", "en", `${l.theme.zh}・${l.goal}`);
+        sub.title = `${l.title ?? l.en}\n${l.goal}`;
+        txt.append(el("b", null, l.zh), sub);
+        const b = i === 0 ? primaryButton("做成課程", null, true) : ghostButton("plus", "做成課程", null);
+        b.setAttribute("aria-label", `把「${l.zh}」做成課程`);
+        b.onclick = () => busy(b, async () => {
+          try {
+            const r = await api("/api/library/lesson", { collection: c.id, id: l.id });
+            go("courses", { course: r.id, courseLesson: 1, courseCreate: null });
+          } catch (e) { flash(e.message, true); }
+        });
+        li.append(el("span", "tag", l.theme.cat), txt, el("span", "n", `${l.words} 字`), b);
+        list.append(li);
+      });
+      const todo = c.topics.filter((t) => (!pick || t.cat === pick) && (!t.split || t.lessons.some((l) => !l.written)));
+      if (admin && todo.length) {
+        later.append(el("summary", null, `還有課沒寫的主題 ${todo.length} 個`));
+        const ul = el("ul", "lib-list");
+        for (const t of todo) {
+          const li = el("li", "todo");
+          const txt = el("div", "t");
+          txt.append(el("b", null, t.zh), el("span", "en", t.en));
+          const st = t.split ? `${t.lessons.filter((l) => l.written).length} / ${t.lessons.length} 堂` : "還沒拆課";
+          li.append(el("span", "tag", t.cat), txt, el("span", "n", st));
+          ul.append(li);
+        }
+        later.append(ul);
       }
     };
+    const count = (k) => ready.filter((l) => l.theme.cat === k).length;
     const chip = (label, v) => {
       const s = el("button", `chip-btn${pick === v ? " on" : ""}`, label);
       s.setAttribute("aria-pressed", String(pick === v));
       s.onclick = () => { pick = v; state.libCat = v; $$(".lib-cats .chip-btn", sec).forEach((x) => { const on = x === s; x.classList.toggle("on", on); x.setAttribute("aria-pressed", String(on)); }); drawList(); };
       return s;
     };
-    chips.append(chip("全部", null), ...cats.map((k) => chip(`${k} ${c.topics.filter((t) => t.cat === k && t.written).length}/${c.topics.filter((t) => t.cat === k).length}`, k)));
+    chips.append(chip(`全部 ${ready.length}`, null), ...cats.map((k) => chip(`${k} ${count(k)}`, k)));
     sec.append(chips, list);
     if (admin) sec.append(later);
     if (adminRow) sec.append(adminRow);
