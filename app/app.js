@@ -371,7 +371,7 @@ function drawReview(box, pkg, u) {
       for (const w of words) {
         const row = el("div", "q");
         const t = rich("b", null, w.term);
-        const say = button("🔊", "", () => speak(w.term, pkg.lang)); say.setAttribute("aria-label", `唸 ${plain(w.term)}`); say.style.minHeight = "36px"; say.style.marginLeft = "8px";
+        const say = button("🔊", "", () => speak(w.term, pkg.lang)); say.setAttribute("aria-label", `唸 ${plain(w.term)}`); say.style.minHeight = "44px"; say.style.marginLeft = "8px";
         row.append(t, say, el("div", "why", `${w.reading ? `${w.reading}・` : ""}${w.meaning}`));
         if (w.example) { const ex = rich("div", null, w.example); ex.append(el("div", "why", w.example_translation ?? "")); row.append(ex); }
         c.append(row);
@@ -431,7 +431,13 @@ function drawReading(box, pkg, u) {
     const g = el("div", "card");
     g.append(el("p", null, Rec ? "先聽一句、跟著唸一句，唸完整篇再回答下面的問題。" : "先一句一句聽，跟著唸出來，再回答下面的問題。"));
     const gRow = el("div", "row");
-    gRow.append(button(Rec ? "逐句跟讀" : "逐句聽", "main", () => { g.replaceWith(shadowPanel(data.text, lang)); }));
+    gRow.append(button(Rec ? "逐句跟讀" : "逐句聽", "main", () => {
+      const panel = shadowPanel(data.text, lang, () => {
+        panel.replaceWith(g);
+        box.querySelector(".card.q")?.scrollIntoView({ block: "start", behavior: "smooth" });
+      });
+      g.replaceWith(panel);
+    }));
     g.append(gRow);
     box.append(g);
     const t = el("div", "card");
@@ -447,7 +453,7 @@ function drawReading(box, pkg, u) {
   qs.forEach((q, k) => {
     const d = el("div", "card q");
     d.append(rich("div", null, `${k + 1}. ${q.question}`));
-    if (q.question_translation) { const h = button("中", "", () => { h.replaceWith(el("div", "why", q.question_translation)); }); h.style.minHeight = "36px"; d.append(h); }
+    if (q.question_translation) { const h = button("中", "", () => { h.replaceWith(el("div", "why", q.question_translation)); }); h.style.minHeight = "44px"; d.append(h); }
     const why = el("div", "why");
     const settle = (correct, given) => {
       answers[k] = { index: k, answer: given, correct };
@@ -507,7 +513,7 @@ function matchScore(target, said, lang) {
   const a = norm(target).split(/\s+/).filter(Boolean), b = new Set(norm(said).split(/\s+/).filter(Boolean));
   return a.length ? Math.round((a.filter((w) => b.has(w)).length / a.length) * 100) : 0;
 }
-function shadowPanel(text, lang) {
+function shadowPanel(text, lang, onDone) {
   const list = sentencesOf(text, lang);
   const box = el("div", "card");
   let i = 0;
@@ -517,6 +523,7 @@ function shadowPanel(text, lang) {
     box.append(el("p", "note", `第 ${i + 1} / ${list.length} 句`), rich("div", "text", s));
     const heard = el("div", "heard");
     const result = el("div");
+    result.setAttribute("aria-live", "polite");
     const row = el("div", "row");
     const listenBtn = button("🔊 聽這一句", "", () => speak(s, lang));
     row.append(listenBtn);
@@ -534,7 +541,7 @@ function shadowPanel(text, lang) {
     }
     const nav = el("div", "row");
     if (i > 0) nav.append(button("上一句", "", () => { i--; draw(); }));
-    nav.append(i < list.length - 1 ? button("下一句", "main", () => { i++; draw(); }) : button("唸完了，去答題", "main", () => { box.remove(); }));
+    nav.append(i < list.length - 1 ? button("下一句", "main", () => { i++; draw(); }) : button("唸完了，去答題", "main", () => { synth?.cancel(); onDone ? onDone() : box.remove(); }));
     box.append(row, heard, result, nav);
     speak(s, lang);
   };
