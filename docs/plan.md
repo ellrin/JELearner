@@ -816,7 +816,8 @@ per_day = 10                # 每天帶入幾個新字
     - iPad 寫回原始作答到 `profiles/<她>/ipad/inbox/*.json`（單元結果、對話逐字稿與 Haiku 的評分）；管理員的 Mac 同步或備課時用現有規則處理收件匣（積分、錯題、複習、難度、對話紀錄），處理完移到 `inbox/done/`。積分規則只有一份，在 Mac 上。
     - 測試：mock Claude 備課 → 檢查包裹內容與 index；模擬的收件匣檔 → 積分、錯題、課程進度正確，重複處理不會重複記分。
     - 介面：設定 › 使用者，管理員在每位家人旁有「備課」（語言、天數、每天可選幾個主題、進度）與「收回作答」。同步（`/api/git/sync`）之後自動處理家人的收件匣、再同步一次把結果送上去。
-  - [ ] 階段 3 iPad 上課 App：GitHub Pages 上的網頁 App、加入主畫面、讀課（GitHub API）、各單元畫面、即時辨識（每次新的辨識物件、按一下才開始說）、朗讀、Haiku 對話與批改、作答紀錄一次一個 commit 寫回（遇到管理員剛推就以最新版本重做，只寫自己的資料夾所以不會衝突）、離線可複習、QR code 設定；測試（Playwright WebKit、iPad mini 尺寸、mock GitHub 與 Claude；真的 Haiku 與拋棄式 repo 各一次）
+  - [x] 階段 3 iPad 上課 App 第一版（2026-11；`ipad/`，`scripts/publish-ipad.sh` 發佈到 GitHub Pages 的 `app/`，https://ellrin.github.io/JELearner/app/）：設定（repo、使用者 id、GitHub 鑰匙、Claude 鑰匙，只存在這台 iPad；也可用 `#setup=` 連結帶入）、今天從備好的課裡挑一堂、複習卡片、課文與閱讀（唸課文、選擇題、簡答自評）、輸出練習（寫或說，再對參考答案自評）、AI 對話（按一下說話、每次新的辨識物件、Haiku 用 Mac 算好的提示詞、最後一回合與評分）、作答一次一個檔案寫回 `ipad/inbox/`、離線時先存著、service worker 讓 App 本身離線可開。測試：WebKit（iPad mini 尺寸）對 Mac 真的備好的課、mock GitHub 與 Claude 從選課做到對話評分，寫回的作答交給 Mac 處理，積分與紀錄正確。
+    - 還沒做：Mac 端產生設定連結或 QR code、複習卡逐張的記憶排程（目前只回報分數）、對話中途關掉 App 後的語音提示；實機測試（階段 4）。
   - [ ] 階段 4 實機：作者的 iPad mini 依檢查表測完，再裝到她的 iPad
   - 不做：在 Windows 筆電或作者 Mac 上替她跑 server、原生 iPad App（iOS 不能執行 git／claude，App 要簽章）、Whisper（沒有 GPU，對話會卡）。
 ### 第 0-2＋E 階段：家庭成員與學習群組

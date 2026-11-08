@@ -134,6 +134,9 @@ async fn run(s: &Shared, member: &str, lang: Lang, days: u32, choices: u32) -> R
     }
     // Topics already prepared are not offered again.
     let mut index = load_index(&m);
+    // The iPad answers in conversations with the real-time model (decisions §19).
+    index["realtime_model"] = json!(s.settings.read().await.realtime.model.clone());
+    index["realtime_effort"] = json!(s.settings.read().await.realtime.effort.clone());
     let mut shown: Vec<String> = index["days"].as_object().map(|d| d.values().flat_map(|v| v.as_array().cloned().unwrap_or_default()).filter_map(|x| x["title"].as_str().map(str::to_string)).collect()).unwrap_or_default();
     let (parts, focus, t) = crate::today::card_inputs(&m, lang);
     let heads = crate::today::headlines(s, lang, focus.as_ref()).await?;

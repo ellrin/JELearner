@@ -1025,6 +1025,7 @@ async fn admin_prepares_lessons_for_a_member() {
     let index: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("index.json")).unwrap()).unwrap();
     let days = index["days"].as_object().unwrap();
     assert_eq!(days.len(), 2, "{index}");
+    assert_eq!(index["realtime_model"], "claude-haiku-5-5", "the iPad takes the model from here");
     let first = days.values().next().unwrap().as_array().unwrap();
     assert!(first.len() >= 2, "two topics to choose from each day: {index}");
     let titles: Vec<&str> = days.values().flat_map(|d| d.as_array().unwrap().iter().map(|e| e["title"].as_str().unwrap())).collect();
