@@ -578,7 +578,31 @@ pub(crate) async fn review_cards(l: &Loaded, lang: Lang, lp: &LessonPlan, cl: Op
     Ok(out)
 }
 
+/// One gate per lesson being opened: a second request for the same lesson
+/// waits for the first one's text instead of writing another (a local model
+/// writes one lesson in minutes; every extra copy makes them all slower).
+static OPENING: std::sync::Mutex<Option<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> = std::sync::Mutex::new(None);
+
+fn opening_gate(s: &Shared, id: &str, n: u32) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let key = format!("{:p}/{id}#{n}", std::sync::Arc::as_ptr(s));
+    OPENING.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(std::collections::HashMap::new).entry(key).or_default().clone()
+}
+
+/// Open a lesson. The work runs on its own task: when the page is left while
+/// the model writes, the text is still finished and saved, and coming back
+/// shows it without writing it again.
 async fn open_lesson(State(s): State<Shared>, AxPath((id, n)): AxPath<(String, u32)>) -> R<Value> {
+    let s2 = s.clone();
+    tokio::spawn(async move {
+        let gate = opening_gate(&s2, &id, n);
+        let _one_at_a_time = gate.lock().await;
+        open_lesson_now(s2, id, n).await
+    })
+    .await
+    .map_err(|e| fail(format!("這一課沒有準備好：{e}")))?
+}
+
+async fn open_lesson_now(s: Shared, id: String, n: u32) -> R<Value> {
     let (course, lp, lr, t, mut ctx) = {
         let l = ws(&s).await?;
         let c = store::load(&l.ws, &id).map_err(course_err)?;
@@ -604,10 +628,11 @@ async fn open_lesson(State(s): State<Shared>, AxPath((id, n)): AxPath<(String, u
             &mock_p
         }
     };
-    let opened = {
-        let l = ws(&s).await?;
-        plan::open_lesson(prov, &t, &l.ws, &id, n, &lr, &ctx, &date()).await.map_err(course_err)?
-    };
+    // No lock held while the model writes (it can take minutes on a local
+    // model): anything that changes the workspace meanwhile would otherwise
+    // wait, and every request after it.
+    let w = ws(&s).await?.ws.clone();
+    let opened = plan::open_lesson(prov, &t, &w, &id, n, &lr, &ctx, &date()).await.map_err(course_err)?;
     let l = ws(&s).await?;
     let lesson_id = match l.db.course_lesson_id(&id, n).await? {
         Some(x) if opened.generated.is_none() => x,

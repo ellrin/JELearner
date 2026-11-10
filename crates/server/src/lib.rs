@@ -39,7 +39,7 @@ use jl_core::provider::{ClaudeProvider, LlamaServerProvider, LlmProvider};
 use jl_core::workspace::{Layout, MemberKind, Profile, Root, Workspace};
 pub use settings::{EngineKind, GoogleMode, Paths, Settings};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
@@ -85,10 +85,40 @@ pub struct AppState {
 /// it on Ctrl+C / SIGTERM (a model left running holds many GB of memory).
 static LOCAL_PID: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
 
+/// Where the started llama-server's process id is kept (`<app dir>/local-model.pid`),
+/// so the next start can stop one a crashed or force-quit app left behind.
+static PID_FILE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
 /// Stop the llama-server this process started, if any. Synchronous, for exit paths.
 pub fn kill_local_model() {
     if let Some(pid) = LOCAL_PID.lock().unwrap_or_else(|e| e.into_inner()).take() {
         let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+    }
+    if let Some(f) = PID_FILE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        let _ = std::fs::remove_file(f);
+    }
+}
+
+/// A local model left by an earlier run that did not end normally (a crash,
+/// a force quit): stop it before anything else, or each start adds another
+/// one holding many GB. Only a process whose command is still llama-server
+/// is stopped (process ids are reused).
+pub fn stop_leftover_local_model(app_dir: &Path) {
+    let f = app_dir.join("local-model.pid");
+    *PID_FILE.lock().unwrap_or_else(|e| e.into_inner()) = Some(f.clone());
+    let Some(pid) = std::fs::read_to_string(&f).ok().and_then(|t| t.trim().parse::<u32>().ok()) else { return };
+    let cmd = std::process::Command::new("ps").args(["-o", "command=", "-p", &pid.to_string()]).output();
+    if cmd.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("llama-server")) {
+        let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+        eprintln!("stopped a local model left by an earlier run (pid {pid})");
+    }
+    let _ = std::fs::remove_file(&f);
+}
+
+fn remember_local_model(pid: Option<u32>) {
+    *LOCAL_PID.lock().unwrap_or_else(|e| e.into_inner()) = pid;
+    if let (Some(pid), Some(f)) = (pid, PID_FILE.lock().unwrap_or_else(|e| e.into_inner()).as_ref()) {
+        let _ = std::fs::write(f, pid.to_string());
     }
 }
 
@@ -115,7 +145,7 @@ pub async fn local_llama(s: &Shared) -> Result<jl_core::provider::LlamaServerCon
         let _ = old.child.kill().await;
     }
     let started = jl_core::local_llm::start(&home, &m, Duration::from_secs(240)).await.map_err(unavailable)?;
-    *LOCAL_PID.lock().unwrap_or_else(|e| e.into_inner()) = started.pid();
+    remember_local_model(started.pid());
     let url = started.url.clone();
     *run = Some(started);
     Ok(jl_core::provider::LlamaServerConfig { url, model: m.id })
@@ -353,6 +383,12 @@ pub struct Options {
 }
 
 pub async fn build_state(settings: Settings, opts: Options) -> Shared {
+    // Tests never start a local model (`llama_external`), so they leave this alone.
+    if !settings.llama_external
+        && let Some(dir) = &settings.app_dir
+    {
+        stop_leftover_local_model(dir);
+    }
     let (mailer, calendar, mock_mail, mock_calendar): (Arc<dyn Mailer>, Arc<dyn Calendar>, _, _) = match settings.google.mode {
         GoogleMode::Mock => {
             let m = Arc::new(MemoryMailer::default());
@@ -419,4 +455,43 @@ pub async fn bind(
     let addr = listener.local_addr()?;
     let app = router(settings, Options { provider: None }).await;
     Ok((addr, async move { axum::serve(listener, app).await }))
+}
+
+#[cfg(test)]
+mod leftover_model_tests {
+    use super::*;
+
+    fn alive(pid: u32) -> bool {
+        std::process::Command::new("kill").args(["-0", &pid.to_string()]).status().is_ok_and(|s| s.success())
+    }
+
+    /// A llama-server left by a force-quit app is stopped at the next start;
+    /// another program that got the same process id is left alone.
+    #[test]
+    #[cfg(unix)]
+    fn leftover_local_model_is_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("llama-server");
+        std::fs::copy("/bin/sleep", &fake).unwrap();
+        let mut left = std::process::Command::new(&fake).arg("30").spawn().unwrap();
+        std::fs::write(dir.path().join("local-model.pid"), left.id().to_string()).unwrap();
+        stop_leftover_local_model(dir.path());
+        let t = std::time::Instant::now();
+        while left.try_wait().unwrap().is_none() && t.elapsed() < std::time::Duration::from_secs(2) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let stopped = left.try_wait().unwrap().is_some();
+        if !stopped {
+            let _ = left.kill();
+        }
+        assert!(stopped, "the leftover model is stopped");
+        assert!(!dir.path().join("local-model.pid").exists());
+
+        let mut other = std::process::Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        std::fs::write(dir.path().join("local-model.pid"), other.id().to_string()).unwrap();
+        stop_leftover_local_model(dir.path());
+        assert!(alive(other.id()), "not a llama-server: left alone");
+        let _ = other.kill();
+        let _ = other.wait();
+    }
 }

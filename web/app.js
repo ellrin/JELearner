@@ -24,10 +24,11 @@ const state = {
   query: "",
 };
 
-async function api(path, body, method) {
+async function api(path, body, method, signal) {
   const opts = body !== undefined
     ? { method: method ?? "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-    : (method ? { method } : undefined);
+    : (method ? { method } : {});
+  if (signal) opts.signal = signal;
   const r = await fetch(path, opts);
   const text = await r.text();
   let data = null;
@@ -283,9 +284,11 @@ async function refreshStatus() {
   sb.innerHTML = "";
   const dot = el("span", `dot ${s.engine_ready ? "ok" : "warn"}`);
   const eng = el("button", "eng", null);
-  eng.append(dot, document.createTextNode(s.engine_ready ? (s.family?.ready ? "AI 老師準備好了" : "Claude 已連線") : s.family?.ready ? "AI 老師還沒準備好" : "Claude 未連線"));
+  // Which engine is in use: a local model is not Claude.
+  const local = /^llama-server/.test(s.engine ?? "");
+  eng.append(dot, document.createTextNode(s.family?.ready ? (s.engine_ready ? "AI 老師準備好了" : "AI 老師還沒準備好") : `${local ? "本機模型" : "Claude"}${s.engine_ready ? " 已連線" : " 未連線"}`));
   eng.title = s.engine_ready ? `${s.engine_label}・${s.engine}` : (s.engine_error ?? "設定 → Claude");
-  eng.onclick = () => openSettings(3);
+  eng.onclick = () => openSettings(local ? 4 : 3);
   sb.append(eng, el("span", "grow"));
   if (s.import?.warnings?.length) {
     const w = el("span", null, `匯入警告 ${s.import.warnings.length}`);
@@ -532,6 +535,10 @@ function ghostButton(iconName, label, onclick) {
 // Each render draws into its own detached container; only the latest call
 // puts it on the page, so overlapping calls never draw a page twice.
 let renderGen = 0;
+// A page that waits a long time (a lesson the model is writing) gives its
+// request this signal: leaving the page lets go of the connection, so the
+// browser's few connections never all wait and the next page can load.
+let renderCtl = null;
 /** Light the nav item of the current view; a daily lesson belongs to 今日. */
 function markNav() {
   const cur = state.view === "courses" && (state.courseLesson || state.quickReview) && state.inDaily ? "today" : state.view;
@@ -549,10 +556,15 @@ function infoButton(lines) {
 
 async function render() {
   const gen = ++renderGen;
+  renderCtl?.abort();
+  renderCtl = new AbortController();
+  state.signal = renderCtl.signal;
   markNav();
   Speech.stop();
   Speech.stopListening();
   const body = el("div", "page-body");
+  // A page that will wait shows its waiting state now (it is drawn off-screen otherwise).
+  state.paintNow = () => { if (gen === renderGen) $("#page").replaceChildren(body); };
   try {
     await ({ today: renderToday, courses: renderCourses, conversation: renderConversation, news: renderNews, lessons: renderLessons, words: renderWords, grammar: renderGrammar,
       mistakes: renderMistakes, notebook: renderNotebook, materials: renderMaterials, progress: renderProgress }[state.view] ?? renderToday)(body);

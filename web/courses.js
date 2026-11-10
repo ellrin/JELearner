@@ -452,12 +452,20 @@ async function renderCourseLesson(page) {
     : ghostButton("back", "課程大綱", () => go("courses", { course: id, courseLesson: null })));
   viewbar(`第 ${n} 課`, null, backFor(state.fromToday && state.cl?.course?.id === id ? state.cl.course.kind === "daily" : false));
   const sk = el("div", "lesson-wait");
-  sk.append(planningSkeleton(), el("div", "note", "正在準備這一課…"));
+  const waitNote = el("div", "note", "正在準備這一課…");
+  waitNote.setAttribute("role", "status");
+  sk.append(planningSkeleton(), waitNote);
   page.append(sk);
+  state.paintNow?.();
+  // A lesson opened for the first time is written now: on a local model that
+  // takes minutes. Say so after a while; leaving is fine, it is kept.
+  const slow = setTimeout(() => { waitNote.textContent = "第一次打開，正在寫這一課（本機模型要幾分鐘）。可以先去別的地方，寫好會留著。"; }, 8000);
   let o;
   try {
-    o = await api(`/api/courses/${encodeURIComponent(id)}/lessons/${n}/open`, {});
+    o = await api(`/api/courses/${encodeURIComponent(id)}/lessons/${n}/open`, {}, "POST", state.signal);
   } catch (e) {
+    clearTimeout(slow);
+    if (e.name === "AbortError") return; // the learner went elsewhere; the server keeps writing
     sk.remove();
     const err = el("div", "empty cta", e.message);
     if (!state.status?.engine_ready) err.append(primaryButton("連接 Claude", () => openSettings(3)));
@@ -465,6 +473,7 @@ async function renderCourseLesson(page) {
     page.append(err);
     return;
   }
+  clearTimeout(slow);
   sk.remove();
   state.cl = o;
   const daily = o.course.kind === "daily";

@@ -162,6 +162,11 @@ fn focus_sheet() -> Value {
 }
 
 fn mock_claude(calls: Arc<Mutex<Vec<Value>>>) -> Router {
+    mock_claude_slow(calls, 0)
+}
+
+/// The mock, writing a course lesson in `lesson_ms` (a slow local model).
+fn mock_claude_slow(calls: Arc<Mutex<Vec<Value>>>, lesson_ms: u64) -> Router {
     Router::new().route(
         "/v1/messages",
         post(move |Json(b): Json<Value>| {
@@ -169,6 +174,9 @@ fn mock_claude(calls: Arc<Mutex<Vec<Value>>>) -> Router {
             async move {
                 calls.lock().unwrap().push(b.clone());
                 let props = &b["output_config"]["format"]["schema"]["properties"];
+                if lesson_ms > 0 && props["text"].is_object() && props["conversation"].is_object() {
+                    tokio::time::sleep(std::time::Duration::from_millis(lesson_ms)).await;
+                }
                 let user = b["messages"][0]["content"].as_str().unwrap_or("").to_string();
                 let text = if props["cards"].is_object() {
                     topic_cards(&user)
@@ -232,8 +240,12 @@ impl Client {
 
 /// A workspace with Ellrin (English B1, Japanese N5) and the mock Claude API.
 async fn setup(app_dir: &Path, ws_path: &Path) -> (Client, Arc<Mutex<Vec<Value>>>) {
+    setup_slow(app_dir, ws_path, 0).await
+}
+
+async fn setup_slow(app_dir: &Path, ws_path: &Path, lesson_ms: u64) -> (Client, Arc<Mutex<Vec<Value>>>) {
     let calls = Arc::new(Mutex::new(vec![]));
-    let claude = serve(mock_claude(calls.clone())).await;
+    let claude = serve(mock_claude_slow(calls.clone(), lesson_ms)).await;
     let mut s = Settings::for_tests(Paths::from_repo(), app_dir.to_path_buf());
     s.claude.base_url = claude;
     s.claude_api_key = Some("sk-ant-test-key-0000".into());
@@ -1396,4 +1408,41 @@ async fn buddies_see_each_other() {
     assert_eq!((hers["me"].as_bool(), hers["today"].as_f64()), (Some(true), Some(1.5)), "{file}");
     assert!(hers.get("prepared").is_none());
     assert!(!ws_path.join("profiles").join(&admin).join("ipad").exists());
+}
+
+/// A lesson the model takes long to write (a local model): opened twice at
+/// once and once by a page that is left early, it is written once, kept,
+/// and nothing else waits for it.
+#[tokio::test]
+async fn slow_lesson_is_written_once_and_kept() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, calls) = setup_slow(app_dir.path(), &ws_path, 1500).await;
+    let (st, course) = c.post("/api/courses", json!({ "kind": "topic", "lang": "en", "keywords": ["AI chips"] })).await;
+    assert_eq!(st, StatusCode::OK, "{course}");
+    let id = course["id"].as_str().unwrap().to_string();
+    let path = format!("/api/courses/{id}/lessons/1/open");
+    let lesson_calls = || calls.lock().unwrap().iter().filter(|b| b["output_config"]["format"]["schema"]["properties"]["conversation"].is_object()).count();
+    // A page left after a moment: the browser lets go of the request.
+    let quick = reqwest::Client::builder().timeout(std::time::Duration::from_millis(200)).build().unwrap();
+    assert!(quick.post(format!("{}{path}", c.base)).json(&json!({})).send().await.is_err(), "the left page gave up");
+    // Two more opens of the same lesson: they wait for the first text. While
+    // it is being written, the rest of the app answers at once (no lock held).
+    let (a, b, waited) = tokio::join!(c.post(&path, json!({})), c.post(&path, json!({})), async {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let t = std::time::Instant::now();
+        assert_eq!(c.get("/api/status").await.0, StatusCode::OK);
+        assert_eq!(c.send(reqwest::Method::PUT, "/api/user", json!({ "daily_minutes": 30 })).await.0, StatusCode::OK);
+        t.elapsed()
+    });
+    assert!(waited < std::time::Duration::from_millis(800), "a settings change waited {waited:?} for the lesson");
+    assert_eq!((a.0, b.0), (StatusCode::OK, StatusCode::OK), "{} {}", a.1, b.1);
+    assert_eq!(a.1["lesson"]["text"], b.1["lesson"]["text"]);
+    assert_eq!(lesson_calls(), 1, "written once");
+    // Coming back later: the kept text, no model call.
+    let (st, again) = c.post(&path, json!({})).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(again["generated"], false, "{again}");
+    assert_eq!(lesson_calls(), 1);
 }
