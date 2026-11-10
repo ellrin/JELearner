@@ -127,6 +127,12 @@ JELearner 是非營利的個人專案，不代付、不轉售任何 Claude 用�
 
 之後家人只要打開 App：開啟時、每次學習後、關閉時都會自動同步，只上傳他自己的資料夾。設定裡只看得到學習相關的項目；工作區、Claude、本機模型收在「管理員設定」，要輸入 PIN。要停用時在「管理員設定」按「關閉家人模式」；要撤銷這台電腦，到 GitHub 刪掉那把 deploy key。
 
+**學習戰友**：工作區有兩位以上成員時，今日頁會出現每個人的卡片（今日積分、近 7 天、連續天數、等級），資料來自大家本來就會同步的 `profiles/<名字>/records/points/`，不需要另外的服務。管理員的電腦開啟時與每 10 分鐘會自動取得最新（只做 fast-forward，不會自動上傳）。
+
+**每週派課**：管理員在「課程」頁按一次「派本週的課」：抓最新新聞，加上主題庫還沒上過的課，替每個人（包括自己的 iPad）依各自的程度做好 7 天的課，每天 2 個主題可選，做完自動同步到 private repo，iPad 打開就看得到。一起備的人拿到同樣的主題，課文、單字數與題目依各自的程度。
+
+**家人用 iPad**：想自己選天數、對象或內容時，在「設定 → 使用者 → 備課」備課，按同步送上 repo；家人的卡片上會顯示「課備到哪一天」，快用完時「備課」按鈕會亮起。第一次設定 iPad：在備課面板打開「第一次設定 ○○ 的 iPad」，填 iPad App 網址、repo 與兩把鑰匙，按「複製設定連結」，把連結傳到那台 iPad 用 Safari 打開即可（連結含鑰匙，只在瀏覽器裡產生、不保存；傳完請刪掉訊息）。iPad 首頁也有同樣的戰友卡片（`profiles/<名字>/ipad/buddies.json`，由管理員的電腦在同步、備課、收回作答時寫出）。
+
 deploy key 讀得到整個 repo（包括你的單字庫），適合家人。只想分享進度的朋友，請等之後的「學習群組」。
 
 ## 本機模型
@@ -228,6 +234,8 @@ scripts/            開發啟動與 Git hooks
 | GET | `/api/conversations/{id}` | 對話內容 |
 | POST | `/api/conversations/{id}/turns` `{ text }` | 一回合：換句話說＋下一個問題；最後一回合後鎖定 |
 | POST | `/api/conversations/{id}/finish` | 評估、積分、存成 `conversations/<lang>/*.md` |
+| GET / POST | `/api/family/prepare`（POST `{ member \| members, lang, days, choices, source: library\|news\|mix }`） | 管理員替成員（可多位，可含自己）備 iPad 的課，在背景執行；GET 回傳進度 |
+| GET | `/api/buddies` | 學習戰友：工作區每位成員的今日積分、近 7 天、連續天數、等級（讀各自的 `records/points/`）；管理員另外看得到家人 iPad 的課備到哪一天 |
 | POST / DELETE | `/api/user/avatar`（本文為圖片，≤ 2 MB） | 上傳或移除大頭貼（存在這台電腦，不進工作區） |
 | GET | `/api/avatars/{user}` | 大頭貼 |
 | POST | `/api/records/export` | 寫出 records/progress.csv、mistakes.csv |
@@ -250,4 +258,4 @@ sh scripts/install-hooks.sh
 
 ## 開發說明
 
-本專案由 ellrin 開發與維護，程式碼在 Claude Code（Anthropic）協助下撰寫。
+本專案由 ellrin 開發與維護，程式碼在 Claude Code（Anthropic）協助下撰寫；2026-11 的使用者體驗審查、學習戰友與每週派課由 Claude Fable 5 協作完成。

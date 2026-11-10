@@ -11,6 +11,7 @@
 //! so every user (and every workspace) has its own private database.
 
 pub mod api;
+pub mod buddies;
 pub mod courses;
 pub mod family;
 pub mod git;

@@ -82,6 +82,7 @@ pub fn routes(web: PathBuf) -> Router<Shared> {
         .merge(crate::prepare::routes())
         .merge(crate::inbox::routes())
         .merge(crate::library::routes())
+        .merge(crate::buddies::routes())
         .fallback_service(ServeDir::new(web))
 }
 
@@ -369,6 +370,15 @@ async fn select_user_inner(s: &Shared, id: &str) -> Result<Value, ApiError> {
     *s.loaded.write().await = Some(loaded);
     *s.load_error.write().await = None;
     Ok(json!({ "user": user, "import": report }))
+}
+
+/// Load the active user again after their files changed outside the open
+/// workspace (their own iPad results, lessons prepared for their own iPad).
+pub(crate) async fn reload_active(s: &Shared) {
+    let me = s.loaded.read().await.as_ref().map(|l| l.ws.profile.id.clone());
+    if let Some(me) = me {
+        let _ = select_user_inner(s, &me).await;
+    }
 }
 
 #[derive(Deserialize)]
@@ -748,7 +758,9 @@ async fn git_sync(State(s): State<Shared>, body: Option<Json<SyncBody>>) -> R<Va
         s.root.read().await.as_ref().is_some_and(|o| o.root.is_admin(&me))
     };
     let applied = if is_admin { crate::inbox::process_all(&s).await } else { vec![] };
-    let result = if applied.iter().any(|a| a.files > 0) {
+    // Everyone's points for the members' iPads (the buddies strip).
+    let buddies = if is_admin { crate::buddies::write_ipad_files(&s).await } else { 0 };
+    let result = if applied.iter().any(|a| a.files > 0) || buddies > 0 {
         git::sync(&root, Some("Apply iPad results".into())).await.unwrap_or(first)
     } else {
         first

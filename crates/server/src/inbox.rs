@@ -97,11 +97,14 @@ async fn apply_all(State(s): State<Shared>) -> R<Value> {
             return Err(bad("只有管理員可以收回家人的作答"));
         }
     }
-    Ok(Json(json!({ "applied": process_all(&s).await })))
+    let applied = process_all(&s).await;
+    // Their new points belong on everyone's buddies strip.
+    crate::buddies::write_ipad_files(&s).await;
+    Ok(Json(json!({ "applied": applied })))
 }
 
-/// Every member's inbox but the active user's own (their results come
-/// through the app itself). Errors are reported per member, never raised.
+/// Every member's inbox, the active user's own too (the admin may study on
+/// an iPad as well). Errors are reported per member, never raised.
 pub async fn process_all(s: &Shared) -> Vec<Applied> {
     let (members, me) = {
         let root = s.root.read().await;
@@ -111,8 +114,13 @@ pub async fn process_all(s: &Shared) -> Vec<Applied> {
         (ids.into_iter().filter(|id| open.root.root.join("profiles").join(id).join("ipad/inbox").is_dir()).collect::<Vec<_>>(), me)
     };
     let mut out = vec![];
-    for m in members.into_iter().filter(|m| *m != me) {
-        match process_member(s, &m).await {
+    for m in members {
+        let res = process_member(s, &m).await;
+        // The active user's own results: the open workspace reads its files again.
+        if m == me && res.as_ref().is_ok_and(|a| a.files > 0) {
+            crate::api::reload_active(s).await;
+        }
+        match res {
             Ok(a) if a.files > 0 || !a.errors.is_empty() => out.push(a),
             Ok(_) => {}
             Err(e) => out.push(Applied { member: m, errors: vec![e.1], ..Default::default() }),

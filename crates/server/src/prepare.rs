@@ -14,8 +14,11 @@
 //!
 //! The next sync takes them to the shared repository.
 //!
-//! - `POST /api/family/prepare {member, lang, days, choices}` starts the job
-//!   in the background; `GET /api/family/prepare` shows its progress.
+//! - `POST /api/family/prepare {member | members, lang, days, choices}` starts
+//!   the job in the background; `GET /api/family/prepare` shows its progress.
+//!   Several members are prepared one after another, each at their own level;
+//!   with the topic library they get the same lessons as long as they are
+//!   prepared together. The admin can be one of them (their own iPad).
 
 use crate::api::need_lang;
 use crate::courses::{course_err, daily_course, find_article, index_lesson, learner, recent_accuracy, review_cards, templates, unit_json};
@@ -40,7 +43,13 @@ pub fn routes() -> Router<Shared> {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Progress {
     pub running: bool,
+    /// The member being prepared now.
     pub member: String,
+    /// Everyone this run prepares for.
+    pub members: Vec<String>,
+    /// Lessons planned for the members still to come.
+    #[serde(skip)]
+    pub rest: usize,
     pub lang: String,
     pub total: usize,
     pub done: usize,
@@ -77,9 +86,14 @@ async fn status(State(s): State<Shared>) -> R<Value> {
 
 #[derive(Deserialize)]
 struct StartBody {
+    #[serde(default)]
     member: String,
+    /// Several members at once (instead of `member`).
+    #[serde(default)]
+    members: Vec<String>,
     lang: Option<String>,
-    /// `library` (default when the language has a topic library) or `news`.
+    /// `library` (default when the language has a topic library), `news`, or
+    /// `mix`: each day one topic from the news and the rest from the library.
     source: Option<String>,
     #[serde(default = "three")]
     days: u32,
@@ -95,7 +109,13 @@ async fn start(State(s): State<Shared>, Json(b): Json<StartBody>) -> R<Value> {
     if !(1..=7).contains(&b.days) || !(1..=4).contains(&b.choices) {
         return Err(bad("一次備 1 到 7 天、每天 1 到 4 堂"));
     }
-    // Only an admin prepares lessons, for someone else in the workspace.
+    let mut members: Vec<String> = if b.members.is_empty() { vec![b.member.clone()] } else { b.members.clone() };
+    members.retain(|m| !m.trim().is_empty());
+    members.dedup();
+    if members.is_empty() {
+        return Err(bad("要替誰備課？"));
+    }
+    // Only an admin prepares lessons (for the others, or for their own iPad).
     {
         let l = crate::api::ws(&s).await?;
         let root = s.root.read().await;
@@ -103,20 +123,31 @@ async fn start(State(s): State<Shared>, Json(b): Json<StartBody>) -> R<Value> {
         if !open.root.is_admin(&l.ws.profile.id) {
             return Err(bad("只有管理員可以替家人備課"));
         }
-        if b.member == l.ws.profile.id {
-            return Err(bad("這是替家人備課；自己的課在今日頁開始"));
+        for m in &members {
+            open.root.user(m).map_err(|_| bad(format!("找不到使用者 {m}")))?;
         }
-        open.root.user(&b.member).map_err(|_| bad(format!("找不到使用者 {}", b.member)))?;
     }
     if current(&s).is_some_and(|p| p.running) {
         return Err(bad("已經在備課了，等這一批做完"));
     }
-    set(&s, Progress { running: true, member: b.member.clone(), lang: lang.code().into(), total: (b.days * b.choices) as usize, ..Default::default() });
+    let per = (b.days * b.choices) as usize;
+    set(&s, Progress { running: true, member: members[0].clone(), members: members.clone(), lang: lang.code().into(), total: per * members.len(), ..Default::default() });
     let s2 = s.clone();
     tokio::spawn(async move {
-        if let Err(e) = run(&s2, &b.member, lang, b.days, b.choices, b.source.as_deref()).await {
-            update(&s2, |p| p.errors.push(e.1));
+        for (i, m) in members.iter().enumerate() {
+            // The members still to come count towards the total.
+            update(&s2, |p| {
+                p.member = m.clone();
+                p.rest = per * (members.len() - i - 1);
+            });
+            if let Err(e) = run(&s2, m, lang, b.days, b.choices, b.source.as_deref()).await {
+                update(&s2, |p| p.errors.push(if members.len() > 1 { format!("{m}：{}", e.1) } else { e.1 }));
+            }
         }
+        // The active user's own files may have changed (their own iPad lessons).
+        crate::api::reload_active(&s2).await;
+        // The iPad also shows everyone's points.
+        crate::buddies::write_ipad_files(&s2).await;
         update(&s2, |p| {
             p.running = false;
             p.current.clear();
@@ -150,10 +181,22 @@ async fn run(s: &Shared, member: &str, lang: Lang, days: u32, choices: u32, sour
     index["realtime_model"] = json!(s.settings.read().await.realtime.model.clone());
     index["realtime_effort"] = json!(s.settings.read().await.realtime.effort.clone());
     // The topic library first, when the language has one (and it was not turned off).
+    let mut choices = choices;
     if source != Some("news")
         && let Some(coll) = crate::library::collection_for(&m.ws.root, lang)
     {
-        return run_library(s, &m, lang, days, choices, &coll, index).await;
+        if source != Some("mix") || choices < 2 {
+            return run_library(s, &m, lang, days, choices, &coll, index).await;
+        }
+        // Mixed: the library fills all but one topic a day; a used-up library
+        // is not an error here, the news takes the whole day.
+        update(s, |p| p.rest += days as usize); // the news topics still to come
+        let lib = run_library(s, &m, lang, days, choices - 1, &coll, index).await;
+        update(s, |p| p.rest = p.rest.saturating_sub(days as usize));
+        if lib.is_ok() {
+            choices = 1;
+        }
+        index = load_index(&m);
     }
     let mut shown: Vec<String> = index["days"].as_object().map(|d| d.values().flat_map(|v| v.as_array().cloned().unwrap_or_default()).filter_map(|x| x["title"].as_str().map(str::to_string)).collect()).unwrap_or_default();
     let (parts, focus, t) = crate::today::card_inputs(&m, lang);
@@ -165,7 +208,8 @@ async fn run(s: &Shared, member: &str, lang: Lang, days: u32, choices: u32, sour
         let more = crate::today::ask_cards(s, lang, parts, focus.as_ref(), &t, &heads, &shown, want - cards.len(), want - cards.len()).await.unwrap_or_default();
         cards.extend(more);
     }
-    update(s, |p| p.total = cards.len().min(want));
+    let n = cards.len().min(want);
+    update(s, |p| p.total = p.done + n + p.rest);
     let provider = crate::provider(s).await?;
     for (i, card) in cards.into_iter().take(want).enumerate() {
         let date = day(i as u32 / choices);
@@ -309,7 +353,8 @@ async fn run_library(s: &Shared, m: &Loaded, lang: Lang, days: u32, choices: u32
     if picked.is_empty() {
         return Err(bad("主題庫裡沒有還沒用過的課了：先在主題庫「寫更多課」"));
     }
-    update(s, |p| p.total = picked.len());
+    let n = picked.len();
+    update(s, |p| p.total = p.done + n + p.rest);
     let provider = crate::provider(s).await?;
     for (i, (t, l)) in picked.into_iter().enumerate() {
         let date = day(i as u32 / choices);

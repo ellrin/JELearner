@@ -364,6 +364,43 @@ pub fn streak(days: &[NaiveDate], today: NaiveDate) -> u32 {
     n
 }
 
+/// What study buddies see of each other (plan §16): points today and this
+/// week, the streak and the last seven days, straight from a member's
+/// `records/points/` files — no database needed, so it works for members
+/// who study on another device.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct BuddyStats {
+    pub today: f64,
+    /// The last seven days, today included.
+    pub week: f64,
+    pub total: f64,
+    pub streak: u32,
+    /// Points per day for the last seven days, oldest first (today last).
+    pub days: Vec<f64>,
+    /// The last day anything was practised (`YYYY-MM-DD`).
+    pub last_day: Option<String>,
+}
+
+pub fn buddy_stats(recs: &[PointRecord], today: NaiveDate) -> BuddyStats {
+    let mut per: std::collections::BTreeMap<NaiveDate, f64> = std::collections::BTreeMap::new();
+    for r in recs {
+        if let Some(d) = r.day() {
+            *per.entry(d).or_default() += r.points;
+        }
+    }
+    let days: Vec<f64> = (0..7).rev().map(|back| per.get(&(today - chrono::Days::new(back))).copied().unwrap_or(0.0)).collect();
+    let active: Vec<NaiveDate> = per.keys().rev().copied().collect();
+    let round = |x: f64| (x * 100.0).round() / 100.0;
+    BuddyStats {
+        today: round(*days.last().unwrap_or(&0.0)),
+        week: round(days.iter().sum()),
+        total: round(per.values().sum()),
+        streak: streak(&active, today),
+        days: days.into_iter().map(round).collect(),
+        last_day: active.first().map(|d| d.format("%Y-%m-%d").to_string()),
+    }
+}
+
 /// Scores of the most recent scored units, newest first (only `kinds` when
 /// given, only after `since` when given).
 pub async fn recent_scores(db: &Db, lang: Lang, limit: usize, kinds: Option<&[&str]>, since: Option<DateTime<Utc>>) -> DbResult<Vec<f64>> {
@@ -407,6 +444,29 @@ mod tests {
 
     fn rules() -> PointRules {
         Rules::bundled().points
+    }
+
+    #[test]
+    fn buddy_stats_from_records() {
+        let rec = |time: &str, points: f64| PointRecord { time: time.into(), lang: Lang::En, unit: "review".into(), skill: Skill::Vocab, points, score: Some(1.0), detail: String::new() };
+        let today = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+        let recs = vec![
+            rec("2026-11-10T09:00:00+08:00", 1.5),
+            rec("2026-11-10T21:00:00+08:00", 1.0),
+            rec("2026-11-09T08:00:00+08:00", 2.0),
+            rec("2026-11-07T08:00:00+08:00", 1.0),
+            rec("2026-10-01T08:00:00+08:00", 4.0),
+        ];
+        let b = buddy_stats(&recs, today);
+        assert_eq!(b.today, 2.5);
+        assert_eq!(b.week, 5.5, "the last seven days only");
+        assert_eq!(b.total, 9.5);
+        assert_eq!(b.streak, 2, "the 8th was missed");
+        assert_eq!(b.days, vec![0.0, 0.0, 0.0, 1.0, 0.0, 2.0, 2.5]);
+        assert_eq!(b.last_day.as_deref(), Some("2026-11-10"));
+        let none = buddy_stats(&[], today);
+        assert_eq!((none.today, none.streak, none.last_day.clone()), (0.0, 0, None));
+        assert_eq!(none.days.len(), 7);
     }
 
     #[test]

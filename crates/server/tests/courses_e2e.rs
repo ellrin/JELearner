@@ -1012,7 +1012,7 @@ async fn admin_prepares_lessons_for_a_member() {
     // As the member: not allowed.
     assert_eq!(c.post("/api/family/prepare", json!({"member": admin, "lang": "en"})).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(c.post("/api/users/select", json!({"id": admin})).await.0, StatusCode::OK);
-    assert_eq!(c.post("/api/family/prepare", json!({"member": admin, "lang": "en"})).await.0, StatusCode::BAD_REQUEST, "not for oneself");
+    assert_eq!(c.post("/api/family/prepare", json!({"member": "nobody", "lang": "en"})).await.0, StatusCode::BAD_REQUEST, "an unknown member");
     assert_eq!(c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 9})).await.0, StatusCode::BAD_REQUEST);
 
     let (st, r) = c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 2, "choices": 2})).await;
@@ -1112,6 +1112,37 @@ async fn admin_prepares_lessons_for_a_member() {
     let (_, again) = c.post("/api/family/inbox", json!({})).await;
     let ap2 = again["applied"].as_array().unwrap().iter().find(|x| x["member"] == member.as_str()).cloned().unwrap();
     assert_eq!(ap2["points"], 0.0, "already counted: {ap2}");
+    // Both at once, the admin's own iPad included: one more lesson each, at each one's level.
+    let (st, r) = c.post("/api/family/prepare", json!({"members": [member, admin], "lang": "en", "days": 1, "choices": 1})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let mut p = Value::Null;
+    for _ in 0..200 {
+        p = c.get("/api/family/prepare").await.1["progress"].clone();
+        if p["running"] == false {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!((p["running"].as_bool(), p["done"].as_u64(), p["errors"].as_array().map(|e| e.len())), (Some(false), Some(2), Some(0)), "{p}");
+    assert_eq!(p["members"], json!([member, admin]));
+    let own = ws_path.join("profiles").join(&admin).join("ipad");
+    let mine: Value = serde_json::from_str(&std::fs::read_to_string(own.join("index.json")).unwrap()).unwrap();
+    let entry = mine["days"].as_object().unwrap().values().next().unwrap()[0].clone();
+    let pkg: Value = serde_json::from_str(&std::fs::read_to_string(own.join(entry["file"].as_str().unwrap().trim_start_matches("ipad/"))).unwrap()).unwrap();
+    assert_eq!(pkg["member"], admin.as_str());
+    assert!(own.join("buddies.json").is_file() && dir.join("buddies.json").is_file(), "both iPads show the buddies");
+    // The admin's own iPad results are applied too, and the open workspace sees them.
+    std::fs::create_dir_all(own.join("inbox")).unwrap();
+    let reading = pkg["plan"]["units"].as_array().unwrap().iter().find(|u| u["kind"] == "reading").unwrap()["index"].clone();
+    let qs = pkg["data"]["questions"].as_array().map(|q| q.len()).unwrap_or(1);
+    let answers: Vec<Value> = (0..qs).map(|k| json!({ "index": k, "answer": "x", "correct": true })).collect();
+    let mine_result = json!({ "version": 1, "id": "m1", "member": admin, "results": [{ "type": "unit", "course": pkg["course"], "lesson": pkg["lesson"], "unit": reading, "answers": answers }] });
+    std::fs::write(own.join("inbox/2026-11-08T0200-m1.json"), mine_result.to_string()).unwrap();
+    let (_, a) = c.post("/api/family/inbox", json!({})).await;
+    let ap = a["applied"].as_array().unwrap().iter().find(|x| x["member"] == admin.as_str()).cloned().unwrap();
+    assert!(ap["points"].as_f64().unwrap() > 0.0, "{ap}");
+    let (_, today) = c.get("/api/today?lang=en").await;
+    assert!(today["summary"]["total"].as_f64().unwrap() > 0.0, "{today}");
     // Only an admin applies results.
     assert_eq!(c.post("/api/users/select", json!({"id": member})).await.0, StatusCode::OK);
     assert_eq!(c.post("/api/family/inbox", json!({})).await.0, StatusCode::BAD_REQUEST);
@@ -1312,4 +1343,57 @@ async fn admin_prepares_library_lessons_for_a_member() {
     c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 1, "choices": 1, "source": "news"})).await;
     let _ = wait().await;
     assert!(calls.lock().unwrap().iter().filter(|b| b["output_config"]["format"]["schema"]["properties"]["cards"].is_object()).count() > n_cards, "news topic cards when asked");
+}
+
+/// Study buddies: the members of a workspace see each other's points, read
+/// from the files they sync; the admin also sees how far a member's iPad
+/// lessons are prepared, and the iPad gets the same cards as a file.
+#[tokio::test]
+async fn buddies_see_each_other() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, _calls) = setup(app_dir.path(), &ws_path).await;
+    let (_, me) = c.get("/api/status").await;
+    let admin = me["user"]["id"].as_str().unwrap().to_string();
+    let (st, r) = c.post("/api/users", json!({ "name": "daidai", "languages": ["en"], "majors": { "en": "A2" } })).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let member = r["user"]["id"].as_str().unwrap().to_string();
+    // What her device synced: today and yesterday.
+    let today = chrono::Local::now().date_naive();
+    let dir = ws_path.join("profiles").join(&member).join("records").join("points");
+    std::fs::create_dir_all(&dir).unwrap();
+    for (d, pts) in [(today, "1.5"), (today.pred_opt().unwrap(), "1")] {
+        std::fs::write(dir.join(format!("{d}.csv")), format!("time,lang,unit,skill,points,score,detail\n{d}T09:00:00+08:00,en,review,vocab,{pts},1,x#0\n")).unwrap();
+    }
+    // As the member: both cards, hers marked, nothing about preparing.
+    let (st, r) = c.get("/api/buddies").await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let list = r["buddies"].as_array().unwrap();
+    assert_eq!(list.len(), 2, "{r}");
+    assert_eq!(r["admin"], false);
+    let hers = list.iter().find(|b| b["id"] == member.as_str()).unwrap();
+    assert_eq!((hers["me"].as_bool(), hers["today"].as_f64(), hers["week"].as_f64(), hers["streak"].as_u64()), (Some(true), Some(1.5), Some(2.5), Some(2)), "{hers}");
+    assert_eq!(hers["levels"]["en"], "A2-1");
+    assert_eq!(hers["days"].as_array().unwrap().len(), 7);
+    assert!(list.iter().all(|b| b.get("prepared").is_none()), "{r}");
+    // As the admin: her lessons on the iPad run out today.
+    assert_eq!(c.post("/api/users/select", json!({"id": admin})).await.0, StatusCode::OK);
+    let ipad = ws_path.join("profiles").join(&member).join("ipad");
+    std::fs::create_dir_all(&ipad).unwrap();
+    std::fs::write(ipad.join("index.json"), json!({ "version": 1, "days": { today.to_string(): [{ "title": "a" }], "2020-01-01": [{ "title": "old" }] } }).to_string()).unwrap();
+    let (_, r) = c.get("/api/buddies").await;
+    assert_eq!(r["admin"], true);
+    let hers = r["buddies"].as_array().unwrap().iter().find(|b| b["id"] == member.as_str()).unwrap().clone();
+    assert_eq!(hers["me"], false);
+    assert_eq!(hers["prepared"], json!({ "until": today.to_string(), "days": 1 }), "{hers}");
+    assert_eq!(r["buddies"].as_array().unwrap().iter().find(|b| b["id"] == admin.as_str()).unwrap()["today"], 0.0);
+    // Collecting answers also writes the cards for her iPad (only hers: the admin has no iPad folder).
+    assert_eq!(c.post("/api/family/inbox", json!({})).await.0, StatusCode::OK);
+    let file: Value = serde_json::from_str(&std::fs::read_to_string(ipad.join("buddies.json")).unwrap()).unwrap();
+    assert_eq!(file["as_of"], today.to_string());
+    let hers = file["buddies"].as_array().unwrap().iter().find(|b| b["id"] == member.as_str()).unwrap();
+    assert_eq!((hers["me"].as_bool(), hers["today"].as_f64()), (Some(true), Some(1.5)), "{file}");
+    assert!(hers.get("prepared").is_none());
+    assert!(!ws_path.join("profiles").join(&admin).join("ipad").exists());
 }

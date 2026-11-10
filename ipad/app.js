@@ -23,7 +23,7 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch { /* nothing */ } },
 };
 let cfg = store.get("jl.cfg");
-const st = Object.assign({ picked: {}, done: {}, queue: [], convs: {} }, store.get("jl.state", {}));
+const st = Object.assign({ picked: {}, done: {}, queue: [], convs: {}, steps: {} }, store.get("jl.state", {}));
 const save = () => store.set("jl.state", st);
 
 // ── small helpers ───────────────────────────────────────
@@ -105,6 +105,8 @@ async function sync() {
     }
     const index = await readJson("ipad/index.json");
     store.set("jl.index", index);
+    // Everyone's points, worked out on the admin's computer (the buddies strip).
+    try { store.set("jl.buddies", await readJson("ipad/buddies.json")); } catch { /* not written yet */ }
     // Today's and the coming days' lessons, kept here for offline use.
     for (const [d, list] of Object.entries(index.days ?? {})) {
       if (d < today()) continue;
@@ -254,10 +256,56 @@ function drawSettings(box) {
   box.append(el("p", "note", "鑰匙只存在這台 iPad 的瀏覽器裡。"));
 }
 
+// ── study buddies: everyone's points, from the admin's computer ──
+const fmtPts = (p) => String(Math.round((p ?? 0) * 10) / 10);
+function buddyStrip() {
+  const data = store.get("jl.buddies");
+  const list = data?.buddies ?? [];
+  if (list.length < 2) return null;
+  const fresh = data.as_of === today();
+  const now = new Date();
+  // The numbers are as of `as_of`: shift the seven days to end today.
+  const g = Math.round((new Date(today()) - new Date(data.as_of)) / 86400000);
+  const gap = Number.isFinite(g) ? Math.min(7, Math.max(0, g)) : 7;
+  const box = el("section", "buddies");
+  box.setAttribute("aria-label", "學習戰友");
+  for (const b of list) {
+    const days = [...(b.days ?? []).slice(gap), ...new Array(Math.min(gap, 7)).fill(0)].slice(-7);
+    let mine = fresh ? b.today : 0;
+    // Her own steps today that the computer has not counted yet (about a point each).
+    if (b.me) { mine = Math.max(mine, st.steps?.[today()] ?? 0); days[6] = Math.max(days[6] ?? 0, mine); }
+    // The streak as the seven days show it (the file's longer count when all seven are lit).
+    let run = 0, i = days[6] > 0 ? 6 : 5;
+    while (i >= 0 && days[i] > 0) { run += 1; i -= 1; }
+    const streak = i < 0 ? Math.max(run, b.streak) : run;
+    const card = el("div", `buddy${b.me ? " me" : ""}${mine >= b.goal ? " reached" : ""}`);
+    const av = el("span", "av", ([...b.name][0] ?? "").toUpperCase());
+    av.style.background = b.color;
+    const body = el("div", "bb");
+    const top = el("div", "bt");
+    top.append(el("b", null, b.me ? `${b.name}（你）` : b.name), el("span", "lv", Object.values(b.levels ?? {}).join("・")));
+    const nums = el("div", "bn");
+    nums.append(el("b", null, fmtPts(mine)), document.createTextNode(` / ${fmtPts(b.goal)} 今日　`), el("b", null, String(streak)), document.createTextNode(" 天連續"));
+    const dots = el("div", "bd");
+    days.forEach((p, i) => {
+      const dt = new Date(now); dt.setDate(now.getDate() - (6 - i));
+      dots.append(el("i", `${p > 0 ? "on" : ""}${i === 6 ? " today" : ""}`, "日一二三四五六"[dt.getDay()]));
+    });
+    dots.setAttribute("role", "img");
+    dots.setAttribute("aria-label", `近 7 天有 ${days.filter((p) => p > 0).length} 天練習`);
+    body.append(top, nums, dots);
+    card.append(av, body);
+    box.append(card);
+  }
+  return box;
+}
+
 // ── today: choose one of the prepared lessons ──────────
 function drawHome(box) {
   const index = store.get("jl.index");
   const d = today();
+  const strip = index ? buddyStrip() : null;
+  if (strip) box.append(strip);
   const list = index?.days?.[d] ?? [];
   if (!index) {
     if (!syncError) { box.append(el("p", "muted", "正在拿今天的課…")); return; }
@@ -344,7 +392,11 @@ function openLesson(file) {
 function finishUnit(pkg, u, result) {
   queue({ type: "unit", course: pkg.course, lesson: pkg.lesson, unit: u.index, ...result });
   const d = doneOf(keyOf(pkg));
-  if (!d.includes(u.index)) d.push(u.index);
+  if (!d.includes(u.index)) {
+    d.push(u.index);
+    // Steps finished today, shown on the buddies strip until the computer has counted them.
+    st.steps = { [today()]: (st.steps?.[today()] ?? 0) + 1 };
+  }
   save();
 }
 function nextRow(pkg, u) {

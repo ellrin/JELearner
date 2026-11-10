@@ -23,6 +23,8 @@ async function renderCourses(page) {
   const add = primaryButton("新課程", () => { state.courseCreate = "pick"; render(); }, true);
   add.prepend(icon("plus"));
   viewbar(`課程・${langLabel(state.lang)}`, list.length || null, ...(list.length ? [add] : []));
+  const weekly = await weeklyBar();
+  if (weekly) page.append(weekly);
   if (!list.length) {
     page.append(createPicker());
     return;
@@ -37,6 +39,96 @@ async function renderCourses(page) {
     n.title = data.skipped.join("\n");
     page.append(n);
   }
+}
+
+// ── this week's lessons, for everyone, in one press ────
+// The admin's weekly job: fresh news plus the library's unused lessons, a
+// week of lessons for every member at their own level, then synced to the
+// shared repository so the iPads find them.
+const WEEK = { days: 7, choices: 2 };
+let weeklyTimer = null;
+let weeklyMine = false;
+async function weeklyBar() {
+  const st = state.status;
+  const admin = !!(st?.users ?? []).find((x) => x.id === st?.user?.id)?.admin;
+  if (!admin || st.demo || st.family?.ready || (st.users ?? []).length < 2) return null;
+  const data = await fetchBuddies();
+  const members = (data.buddies ?? []).filter((b) => b.levels?.[state.lang]);
+  if (members.length < 2) return null;
+  const bar = el("section", "weekly");
+  bar.setAttribute("aria-label", "本週的課");
+  const info = el("div", "wk-info");
+  info.append(el("b", null, "本週的課"));
+  const who = el("div", "wk-who");
+  for (const b of members) {
+    const left = b.prepared?.days ?? 0;
+    const chip = el("span", `wk-m${left <= 1 ? " low" : ""}`);
+    const dot = el("span", "dot"); setAvatar(dot, b);
+    chip.append(dot, document.createTextNode(`${b.name}・${left ? `到 ${fmtDate(b.prepared.until)}` : "還沒有"}`));
+    who.append(chip);
+  }
+  info.append(who);
+  const go1 = primaryButton("派本週的課", null, true);
+  const help = el("button", "help", "?");
+  help.setAttribute("aria-label", "說明：派本週的課");
+  help.dataset.tip = `抓最新新聞，加上主題庫還沒上過的課，替每個人依各自的程度做好 ${WEEK.days} 天的課（每天 ${WEEK.choices} 個主題可選），做完自動同步，iPad 打開就看得到。每堂課要一兩分鐘，可以先去做別的事。想自己選天數或對象：設定 › 使用者 › 備課。`;
+  const out = el("div", "wk-out");
+  out.setAttribute("role", "status");
+  bar.append(info, go1, help, out);
+  const finish = async (p) => {
+    out.innerHTML = "";
+    go1.disabled = false; go1.textContent = "派本週的課";
+    for (const e of p.errors ?? []) out.append(el("div", "note err", e));
+    if (!p.done) { if (!(p.errors ?? []).length) out.append(el("div", "note", "沒有做出新的課：主題都備過了。")); return; }
+    if (!weeklyMine) { out.append(el("div", "note ok", `上次做好 ${p.done} 堂。`)); return; }
+    weeklyMine = false;
+    out.append(el("div", "note", `做好 ${p.done} 堂，同步中…`));
+    try {
+      await api("/api/records/export", {});
+      const r = await api("/api/git/sync", {});
+      out.innerHTML = "";
+      out.append(el("div", "note ok", r.pushed ? `做好 ${p.done} 堂，已經送出。` : `做好 ${p.done} 堂。這個工作區還沒有連到 repo，連上後按同步。`));
+    } catch (e) {
+      out.innerHTML = "";
+      out.append(el("div", "note err", `做好 ${p.done} 堂，但同步沒有成功：${e.message}`));
+    }
+    buddyCache = null;
+    paintFoot(state.status);
+  };
+  const poll = async () => {
+    if (!bar.isConnected) { clearInterval(weeklyTimer); weeklyTimer = null; return; }
+    try {
+      const p = (await api("/api/family/prepare")).progress;
+      if (!p) return;
+      if (p.running) {
+        go1.disabled = true; go1.textContent = "備課中…";
+        out.innerHTML = "";
+        const pr = el("progress"); pr.max = Math.max(1, p.total); if (p.done) pr.value = p.done;
+        pr.setAttribute("aria-label", "備課進度");
+        const name = members.find((b) => b.id === p.member)?.name ?? p.member;
+        out.append(pr, el("div", "note", `${p.done} / ${p.total} 堂・${name}${p.current ? `・${p.current}` : ""}`));
+        if (!weeklyTimer) weeklyTimer = setInterval(poll, 3000);
+      } else if (weeklyTimer || weeklyMine) {
+        clearInterval(weeklyTimer); weeklyTimer = null;
+        await finish(p);
+      }
+    } catch { /* next tick */ }
+  };
+  go1.onclick = () => busy(go1, async () => {
+    if (!state.status?.engine_ready) { openSettings(3); return; }
+    try {
+      // Fresh news first (robots.txt and the per-site delay apply); old news will do when it fails.
+      go1.textContent = "抓新聞…";
+      await api(`/api/news?lang=${state.lang}&refresh=true`).catch(() => {});
+      await api("/api/family/prepare", { members: members.map((b) => b.id), lang: state.lang, days: WEEK.days, choices: WEEK.choices, source: "mix" });
+      weeklyMine = true;
+      clearInterval(weeklyTimer); weeklyTimer = setInterval(poll, 3000);
+      poll();
+    } catch (e) { go1.textContent = "派本週的課"; out.innerHTML = ""; out.append(el("div", "note err", e.message)); }
+  });
+  // Coming back to the page: a run in progress shows itself (and is finished here).
+  setTimeout(poll, 0);
+  return bar;
 }
 
 function kindTag(kind, label) {
@@ -580,6 +672,15 @@ function stepReview(box, o, u) {
   box.append(bar);
   const stage = el("div", "card");
   box.append(stage);
+  // The cards sit under the word list: one button takes the learner there.
+  if (box.querySelector(".words-first")) {
+    const jump = primaryButton(`練卡片（${cards.length} 張）`, () => {
+      stage.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      stage.querySelector(".grades button")?.focus({ preventScroll: true });
+    }, true);
+    jump.classList.add("jump");
+    help.before(jump);
+  }
   let i = 0, shown = false, good = 0, award = null, round = null;
   const draw = () => {
     stage.innerHTML = "";
@@ -587,6 +688,7 @@ function stepReview(box, o, u) {
     $("i", bar).style.width = `${(i / cards.length) * 100}%`;
     if (i >= cards.length) {
       stage.remove();
+      $(".jump", head)?.remove();
       if (o.standalone) {
         // Points come from full review rounds (A stage rules).
         box.append(quickReviewDone(cards.length, award, award ? null : round));

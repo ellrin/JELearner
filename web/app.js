@@ -339,7 +339,8 @@ async function greet() {
     const notMade = task?.daily && t.daily;
     const nextLine = notMade ? "按「開始今天的課」，挑一個今天想學的主題。" : task ? (task.id === "mistakes" ? `還有 ${task.open} 題錯題，訂正一下吧。` : `${reached ? "想多練可以繼續" : "繼續今天的課"}：${taskName(task)}。`) : "";
     if (reached) return say(`${name}今天的目標達成了！${nextLine || "想多練可以再來一段對話。"}`);
-    if (task) return say(`${name}${nextLine}`);
+    const nudge = await buddyNudge(t.summary?.today ?? 0);
+    if (task) return say(`${name}${nudge}${nextLine}`);
   } catch { /* fall back to the numbers below */ }
   const parts = [];
   if (st.due) parts.push(`${st.due} 張${langLabel(state.lang)}卡片要複習`);
@@ -567,10 +568,24 @@ async function render() {
 // ── news ───────────────────────────────────────────────
 async function renderNews(page, refresh = false) {
   const btn = ghostButton("refresh", "抓最新新聞", async () => {
+    if (state.newsBusy) return;
     await busy(btn, async () => { page.innerHTML = ""; await renderNews(page, true); });
   });
   viewbar(`新聞・${langLabel(state.lang)}`, null, btn);
-  const data = await api(`/api/news?lang=${state.lang}${refresh ? "&refresh=true" : ""}`);
+  let wait = null;
+  btn.disabled = refresh;
+  state.newsBusy = refresh;
+  if (refresh) {
+    wait = el("div", "lesson-wait");
+    const sk = el("div", "skeleton");
+    for (let i = 0; i < 4; i++) sk.append(el("i"));
+    const n = el("div", "note", "正在抓最新新聞…");
+    n.setAttribute("role", "status");
+    wait.append(sk, n);
+    page.append(wait);
+  }
+  let data;
+  try { data = await api(`/api/news?lang=${state.lang}${refresh ? "&refresh=true" : ""}`); } finally { wait?.remove(); btn.disabled = false; state.newsBusy = false; }
   if (refresh) {
     if (data.errors?.length) flash(data.errors.join("；"), true);
     else flash(`取得 ${data.fetched} 則`);
@@ -834,13 +849,14 @@ function questionCard(lessonId, q, index, quiz, lang = state.lang) {
         showFeedback(r.correct, ta.value);
         if (r.correct === null) {
           // The learner judges a free answer against the model answer.
-          const ok = el("button", "ghost", "我答對了");
-          const no = el("button", "ghost", "我答錯了");
+          const ok = el("button", "ghost ok", "✓ 對了");
+          const no = el("button", "ghost no", "✗ 再加油");
           ok.onclick = () => { showFeedback(true, ta.value); ok.remove(); no.remove(); };
           no.onclick = async () => { await send(ta.value, false); showFeedback(false, ta.value); ok.remove(); no.remove(); refreshStatus(); };
           row.append(ok, no);
+          ok.focus({ preventScroll: true });
         }
-        check.disabled = true;
+        check.remove();
       } catch (e) { flash(e.message, true); }
     };
     row.append(check);
@@ -854,7 +870,7 @@ function questionCard(lessonId, q, index, quiz, lang = state.lang) {
 async function renderWords(page) {
   const list = await api(`/api/words?lang=${state.lang}&q=${encodeURIComponent(state.query)}`);
   viewbar(`生字・${langLabel(state.lang)}`, list.length, searchBox("搜尋單字、意思、標籤", () => render()));
-  const t = el("table", "grid");
+  const t = el("table", "grid words");
   t.innerHTML = "<thead><tr><th>單字</th><th>讀音</th><th>意思</th><th>例句</th><th>複習</th><th>來源</th><th></th></tr></thead>";
   const tb = el("tbody");
   tb.append(addRow(["term", "reading", "meaning", "example"], ["新單字", isJa() ? "よみ" : "/ipa/", "意思", "例句"], async (v) => {
@@ -868,7 +884,7 @@ async function renderWords(page) {
     const term = el("td", `term${ja}`, w.term);
     term.append(Speech.speakerButton(w.term, w.lang));
     tr.append(term, el("td", "mono", w.reading), el("td", null, w.meaning), el("td", ja.trim(), w.example),
-      el("td", "mono", w.reps ? `${fmtDue(w.due_at)}・${w.reps} 次` : fmtDue(w.due_at)), el("td", "src", w.source));
+      el("td", "mono", w.reps ? `${fmtDue(w.due_at)}・${w.reps} 次` : fmtDue(w.due_at)), sourceCell(w.source));
     const td = el("td");
     td.append(delButton(async () => {
       const r = await api(`/api/words/${w.id}`, undefined, "DELETE");
@@ -909,6 +925,15 @@ async function renderGrammar(page) {
   }
   t.append(tb);
   page.append(t);
+}
+
+/** 來源: 課 for a lesson's word, the list's name for an imported one; the path in the tooltip. */
+function sourceCell(source) {
+  const s = String(source ?? "");
+  const file = s.split("/").pop().replace(/\.(csv|md|json)$/i, "");
+  const td = el("td", "src", /\/lessons\//.test(s) ? "課" : /\/materials\//.test(s) ? "素材" : file);
+  td.title = s;
+  return td;
 }
 
 function addRow(fields, placeholders, onsave, cols) {
@@ -952,7 +977,12 @@ async function renderMistakes(page) {
   const list = await api(`/api/mistakes?lang=${state.lang}${state.showResolved ? "&all=true" : ""}`);
   const toggle = ghostButton("eye", state.showResolved ? "隱藏已訂正" : "顯示已訂正", () => { state.showResolved = !state.showResolved; render(); });
   viewbar(`錯題本・${langLabel(state.lang)}`, list.length, toggle);
-  if (!list.length) { page.append(el("div", "empty", "沒有錯題。")); return; }
+  if (!list.length) {
+    const e = el("div", "empty cta", state.showResolved ? "還沒有錯題" : "錯題都訂正了");
+    e.append(primaryButton("回到今日", () => go("today")));
+    page.append(e);
+    return;
+  }
   const ul = el("ul", "list");
   for (const m of list) {
     const li = el("li", "item");
@@ -973,8 +1003,9 @@ async function renderMistakes(page) {
       side.append(go);
     }
     if (!m.resolved_at) {
-      const ok = el("button", "ico"); ok.setAttribute("aria-label", "已訂正"); ok.append(icon("check"));
-      ok.onclick = async () => { await api(`/api/mistakes/${m.id}/resolve`, {}); await refreshStatus(); render(); };
+      const ok = el("button", "ghost small"); ok.append(icon("check"), document.createTextNode("懂了"));
+      ok.title = "標成已訂正";
+      ok.onclick = async () => { await api(`/api/mistakes/${m.id}/resolve`, {}); todayCache = null; await refreshStatus(); greet(); render(); };
       side.append(ok);
     }
     li.append(side);
@@ -1164,6 +1195,9 @@ $("#actSync").onclick = () => busy($("#actSync"), async () => {
     await api("/api/records/export", {});
     const r = await api("/api/git/sync", {});
     flash(r.committed ? `已同步：${r.committed}${r.pushed ? "（已推送）" : ""}` : r.pushed ? "已推送" : "沒有需要同步的修改");
+    todayCache = null;
+    await refreshStatus();
+    if (state.view === "today") render();
   } catch (e) { flash(e.message, true); }
 });
 
@@ -1295,9 +1329,9 @@ function loadUserStep() {
     li.append(dot, el("span", "n", m.name), el("span", "tag", m.kind === "owner" ? "擁有者" : "家庭成員"));
     if (m.admin) li.append(el("span", "tag acc", "管理員"));
     if (m.id === u?.id) li.append(el("span", "tag ok", "目前"));
-    else {
-      // The admin prepares a family member's lessons for their iPad (plan F5).
-      if (iAmAdmin) { const p = el("button", "ghost", "備課"); p.setAttribute("aria-label", `替 ${m.name} 備課`); p.onclick = () => openPrep(m); li.append(p); }
+    // The admin prepares lessons for the iPads (plan F5): a member's, or their own.
+    if (iAmAdmin) { const p = el("button", "ghost", "備課"); p.setAttribute("aria-label", `替 ${m.name} 備課`); p.onclick = () => openPrep(m); li.append(p); }
+    if (m.id !== u?.id) {
       const b = el("button", "ghost", "切換"); b.onclick = async () => { await switchUser(m.id); loadUserStep(); }; li.append(b);
     }
     ul.append(li);
@@ -1316,10 +1350,11 @@ function openPrep(m, watching = false) {
   box.innerHTML = "";
   box.dataset.member = m.id;
   const head = el("div", "seg-row");
-  head.append(el("b", null, `替 ${m.name} 備課（給 iPad）`));
+  const mine = m.id === state.status?.user?.id;
+  head.append(el("b", null, mine ? "替自己備課（給我的 iPad）" : `替 ${m.name} 備課（給 iPad）`));
   const help = el("button", "help", "?");
   help.setAttribute("aria-label", "說明：替家人備課");
-  help.dataset.tip = `用這台電腦的 Claude 替 ${m.name} 做好接下來幾天的課，每天幾個主題可以在 iPad 上挑。課存在 ${m.name} 的資料夾，按同步就會送到 iPad；在 iPad 上的作答也是同步時收回來、在這裡算分。備過的主題不會再出現。`;
+  help.dataset.tip = `用這台電腦的 Claude 做好接下來幾天的課，每天幾個主題可以在 iPad 上挑。課存在各自的資料夾，按同步就會送到 iPad；在 iPad 上的作答也是同步時收回來、在這裡算分。備過的主題不會再出現。一起備的人拿到同樣的主題，課文、單字數與題目依各自的程度。`;
   head.append(help);
   const close = el("button", "ghost", "收起");
   const backTo = () => [...$$("#setMembers button")].find((b) => b.getAttribute("aria-label") === `替 ${m.name} 備課`);
@@ -1336,6 +1371,25 @@ function openPrep(m, watching = false) {
     form.append(l);
     return s;
   };
+  // Who gets these lessons: this member, and anyone else ticked (the same
+  // topics, each at their own level).
+  const others = (state.status?.users ?? []).filter((x) => x.id !== m.id);
+  const also = [];
+  if (others.length) {
+    const who = el("div", "prep-who");
+    who.append(el("span", null, "一起備給"));
+    for (const o of others) {
+      const l = el("label", "check");
+      const c = el("input"); c.type = "checkbox"; c.value = o.id;
+      c.checked = store.get("jl.prepAlso", []).includes(o.id);
+      l.append(c, el("span", null, o.id === state.status?.user?.id ? `${o.name}（我的 iPad）` : o.name));
+      who.append(l);
+      also.push(c);
+    }
+    box.append(who);
+  }
+  const picked = () => [m.id, ...also.filter((c) => c.checked).map((c) => c.value)];
+  const nameOf = (id) => (state.status?.users ?? []).find((x) => x.id === id)?.name ?? id;
   const lang = sel("語言", [["en", "英文"], ["ja", "日文"]], state.lang);
   const days = sel("天數", [1, 2, 3, 5, 7].map((d) => [String(d), `${d} 天`]), "3");
   const choices = sel("每天可選", [1, 2, 3, 4].map((c) => [String(c), `${c} 個主題`]), "3");
@@ -1363,6 +1417,7 @@ function openPrep(m, watching = false) {
   box.append(row);
   const out = el("div", "prep-out");
   box.append(out);
+  box.append(ipadSetup(m));
   let startedHere = false;
   let lastKey = "";
   /** One line, plus a button that does the next thing when there is one. */
@@ -1387,8 +1442,9 @@ function openPrep(m, watching = false) {
     go.disabled = false;
     go.textContent = "開始備課";
     if (!p) return;
-    if (p.running && p.member !== m.id) {
-      out.append(say("", `正在替 ${p.member} 備課，做完才能開始下一位。`));
+    const inRun = (p.members?.length ? p.members : [p.member]).includes(m.id);
+    if (p.running && !inRun) {
+      out.append(say("", `正在替 ${nameOf(p.member)} 備課，做完才能開始下一位。`));
       go.disabled = true;
       return;
     }
@@ -1399,16 +1455,17 @@ function openPrep(m, watching = false) {
       bar.max = Math.max(1, p.total);
       if (p.done > 0) bar.value = p.done; // empty: the moving bar while topics are chosen
       bar.setAttribute("aria-label", "備課進度");
-      out.append(bar, el("div", "note", `${p.done} / ${p.total} 堂${p.current ? `・正在做「${p.current}」` : "・正在挑主題"}`));
+      const whom = (p.members?.length ?? 0) > 1 ? `${nameOf(p.member)}・` : "";
+      out.append(bar, el("div", "note", `${p.done} / ${p.total} 堂・${whom}${p.current ? `正在做「${p.current}」` : "正在挑主題"}`));
       for (const e of p.errors ?? []) out.append(errLine(e));
       return;
     }
-    if (p.member !== m.id) return;
+    if (!inRun) return;
     const prefix = startedHere ? "" : "上次：";
     const status = el("div");
     status.setAttribute("role", "status");
     if (p.done) {
-      status.append(say("ok", `${prefix}做好 ${p.done} 堂。按同步就會送到 ${m.name} 的 iPad。`));
+      status.append(say("ok", `${prefix}做好 ${p.done} 堂。按同步就會送到 iPad。`, { icon: "cloud", label: "同步", onclick: () => $("#actSync").click() }));
       if (p.done < p.total) status.append(say("", `比預定的 ${p.total} 堂少：想不出更多沒備過的主題。可以設定重點主題，或過幾天再備。`));
     } else if (!(p.errors ?? []).length) {
       status.append(say("", `${prefix}這次沒有做出課：想不出沒備過的主題。可以設定重點主題，或過幾天再備。`));
@@ -1436,7 +1493,8 @@ function openPrep(m, watching = false) {
     }
     try {
       startedHere = true;
-      await api("/api/family/prepare", { member: m.id, lang: lang.value, days: Number(days.value), choices: Number(choices.value), source: source.value });
+      store.set("jl.prepAlso", also.filter((c) => c.checked).map((c) => c.value));
+      await api("/api/family/prepare", { members: picked(), lang: lang.value, days: Number(days.value), choices: Number(choices.value), source: source.value });
       watch();
     } catch (e) { lastKey = ""; out.innerHTML = ""; out.append(errLine(e.message)); }
   });
@@ -1448,7 +1506,8 @@ function openPrep(m, watching = false) {
       out.innerHTML = "";
       const st = el("div");
       st.setAttribute("role", "status");
-      st.append(say("ok", a?.files ? `收回 ${a.files} 份作答：${a.units} 個單元、${a.conversations} 段對話，共 ${Math.round(a.points * 10) / 10} 分。` : `目前沒有新的作答。先按同步，把 ${m.name} 的 iPad 送來的作答拉下來。`));
+      st.append(say("ok", a?.files ? `收回 ${a.files} 份作答：${a.units} 個單元、${a.conversations} 段對話，共 ${Math.round(a.points * 10) / 10} 分。` : "目前沒有新的作答。先按同步，把 iPad 送來的作答拉下來。"));
+      todayCache = null; refreshStatus();
       out.append(st);
       for (const e of a?.errors ?? []) out.append(errLine(e));
     } catch (e) { out.innerHTML = ""; out.append(errLine(e.message)); }
@@ -1457,6 +1516,57 @@ function openPrep(m, watching = false) {
   else poll();
   lang.focus();
 }
+/**
+ * The first time on a member's iPad: one link that carries the settings
+ * (repository, member, the two keys), made here in the browser and copied —
+ * nothing is stored or sent. Opened on the iPad, the app sets itself up.
+ */
+function ipadSetup(m) {
+  const d = el("details", "other-way ipad-setup");
+  d.append(el("summary", null, `第一次設定 ${m.name} 的 iPad`));
+  const form = el("div", "form");
+  const field = (label, type, ph, value = "") => {
+    const l = el("label");
+    const i = el("input");
+    i.type = type; i.placeholder = ph; i.value = value; i.autocomplete = type === "password" ? "new-password" : "off";
+    l.append(el("span", null, label), i);
+    form.append(l);
+    return i;
+  };
+  const app = field("iPad App 網址", "url", "https://你的帳號.github.io/JELearner/app/", store.get("jl.ipadApp", ""));
+  const repo = field("資料 repo", "text", "帳號/JELearner-private");
+  const token = field("GitHub 鑰匙", "password", "github_pat_…（只開這個 repo，Contents 可讀寫）");
+  const key = field("Claude API key", "password", "sk-ant-…（對話用，建議設每月上限）");
+  api("/api/git/status").then((g) => {
+    const mm = /github\.com[:/]([^/]+\/[^/]+?)(\.git)?$/.exec(g.remote ?? "");
+    if (mm && !repo.value) repo.value = mm[1];
+  }).catch(() => {});
+  const row = el("div", "actions-row");
+  const note = el("span", "note");
+  note.setAttribute("role", "status");
+  const copy = primaryButton("複製設定連結", async () => {
+    note.className = "note err";
+    const base = app.value.trim(), r = repo.value.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+    if (!/^https?:\/\//.test(base)) { note.textContent = "先填 iPad App 的網址"; app.focus(); return; }
+    if (!/^[\w.-]+\/[\w.-]+$/.test(r)) { note.textContent = "repo 寫成「帳號/名稱」"; repo.focus(); return; }
+    if (!token.value.trim()) { note.textContent = "還需要 GitHub 鑰匙"; token.focus(); return; }
+    store.set("jl.ipadApp", base);
+    const json = JSON.stringify({ repo: r, member: m.id, token: token.value.trim(), apiKey: key.value.trim() });
+    const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(json))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    try {
+      await navigator.clipboard.writeText(`${base.replace(/#.*$/, "")}#setup=${b64}`);
+      note.className = "note";
+      note.textContent = `已複製。用 AirDrop 或訊息傳到 ${m.name} 的 iPad，用 Safari 打開，再「加入主畫面」。`;
+    } catch { note.textContent = "無法複製，請允許剪貼簿"; }
+  }, true);
+  const help = el("button", "help", "?");
+  help.setAttribute("aria-label", "說明：iPad 設定連結");
+  help.dataset.tip = "連結裡有兩把鑰匙，只傳給那台 iPad，用完就把訊息刪掉。鑰匙只留在那台 iPad 的瀏覽器裡，這台電腦不保存。";
+  row.append(copy, help, note);
+  d.append(form, row);
+  return d;
+}
+
 $("#setSaveUser").onclick = () => busy($("#setSaveUser"), async () => {
   try {
     await api("/api/user", { name: $("#setName").value, color: $("#setColor").value, report_email: $("#setEmail").value }, "PUT");
@@ -1659,7 +1769,26 @@ refreshStatus().then(() => {
   render();
   checkStart();
   if (state.status?.family?.ready) familySync(); // bring in the admin's work on open
+  else quietPull();
 });
+
+// Not family mode: bring in what the others did (their points, an iPad's
+// answers) on open and now and then. Fast-forward only; nothing is said
+// when there is no remote or no network. Pushing stays with the sync button.
+async function quietPull() {
+  const s = state.status;
+  if (!s?.workspace || s.demo || s.family?.ready || (s.users ?? []).length < 2) return;
+  try {
+    const r = await api("/api/git/pull", {});
+    if (!r.pulled) return;
+    if ((s.users ?? []).find((u) => u.id === s.user?.id)?.admin) await api("/api/family/inbox", {}).catch(() => {});
+    todayCache = null;
+    await refreshStatus();
+    greet();
+    if (state.view === "today") render();
+  } catch { /* offline, or only on this computer */ }
+}
+setInterval(() => { if (document.visibilityState === "visible") quietPull(); }, 10 * 60 * 1000);
 
 // ── family mode (plan §19.2.5) ──────────────────────────
 // The member never sees Git: sync runs on open, ~15 s after a change, every

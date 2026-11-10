@@ -360,6 +360,103 @@ function squareImage(file, size, quality) {
   });
 }
 
+// ── study buddies ──────────────────────────────────────
+// The members of a shared workspace see each other's points (GET
+// /api/buddies, from the files everyone syncs). A strip on the today page:
+// today's ring, the last seven days, the streak; for the admin, how far a
+// member's iPad lessons are prepared and the way to prepare more.
+
+let buddyCache = null;
+function fetchBuddies(fresh = false) {
+  const key = state.status?.user?.id ?? "";
+  if (!fresh && buddyCache && buddyCache.key === key && Date.now() - buddyCache.at < 15000) return buddyCache.p;
+  const p = api("/api/buddies").then((r) => r, () => ({ buddies: [] }));
+  buddyCache = { key, at: Date.now(), p };
+  return p;
+}
+
+/** One friendly line for the secretary when a buddy is ahead today (or waiting). */
+async function buddyNudge(myToday) {
+  try {
+    const { buddies } = await fetchBuddies();
+    const others = buddies.filter((b) => !b.me).sort((a, b) => b.today - a.today);
+    const top = others[0];
+    if (!top) return "";
+    if (top.today > myToday) return `${top.name} 今天已經拿了 ${fmtPts(top.today)} 分，換你了！`;
+    if (myToday > 0 && top.today === 0 && top.streak > 0) return `你今天先開始了，${top.name} 還沒上課。`;
+  } catch { /* no line */ }
+  return "";
+}
+
+const WEEKDAY = ["日", "一", "二", "三", "四", "五", "六"];
+
+function buddyStrip(data) {
+  const list = data.buddies ?? [];
+  const box = el("section", "buddies");
+  box.setAttribute("aria-label", "學習戰友");
+  const lead = Math.max(...list.map((b) => b.week));
+  const leaders = list.filter((b) => b.week === lead && lead > 0);
+  for (const b of list) {
+    const reached = b.goal > 0 && b.today >= b.goal;
+    const card = el("div", `buddy${b.me ? " me" : ""}${reached ? " reached" : ""}`);
+    const av = el("span", "b-av");
+    setAvatar(av, b);
+    if (!b.avatar) av.textContent = ([...b.name][0] ?? "").toUpperCase();
+    const ring = levelRing(52, "", b.today / (b.goal || 1), null, reached);
+    ring.classList.add("b-ring");
+    ring.append(av);
+    ring.title = `今天 ${fmtPts(b.today)} / ${fmtPts(b.goal)} 分`;
+    const body = el("div", "b-body");
+    const top = el("div", "b-top");
+    const nm = el("b", null, b.me ? `${b.name}（你）` : b.name);
+    nm.title = b.name;
+    top.append(nm);
+    const lv = Object.entries(b.levels ?? {}).map(([, v]) => v).join("・");
+    if (lv) top.append(el("span", "b-lv", lv));
+    if (leaders.length === 1 && leaders[0] === b) { const t = el("span", "tag acc", "本週領先"); top.append(t); }
+    const nums = el("div", "b-nums");
+    const num = (v, k, cls) => { const n = el("span", cls); n.append(el("b", null, v), document.createTextNode(k)); return n; };
+    const st = num(String(b.streak), " 天", "st");
+    st.prepend(icon("flame"));
+    st.title = "連續天數";
+    nums.append(num(fmtPts(b.today), " 今日", "td"), num(fmtPts(b.week), " 本週"), st);
+    // The last seven days, today last: a filled dot for a day with practice.
+    const days = el("div", "b-days");
+    const now = new Date();
+    (b.days ?? []).forEach((p, i) => {
+      const d = new Date(now); d.setDate(now.getDate() - (6 - i));
+      const dot = el("i", `${p > 0 ? "on" : ""}${i === 6 ? " today" : ""}`, WEEKDAY[d.getDay()]);
+      dot.title = `${d.getMonth() + 1}/${d.getDate()}：${fmtPts(p)} 分`;
+      days.append(dot);
+    });
+    days.setAttribute("role", "img");
+    days.setAttribute("aria-label", `近 7 天有 ${(b.days ?? []).filter((p) => p > 0).length} 天練習`);
+    body.append(top, nums, days);
+    card.append(ring, body);
+    // The admin's weekly job: this member's iPad lessons, and when they run out.
+    if (data.admin && (!b.me || b.prepared)) {
+      const pr = b.prepared;
+      const left = pr?.days ?? 0;
+      const foot = el("div", `b-prep${left <= 1 ? " low" : ""}`);
+      foot.append(el("span", null, !pr ? "還沒備課" : left === 0 ? "備好的課上完了" : `課備到 ${fmtDate(pr.until)}（${left} 天）`));
+      const go1 = el("button", left <= 1 ? "primary small" : "ghost small", "備課");
+      go1.setAttribute("aria-label", `替 ${b.name} 備課`);
+      go1.onclick = () => openPrepFor(b.id);
+      foot.append(go1);
+      card.append(foot);
+    }
+    box.append(card);
+  }
+  return box;
+}
+
+/** 設定 › 使用者 with the prepare panel of that member open. */
+function openPrepFor(id) {
+  openSettings(1);
+  const m = (state.status?.users ?? []).find((u) => u.id === id);
+  if (m) { openPrep(m); $("#setPrep").scrollIntoView({ block: "nearest" }); }
+}
+
 // ── today: the task list ───────────────────────────────
 
 async function renderToday(page) {
@@ -390,6 +487,13 @@ async function renderToday(page) {
   streak.append(icon("flame"), el("b", null, String(sum.streak)), el("span", null, "天"));
   head.append(ring, mid, streak);
   page.append(head);
+  // Study buddies: only when the workspace has someone else. The strip
+  // arrives on its own, so today's tasks never wait for it.
+  if ((state.status?.users ?? []).length > 1) {
+    const slot = el("div", "buddies-slot");
+    page.append(slot);
+    fetchBuddies(true).then((data) => { if ((data.buddies ?? []).length > 1) slot.replaceWith(buddyStrip(data)); else slot.remove(); });
+  }
 
   const ready = !!state.status?.engine_ready;
   // One group per lesson of today (and the daily lesson not created yet).
@@ -672,7 +776,7 @@ function taskCard(task, isNext, engineReady) {
     const quick = task.kind === "review" && task.lesson_id == null && !engineReady;
     if (task.kind === "review") {
       const parts = [];
-      if (task.due) parts.push(`${task.due} 張到期`);
+      if (task.due && !task.done) parts.push(`${task.due} 張到期`);
       if (quick && task.round) parts.push(`本輪 ${task.round.done} / ${task.round.size} 張`);
       sub = parts.join("・");
     } else if (task.kind === "conversation") sub = `${task.items} 回合`;
@@ -860,8 +964,9 @@ function drawConv(page, newlyUsed = []) {
   // In a course lesson the tag names the course (not 興趣／通識).
   const courseName = c.course ? (state.cl?.course?.id === c.course.course ? state.cl.course.name : "課程") : null;
   const tag = c.course
-    ? el("span", "tag acc2", c.course.lesson ? `${courseName}・第 ${c.course.lesson} 課` : courseName)
+    ? el("span", "tag acc2", c.course.lesson ? `第 ${c.course.lesson} 課` : "課程")
     : el("span", `tag${c.topic.kind === "interest" ? " acc" : ""}`, c.topic.kind === "interest" ? "興趣" : "通識");
+  if (c.course) tag.title = courseName;
   top.append(el("b", null, c.topic.name), tag, el("span", "n", `${v.turns_done} / ${v.turns_limit}`));
   const dots = el("div", "dots");
   dots.setAttribute("aria-label", `${v.turns_done} / ${v.turns_limit} 回合`);

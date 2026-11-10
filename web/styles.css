@@ -1374,3 +1374,74 @@ body.family .user-chip [data-icon="chevron"] { display: none; }
   .steps-bar button { padding: 6px 4px; gap: 2px; }
   .step-box .card, .paper h2 { scroll-margin-top: calc(var(--vb-h, 52px) + 80px); }
 }
+
+/* ── UX review (2026-11): study buddies, tables, small fixes ───────────── */
+
+/* Buttons keep their word on one line (a course card's 開始 used to stack). */
+.cc-foot button, .lib-list li button, .news-acts button { flex: none; white-space: nowrap; }
+.conv-head .ch-top .n { white-space: nowrap; flex: none; }
+.conv-head .ch-top b { min-width: 0; }
+
+/* 練卡片: from the word list to the cards. */
+.step-head .jump { margin-left: auto; align-self: center; }
+.step-head .jump + .help { margin-left: 0; }
+
+/* 生字: the example gets the room; the source is a short word. */
+@media (min-width: 1000px) {
+  table.grid.words { table-layout: fixed; }
+  table.grid.words th:nth-child(1) { width: 19%; }
+  table.grid.words th:nth-child(2) { width: 16%; }
+  table.grid.words th:nth-child(3) { width: 19%; }
+  table.grid.words th:nth-child(5) { width: 86px; }
+  table.grid.words th:nth-child(6) { width: 60px; }
+  table.grid.words th:nth-child(7) { width: 44px; }
+  table.grid.words td.term { white-space: normal; overflow-wrap: anywhere; }
+  table.grid.words td.mono { white-space: normal; overflow-wrap: anywhere; font-size: 12.5px; }
+}
+table.grid.words td:nth-child(4) { font-size: 14px; color: var(--muted); }
+table.grid.words tr.add input { min-width: 0; }
+
+/* 錯題本: 懂了 says what it does. */
+.item .side .ghost.small { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.item .side .ghost.small svg.i { width: 14px; height: 14px; }
+
+/* Study buddies: one card per member under today's ring. */
+.buddies { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; margin: -4px 0 18px; }
+.buddy { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; min-width: 0; }
+.buddy.me { background: transparent; border-style: dashed; margin: 0; }
+.buddy .b-ring .label { display: none; }
+.buddy .b-av { position: absolute; inset: 7px; border-radius: 50%; display: grid; place-items: center; font: 700 17px var(--sans); color: #fff; background: var(--surface-hover); background-size: cover; background-position: center; }
+.buddy .b-av.has-img { color: transparent; }
+.buddy .b-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.buddy .b-top { display: flex; align-items: center; gap: 2px 8px; min-width: 0; flex-wrap: wrap; }
+.buddy .b-top b { font: 700 15px var(--sans); min-width: 4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.buddy .b-lv { font: 500 12px var(--mono); color: var(--muted); white-space: nowrap; }
+.buddy .b-nums { display: flex; gap: 12px; align-items: center; font: 500 12px var(--mono); color: var(--muted); flex-wrap: wrap; }
+.buddy .b-nums b { font: 700 15px var(--sans); color: var(--text); }
+.buddy .b-nums .td b { color: var(--accent-text); }
+.buddy .b-nums .st { display: inline-flex; align-items: center; gap: 2px; }
+.buddy .b-nums .st svg.i { width: 14px; height: 14px; color: var(--accent-3-text, var(--accent-text)); }
+.buddy .b-days { display: flex; gap: 4px; }
+.buddy .b-days i { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font: 500 10.5px var(--mono); font-style: normal; color: var(--muted); border: 1px solid var(--line-strong); }
+.buddy .b-days i.on { background: var(--accent-2, var(--accent)); color: var(--accent-2-ink, var(--accent-ink)); border-color: transparent; }
+.buddy .b-days i.today { box-shadow: 0 0 0 1px var(--accent-text); }
+.buddy .b-prep { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 2px; font: 500 12.5px var(--mono); color: var(--muted); }
+.buddy .b-prep.low span { color: var(--accent-text); }
+.buddy .b-prep button { flex: none; align-self: center; }
+.ipad-setup .note.err { color: var(--err); }
+.prep-who { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 13.5px; }
+.prep-who > span { color: var(--muted); }
+.prep-who label.check { display: inline-flex; align-items: center; gap: 6px; }
+
+/* 本週的課: the admin's one press on the courses page. */
+.weekly { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; }
+.weekly .wk-info { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; flex: 1; min-width: 200px; }
+.weekly .wk-info b { font: 700 15px var(--sans); }
+.weekly .wk-who { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.weekly .wk-m { display: inline-flex; align-items: center; gap: 6px; font: 500 12.5px var(--mono); color: var(--muted); white-space: nowrap; }
+.weekly .wk-m.low { color: var(--accent-text); }
+.weekly .wk-m .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+.weekly > .primary { flex: none; align-self: center; }
+.weekly .wk-out { flex-basis: 100%; }
+.weekly .wk-out:empty { display: none; }
+.weekly .wk-out progress { width: 100%; }

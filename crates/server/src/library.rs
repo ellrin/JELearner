@@ -395,7 +395,8 @@ pub(crate) async fn course_from_text(s: &Shared, l: &crate::Loaded, collection: 
         lp.purpose = ls.goal.clone();
     }
     course.kind = CourseKind::Single;
-    course.name = format!("{}：{}", t.zh, ls.zh);
+    // The lesson's own name (the theme made it too long to read on a card).
+    course.name = ls.zh.clone();
     course.summary = ls.goal.clone();
     store::save_new(&l.ws, &mut course).map_err(course_err)?;
     // The picture: downloaded and shrunk now, removed when the lesson is done.
