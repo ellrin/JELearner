@@ -77,13 +77,51 @@ async fn topics(State(s): State<Shared>, Json(b): Json<TopicsBody>) -> R<Value> 
     let lang = need_lang(&b.lang)?;
     // The feeds may be down or offline: the cards still come from interests and general topics.
     let news_errors = if b.refresh { crate::api::refresh_news(&s, Some(lang)).await.map(|(_, e)| e).unwrap_or_else(|e| vec![e.1]) } else { vec![] };
-    let (cards, heads, focus) = {
+    const CARDS: usize = 4;
+    let (cards, heads, focus, library_short) = {
         let l = ws(&s).await?;
         let (parts, focus, t) = card_inputs(&l, lang);
+        // The topic library's share of the cards (plan §19.3): its lessons
+        // need no model call; the rest come from the model.
+        let lib = crate::library::collection_for(&l.ws.root, lang);
+        let syl = lib.as_deref().and_then(|c| jl_core::course::library::load_syllabus(&l.ws.root, c).ok());
+        let lib_want = syl.as_ref().map(|y| (CARDS as f64 * y.share.clamp(0.0, 1.0)).round() as usize).unwrap_or(0);
+        let mut cats: Vec<String> = vec![];
+        for t in syl.iter().flat_map(|y| y.topic.iter()) {
+            if !cats.contains(&t.cat) {
+                cats.push(t.cat.clone());
+            }
+        }
+        let lib_cards: Vec<Card> = lib.as_deref().map(|c| crate::library::pick_unused(&l.ws, c, lib_want, &b.exclude)).unwrap_or_default().iter().map(|(t, ls)| library_card(t, ls)).collect();
         drop(l);
         let heads = headlines(&s, lang, focus.as_ref()).await?;
-        let cards = ask_cards(&s, lang, parts, focus.as_ref(), &t, &heads, &b.exclude, 4, 5).await?;
-        (cards, heads, focus)
+        let mut cards = lib_cards;
+        let short = lib_want - cards.len();
+        // Too few library lessons left: the same share from British news and
+        // the library's categories, never quietly none.
+        if short > 0 {
+            let uk = uk_headlines(&heads, syl.as_ref());
+            let uk_parts = (vec![], cats.iter().map(|c| format!("英國的{c}")).collect(), parts.2.clone(), parts.3.clone(), 0.0);
+            let mut ex = b.exclude.clone();
+            ex.extend(cards.iter().map(|c| c.title.clone()));
+            if let Ok(more) = ask_cards(&s, lang, uk_parts, focus.as_ref(), &t, &uk, &ex, short, short).await {
+                cards.extend(more.into_iter().map(|mut c| {
+                    c.category = if c.category.is_empty() { "英國".into() } else { c.category };
+                    c
+                }));
+            }
+        }
+        let rest = CARDS.saturating_sub(cards.len());
+        if rest > 0 {
+            let mut ex = b.exclude.clone();
+            ex.extend(cards.iter().map(|c| c.title.clone()));
+            match ask_cards(&s, lang, parts, focus.as_ref(), &t, &heads, &ex, rest, rest).await {
+                Ok(more) => cards.extend(more),
+                Err(e) if cards.is_empty() => return Err(e),
+                Err(_) => {}
+            }
+        }
+        (cards, heads, focus, short > 0)
     };
     // A news card shows where its article is from.
     let cards: Vec<Value> = cards
@@ -96,7 +134,21 @@ async fn topics(State(s): State<Shared>, Json(b): Json<TopicsBody>) -> R<Value> 
             v
         })
         .collect();
-    Ok(Json(json!({ "cards": cards, "focus": focus.map(|f| f.name), "news_errors": news_errors })))
+    Ok(Json(json!({ "cards": cards, "focus": focus.map(|f| f.name), "news_errors": news_errors, "library_short": library_short })))
+}
+
+/// A topic-library lesson as a card: its own title and goal, no model needed.
+fn library_card(t: &jl_core::course::library::Topic, l: &jl_core::course::library::LessonFocus) -> Card {
+    Card { title: l.zh.clone(), why: l.goal.clone(), kind: "library".into(), article_id: None, keywords: l.vocabulary.iter().take(3).cloned().collect(), category: t.cat.clone(), library: Some(l.id.clone()) }
+}
+
+/// Headlines about Britain: the syllabus's news words, or the places' names.
+fn uk_headlines(heads: &[Headline], syl: Option<&jl_core::course::library::Syllabus>) -> Vec<Headline> {
+    let mut words: Vec<String> = ["UK", "Britain", "British", "England", "English", "Scotland", "Scottish", "Wales", "Welsh", "London", "Edinburgh", "Glasgow", "NHS"].iter().map(|w| w.to_lowercase()).collect();
+    if let Some(y) = syl {
+        words.extend(y.topic.iter().flat_map(|t| t.news.iter()).map(|w| w.to_lowercase()));
+    }
+    heads.iter().filter(|h| { let t = format!("{} {}", h.title, h.summary).to_lowercase(); words.iter().any(|w| w.len() > 2 && t.contains(w.as_str())) }).cloned().collect()
 }
 
 type CardParts = (Vec<String>, Vec<String>, String, String, f32);
@@ -177,6 +229,13 @@ async fn start(State(s): State<Shared>, Json(b): Json<StartBody>) -> R<Value> {
         }
     }
     let l = ws(&s).await?;
+    // A topic-library card: that lesson's text, at this learner's level.
+    if let Some(id) = b.card.library.as_deref().filter(|_| b.card.kind == "library") {
+        let coll = crate::library::collection_for(&l.ws.root, lang).ok_or_else(|| bad("這個語言沒有主題庫"))?;
+        let course = crate::library::course_from_text(&s, &l, &coll, id, &date()).await?;
+        let _ = crate::library::mark_used(&l.ws, id);
+        return Ok(Json(json!({ "id": course.id, "next": 1, "created": true })));
+    }
     let focus = picker::load_focus(&l.ws, lang).map(|f| f.name).unwrap_or_default();
     let mut course = daily_course(&l, lang, b.card.title.trim(), b.card.keywords.clone(), article, focus, &date()).await?;
     store::save_new(&l.ws, &mut course).map_err(course_err)?;

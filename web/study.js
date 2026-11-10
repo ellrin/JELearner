@@ -547,7 +547,7 @@ async function renderToday(page) {
 
 let todayPick = null;
 const pickKey = () => `${state.status?.user?.id ?? ""}/${state.lang}/${new Date().toDateString()}`;
-const CARD_KIND = { news: "新聞", interest: "興趣", general: "通識" };
+const CARD_KIND = { news: "新聞", interest: "興趣", general: "通識", library: "主題庫" };
 
 function todayStart(ready, minutes) {
   const box = el("div", "today-start");
@@ -590,6 +590,13 @@ function todayStart(ready, minutes) {
       box.append(grid);
     } else {
       if (todayPick.newsErr) box.append(el("p", "ts-note", "新聞暫時抓不到，先從興趣與通識挑。"));
+      // The library ran low: say so once, with the way to write more (admin).
+      if (todayPick.libShort) {
+        const n = el("p", "ts-note", "主題庫還沒上過的課不多了，先用英國的新聞補上。");
+        const me = (state.status?.users ?? []).find((x) => x.id === state.status?.user?.id);
+        if (me?.admin) n.append(" ", ghostButton("book", "寫更多課", () => go("courses", { course: null, courseLesson: null, courseCreate: "library" })));
+        box.append(n);
+      }
       const grid = el("div", "ts-cards");
       for (const c of todayPick.cards) grid.append(topicCard(c, draw));
       box.append(grid);
@@ -612,6 +619,7 @@ async function loadCards(draw) {
     const r = await api("/api/today/topics", { lang: state.lang, exclude: p.shown, refresh: !p.refreshed });
     p.refreshed = true;
     p.newsErr = (r.news_errors ?? []).length > 0 && !r.cards.some((c) => c.kind === "news");
+    p.libShort = !!r.library_short;
     p.cards = r.cards;
     p.shown.push(...r.cards.map((c) => c.title));
   } catch (e) {
@@ -624,7 +632,7 @@ async function loadCards(draw) {
 function topicCard(c, draw) {
   const b = el("button", `ts-card kind-${c.kind}`);
   const top = el("div", "ts-top");
-  top.append(el("span", `tag${c.kind === "news" ? " acc" : ""}`, CARD_KIND[c.kind] ?? c.kind));
+  top.append(el("span", `tag${c.kind === "news" || c.kind === "library" ? " acc" : ""}`, CARD_KIND[c.kind] ?? c.kind));
   if (c.category) top.append(el("span", "ts-cat", c.category));
   b.append(top, el("b", null, c.title));
   if (c.why) b.append(el("span", "ts-why", c.why));

@@ -36,8 +36,15 @@ pub struct Syllabus {
     /// Lessons per theme.
     #[serde(default = "lessons")]
     pub lessons: [u32; 2],
+    /// Share of the lessons offered (today's cards, prepared lessons) that
+    /// come from this library; the rest follow interests and general topics.
+    #[serde(default = "share")]
+    pub share: f64,
     #[serde(default)]
     pub topic: Vec<Topic>,
+}
+fn share() -> f64 {
+    0.7
 }
 fn b2() -> String {
     "B2".into()

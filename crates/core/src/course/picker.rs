@@ -54,6 +54,9 @@ pub struct Card {
     /// The interest or general topic it comes from.
     #[serde(default)]
     pub category: String,
+    /// A topic-library lesson (`kind` "library"): its lesson id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
 }
 
 pub struct CardsInput<'a> {

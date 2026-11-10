@@ -130,6 +130,80 @@ struct BuildBody {
     limit: Option<usize>,
 }
 
+/// In turns over the categories (syllabus order within each), so a batch
+/// of new lessons is not all of one kind.
+pub(crate) fn spread<T>(items: Vec<T>, cat: impl Fn(&T) -> String) -> Vec<T> {
+    let mut cats: Vec<String> = vec![];
+    let mut queues: Vec<std::collections::VecDeque<T>> = vec![];
+    for x in items {
+        let c = cat(&x);
+        match cats.iter().position(|k| *k == c) {
+            Some(i) => queues[i].push_back(x),
+            None => {
+                cats.push(c);
+                queues.push(std::collections::VecDeque::from([x]));
+            }
+        }
+    }
+    let mut out = vec![];
+    while queues.iter().any(|q| !q.is_empty()) {
+        for q in queues.iter_mut() {
+            if let Some(x) = q.pop_front() {
+                out.push(x);
+            }
+        }
+    }
+    out
+}
+
+/// Library lessons a learner has had (made into a course here or prepared
+/// for their iPad): `profiles/<id>/library-used.txt`, one id per line, in
+/// the private repository like the rest of their files.
+pub(crate) fn used(ws: &jl_core::workspace::Workspace) -> Vec<String> {
+    let read = |p: std::path::PathBuf| std::fs::read_to_string(p).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect::<Vec<_>>();
+    let mut v = read(ws.profile_dir().join("library-used.txt"));
+    // Before 2026-11-11 the iPad's list lived in ipad/.
+    for id in read(ws.profile_dir().join("ipad").join("library-used.txt")) {
+        if !v.contains(&id) {
+            v.push(id);
+        }
+    }
+    v
+}
+
+pub(crate) fn mark_used(ws: &jl_core::workspace::Workspace, id: &str) -> std::io::Result<()> {
+    if used(ws).iter().any(|x| x == id) {
+        return Ok(());
+    }
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(ws.profile_dir().join("library-used.txt"))?;
+    writeln!(f, "{id}")
+}
+
+/// Up to `n` written lessons this learner has not had, in turns over the
+/// categories; `skip` = lesson titles (中文) already on screen.
+pub(crate) fn pick_unused(ws: &jl_core::workspace::Workspace, collection: &str, n: usize, skip: &[String]) -> Vec<(Topic, LessonFocus)> {
+    let had = used(ws);
+    let avail: Vec<(Topic, LessonFocus)> = written_lessons(&ws.root, collection).into_iter().filter(|(_, l)| !had.contains(&l.id) && !skip.iter().any(|s| s.trim() == l.zh.trim())).collect();
+    spread(avail, |(t, _)| t.cat.clone()).into_iter().take(n).collect()
+}
+
+/// Write up to `n` more lesson texts (themes in turns over the categories),
+/// for a run that found too few; returns how many were written.
+pub(crate) async fn write_more(s: &Shared, root: &Path, collection: &str, native: &str, n: usize) -> Result<usize, ApiError> {
+    let syl = library::load_syllabus(root, collection).map_err(course_err)?;
+    let themes = spread(syl.topic.iter().filter(|t| has_work(root, collection, t)).cloned().collect(), |t| t.cat.clone());
+    let mut written = 0;
+    // One lesson per theme each pass, so the new ones are spread too.
+    for t in themes {
+        if written >= n {
+            break;
+        }
+        written += work_on_theme(s, root, collection, &syl, &t, native, 1).await.unwrap_or(0);
+    }
+    Ok(written)
+}
+
 /// A theme with work left: not split yet, or a planned lesson without its text.
 fn has_work(root: &Path, collection: &str, t: &Topic) -> bool {
     match library::load_plan(root, collection, t) {
@@ -150,7 +224,7 @@ async fn start(State(s): State<Shared>, Json(b): Json<BuildBody>) -> R<Value> {
     };
     let syl = library::load_syllabus(&root, &b.collection).map_err(course_err)?;
     let wanted = |t: &Topic| b.ids.is_empty() || b.ids.iter().any(|i| *i == t.id || i.rsplit_once('-').is_some_and(|(th, _)| th == t.id));
-    let themes: Vec<Topic> = syl.topic.iter().filter(|t| wanted(t) && has_work(&root, &b.collection, t)).cloned().collect();
+    let themes: Vec<Topic> = spread(syl.topic.iter().filter(|t| wanted(t) && has_work(&root, &b.collection, t)).cloned().collect(), |t| t.cat.clone());
     if themes.is_empty() {
         return Err(bad("這些主題的課都已經寫好了"));
     }
@@ -341,6 +415,7 @@ pub(crate) fn source_of(a: &Article) -> SourceText {
 async fn lesson(State(s): State<Shared>, Json(b): Json<LessonBody>) -> R<Value> {
     let l = ws(&s).await?;
     let course = course_from_text(&s, &l, &b.collection, &b.id, &date()).await?;
+    let _ = mark_used(&l.ws, &b.id);
     let picture = picture_paths(&l.ws, course.lang, &course.id).0.is_file();
     Ok(Json(json!({ "id": course.id, "next": 1, "lessons": course.lessons.len(), "picture": picture })))
 }

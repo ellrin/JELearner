@@ -1340,13 +1340,14 @@ async fn admin_prepares_library_lessons_for_a_member() {
     let pkg: Value = serde_json::from_str(&std::fs::read_to_string(ipad.join(today[0]["file"].as_str().unwrap().trim_start_matches("ipad/"))).unwrap()).unwrap();
     assert!(pkg["data"]["text"].is_string() && pkg["conversation"]["system"].is_string(), "{pkg}");
     assert_eq!(pkg["card"]["why"], "能說一句話");
-    let used = std::fs::read_to_string(ipad.join("library-used.txt")).unwrap();
+    let used_file = ws_path.join("profiles").join(&member).join("library-used.txt");
+    let used = std::fs::read_to_string(&used_file).unwrap();
     assert_eq!(used.lines().collect::<Vec<_>>(), vec!["whisky-1", "trains-1"]);
     // Next time: the texts not used yet.
     c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 1, "choices": 2})).await;
     let p = wait().await;
     assert_eq!(p["done"], 2, "{p}");
-    assert_eq!(std::fs::read_to_string(ipad.join("library-used.txt")).unwrap().lines().count(), 4);
+    assert_eq!(std::fs::read_to_string(&used_file).unwrap().lines().count(), 4);
     // All used: said plainly.
     c.post("/api/family/prepare", json!({"member": member, "lang": "en", "days": 1, "choices": 2})).await;
     let p = wait().await;
@@ -1445,4 +1446,122 @@ async fn slow_lesson_is_written_once_and_kept() {
     assert_eq!(st, StatusCode::OK);
     assert_eq!(again["generated"], false, "{again}");
     assert_eq!(lesson_calls(), 1);
+}
+
+/// A topic library with `per` written lessons for each theme (`id`, category).
+fn write_library(ws_path: &Path, themes: &[(&str, &str)], per: usize) {
+    use jl_core::course::library::{self, ArticleOut, LessonFocus, SourceDoc, ThemePlan};
+    let dir = ws_path.join("library/uk");
+    std::fs::create_dir_all(&dir).unwrap();
+    let rows: String = themes.iter().map(|(id, cat)| format!("  {{ id = \"{id}\", cat = \"{cat}\", zh = \"{id} 主題\", en = \"{id}\", refs = [\"w:{id}\"], news = [\"{id}\"] }},\n")).collect();
+    std::fs::write(dir.join("syllabus.toml"), format!("name = \"蘇格蘭與英國\"\nlang = \"en\"\ntopic = [\n{rows}]\n")).unwrap();
+    let syl = library::load_syllabus(ws_path, "uk").unwrap();
+    let src = vec![SourceDoc { title: "Ref".into(), url: "https://en.wikipedia.org/wiki/Ref".into(), licence: "CC BY-SA 4.0".into(), text: String::new() }];
+    for t in &syl.topic {
+        let lessons: Vec<LessonFocus> = (1..=per)
+            .map(|i| LessonFocus { id: format!("{}-{i}", t.id), zh: format!("{} 第 {i} 課", t.id), en: format!("{} {i}", t.en), focus: "One thing.".into(), goal: "學完後，你能說一句話".into(), vocabulary: vec!["ticket".into()], sources: vec![1], refs: vec![] })
+            .collect();
+        library::save_plan(ws_path, "uk", t, &ThemePlan { theme: t.id.clone(), lesson: lessons.clone() }).unwrap();
+        for l in &lessons {
+            let text = (0..30).map(|k| format!("A day in Britain sentence {k} about {}.", t.en)).collect::<Vec<_>>().join(" ");
+            let a = ArticleOut { title: l.en.clone(), text, key_terms: vec![], used_sources: vec![1], summary: String::new() };
+            let p = library::article_path(ws_path, "uk", t, &l.id);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, library::render_article(&syl, "uk", t, l, &a, &src, None, "test", "2026-11-08")).unwrap();
+        }
+    }
+}
+
+fn card_calls(calls: &Arc<Mutex<Vec<Value>>>) -> Vec<String> {
+    calls.lock().unwrap().iter().filter(|b| b["output_config"]["format"]["schema"]["properties"]["cards"].is_object()).map(|b| b["messages"][0]["content"].as_str().unwrap_or("").to_string()).collect()
+}
+
+/// About 70 % of today's cards are topic-library lessons (the syllabus's
+/// `share`): three of four, no model needed for them; a library card starts
+/// that lesson; lessons had are not offered again; when the library runs low
+/// the share comes from British topics and the page is told.
+#[tokio::test]
+async fn today_cards_follow_the_library_share() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, calls) = setup(app_dir.path(), &ws_path).await;
+    write_library(&ws_path, &[("whisky", "飲食"), ("trains", "交通"), ("castles", "觀光")], 1);
+
+    let (st, r) = c.post("/api/today/topics", json!({ "lang": "en" })).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    let cards = r["cards"].as_array().unwrap();
+    let kinds: Vec<&str> = cards.iter().map(|x| x["kind"].as_str().unwrap()).collect();
+    assert_eq!(cards.len(), 4, "{r}");
+    assert_eq!(kinds.iter().filter(|k| **k == "library").count(), 3, "70 % of 4 = 3 library cards: {kinds:?}");
+    let cats: Vec<&str> = cards.iter().filter(|x| x["kind"] == "library").map(|x| x["category"].as_str().unwrap()).collect();
+    assert_eq!(cats, vec!["飲食", "交通", "觀光"], "one per category");
+    assert_eq!(r["library_short"], false);
+    assert_eq!(card_calls(&calls).len(), 1, "one model call, for the fourth card");
+
+    // Start a library card: that lesson, at this learner's level, kept as had.
+    let card = cards.iter().find(|x| x["kind"] == "library").unwrap().clone();
+    let (st, started) = c.post("/api/today/start", json!({ "lang": "en", "card": card })).await;
+    assert_eq!(st, StatusCode::OK, "{started}");
+    let (_, course) = c.get(&format!("/api/courses/{}", started["id"].as_str().unwrap())).await;
+    assert_eq!(course["name"], card["title"], "{course}");
+    let used = std::fs::read_to_string(ws_path.join("profiles/ellrin/library-used.txt")).unwrap();
+    assert_eq!(used.trim(), card["library"].as_str().unwrap());
+
+    // Two library lessons left, one of them shown already: the share comes
+    // from British topics instead, and the page says the library runs low.
+    let (_, r) = c.post("/api/today/topics", json!({ "lang": "en", "exclude": ["trains 第 1 課"] })).await;
+    let kinds: Vec<&str> = r["cards"].as_array().unwrap().iter().map(|x| x["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds.iter().filter(|k| **k == "library").count(), 1, "{r}");
+    assert!(!r["cards"].as_array().unwrap().iter().any(|x| x["title"] == card["title"] || x["title"] == "trains 第 1 課"), "not again: {r}");
+    assert_eq!(r["library_short"], true);
+    let prompts = card_calls(&calls);
+    assert!(prompts.iter().any(|p| p.contains("英國的飲食") && p.contains("Interests: (none yet)")), "a call for British topics: {prompts:?}");
+    assert!(r["cards"].as_array().unwrap().len() >= 3, "{r}");
+}
+
+/// 派本週的課 (`source: mix`): the library's share over the whole run, not
+/// per day; with too few texts and nothing left to write, the news fills in
+/// and the run says so.
+#[tokio::test]
+async fn weekly_mix_follows_the_library_share() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, _calls) = setup(app_dir.path(), &ws_path).await;
+    write_library(&ws_path, &[("whisky", "飲食"), ("trains", "交通")], 3);
+    let (_, me) = c.get("/api/status").await;
+    let admin = me["user"]["id"].as_str().unwrap().to_string();
+    let wait = || async {
+        let mut p = Value::Null;
+        for _ in 0..400 {
+            p = c.get("/api/family/prepare").await.1["progress"].clone();
+            if p["running"] == false {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        p
+    };
+    let index = |id: &str| -> Vec<Value> {
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(ws_path.join(format!("profiles/{id}/ipad/index.json"))).unwrap()).unwrap();
+        v["days"].as_object().unwrap().values().flat_map(|d| d.as_array().unwrap().clone()).collect()
+    };
+    // 2 days × 2 = 4 lessons: round(4 × 0.7) = 3 from the library, 1 other.
+    c.post("/api/family/prepare", json!({ "members": [admin], "lang": "en", "days": 2, "choices": 2, "source": "mix" })).await;
+    let p = wait().await;
+    assert_eq!((p["done"].as_u64(), p["errors"].as_array().map(|e| e.len())), (Some(4), Some(0)), "{p}");
+    let all = index(&admin);
+    assert_eq!(all.iter().filter(|e| e["kind"] == "library").count(), 3, "{all:?}");
+    // The next run takes the other three: all six written texts are used.
+    c.post("/api/family/prepare", json!({ "members": [admin], "lang": "en", "days": 2, "choices": 2, "source": "mix" })).await;
+    let p = wait().await;
+    assert_eq!(p["done"], 4, "{p}");
+    let all = index(&admin);
+    assert_eq!(all.iter().filter(|e| e["kind"] == "library").count(), 6, "{all:?}");
+    // Nothing left and nothing to write: the news fills in, said once.
+    c.post("/api/family/prepare", json!({ "members": [admin], "lang": "en", "days": 1, "choices": 2, "source": "mix" })).await;
+    let p = wait().await;
+    assert_eq!(p["done"], 2, "{p}");
+    assert!(p["errors"].as_array().unwrap().iter().any(|e| e.as_str().unwrap().contains("用新聞補上")), "{p}");
 }
