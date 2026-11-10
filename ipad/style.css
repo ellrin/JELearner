@@ -129,3 +129,6 @@ details.manual summary { color: var(--muted); font-size: 15px; padding: 10px 0; 
 .g-ctl input { flex: 1; min-width: 160px; border: 1px solid var(--line-strong); border-radius: 12px; padding: 10px 12px; background: var(--panel); font-size: 18px; }
 .g-ctl .btn.on { background: var(--err); border-color: var(--err); color: #fff; }
 .text.paras p.g-now { background: var(--surface); border-radius: 8px; box-shadow: -6px 0 0 var(--surface), 6px 0 0 var(--surface); }
+/* The stage bar, the teacher and the learner's turn stay in view under the top bar. */
+.g-dock { position: sticky; top: var(--top-h, 64px); z-index: 4; background: var(--bg); padding: 8px 0 4px; }
+.text.paras p { scroll-margin-top: calc(var(--top-h, 64px) + var(--dock-h, 240px) + 12px); }

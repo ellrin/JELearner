@@ -10,7 +10,14 @@
 const GUIDE = { max: 20, silence: 2.5 };
 const READY = "\u0000ready";
 const OUTPUT_KINDS = ["translation", "sentence-making", "cloze", "paraphrase"];
-const DONT_KNOW = /\b(i\s*don'?t\s*know|no\s*idea|not\s*sure|i\s*forgot|pass)\b|わから|分から|知らない|しらない|不知道|不會|忘了/i;
+const DONT_KNOW_RE = /\b(i\s*don'?t\s*know|no\s*idea|not\s*sure|i\s*forgot|i\s*have\s*no\s*idea)\b|わかりません|わからない|分かりません|分からない|知らない|しらない|不知道|不會|忘了/i;
+/** "I don't know" as the whole answer (a short reply), not inside a real one. */
+const dontKnow = (said) => !String(said ?? "").trim() || (DONT_KNOW_RE.test(said) && String(said).trim().split(/\s+/).length <= 5 && String(said).length <= 30);
+/** The option letter a learner said: "B", "b.", "option B", "bee", full-width Ｂ. */
+function saidLetter(said) {
+  const t = String(said ?? "").normalize("NFKC").trim().toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/^(option|answer|letter|the answer is|it'?s|its)\s+/, "").trim();
+  return { a: "A", ay: "A", eh: "A", b: "B", bee: "B", be: "B", c: "C", see: "C", sea: "C", d: "D", dee: "D" }[t] ?? null;
+}
 
 /** Words of a term, for "did the learner use it": English by word start, Japanese as written. */
 function usesTerm(said, term, lang) {
@@ -64,6 +71,7 @@ async function runGuided(box, o, u) {
   wait.remove();
 
   // ── the page: where we are, the time, the text, the teacher, the learner ──
+  const dock = el("div", "g-dock");
   const head = el("div", "g-head");
   const stages = el("ol", "g-stages");
   const STAGES = ["閒聊", "今天", "課文", "問答"];
@@ -87,12 +95,16 @@ async function runGuided(box, o, u) {
   const heard = el("div", "heard");
   const ctl = el("div", "g-ctl");
   me.append(heard, ctl);
-  wrap.append(head, teacher, me, paper);
+  dock.append(head, teacher, me);
+  wrap.append(dock, paper);
+  // The paragraph being read scrolls to just below the dock.
+  const ro = window.ResizeObserver ? new ResizeObserver(() => wrap.style.setProperty("--dock-h", `${dock.offsetHeight}px`)) : null;
+  ro?.observe(dock);
 
   let stopped = false;
   const started = Date.now();
   const tick = setInterval(() => {
-    if (!wrap.isConnected) { clearInterval(tick); Speech.stopListening(); Speech.stop(); stopped = true; return; }
+    if (!wrap.isConnected) { clearInterval(tick); ro?.disconnect(); Speech.stopListening(); Speech.stop(); stopped = true; return; }
     const left = Math.max(0, minutes * 60 - (Date.now() - started) / 1000);
     clock.textContent = left > 0 ? `剩 ${Math.ceil(left / 60)} 分` : "超過時間了";
     clock.classList.toggle("over", left <= 0);
@@ -125,7 +137,7 @@ async function runGuided(box, o, u) {
     const settle = (v) => {
       if (settled) return;
       settled = true;
-      stopRec?.();
+      if (v === READY) Speech.stopListening(); else stopRec?.();
       me.classList.remove("turn", "listening");
       ctl.innerHTML = "";
       if (v) heard.textContent = v === READY ? "Ready!" : v;
@@ -154,7 +166,11 @@ async function runGuided(box, o, u) {
       ctl.append(mic);
       setTimeout(() => mic.focus({ preventScroll: true }), 30);
     }
-    if (ready) ctl.append(primaryButton("Ready!", () => settle(READY), !canMic));
+    if (ready) {
+      // One main button: the microphone when it works.
+      const rb = canMic ? ghostButton("check", "Ready!", () => settle(READY)) : primaryButton("Ready!", () => settle(READY), true);
+      ctl.append(rb);
+    }
     else {
       const f = el("form", "g-type");
       const i = el("input");
@@ -212,7 +228,7 @@ async function runGuided(box, o, u) {
       if (stopped) break;
       progress = i / Math.max(1, script.paragraphs.length);
       paras.forEach((x, k) => x.classList.toggle("g-now", k === i));
-      paras[i]?.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      paras[i]?.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
       await say(p.read);
       const read = await hear();
       if (read !== null) await say(p.after_read);
@@ -253,8 +269,9 @@ async function runGuided(box, o, u) {
     // choice question says its options.
     const qs = o.lesson.questions ?? [];
     const HINT = lang === "ja" ? "もう一度、本文を見てみましょう。" : "Have another look at the text.";
+    const paired = script.quiz.length === qs.length;
     const quiz = (qs.length ? qs : script.quiz).map((lq, k) => {
-      const sq = script.quiz[k];
+      const sq = qs.length ? (paired ? script.quiz[k] : null) : lq;
       const opts = lq.kind === "choice" && lq.options?.length ? lq.options : null;
       const ask = opts ? `${plainRuby(lq.question)} ${opts.map((x, i) => `${"ABCD"[i]}: ${plainRuby(x)}.`).join(" ")}` : sq?.question ?? lq.question;
       return { question: ask, answer: lq.answer ?? sq?.answer ?? "", keywords: opts ? [] : sq?.keywords ?? [], hint: sq?.hint || HINT, reveal: sq?.reveal || lq.answer || "", options: opts };
@@ -264,14 +281,14 @@ async function runGuided(box, o, u) {
       await say(q.question);
       let said = await hear();
       if (said === null) continue;
-      if (!said || DONT_KNOW.test(said)) {
+      if (dontKnow(said)) {
         await say(q.hint);
         said = await hear();
         if (said === null) continue;
       }
-      // A choice: the option's words, or its letter said alone.
+      // A choice: the option's words, or its letter.
       const letter = q.options ? "ABCD"[q.options.indexOf(q.answer)] : null;
-      const ok = !!said && !DONT_KNOW.test(said) && (rightAnswer(said, q, lang) || (letter && new RegExp(`^\\W*(${letter}|${letter.toLowerCase()})\\W*$`).test(said)));
+      const ok = !dontKnow(said) && (rightAnswer(said, q, lang) || (!!letter && saidLetter(said) === letter));
       await say(ok ? pick(RIGHT) : q.reveal);
       if (k < qs.length) answers.push({ index: k, answer: said, correct: ok });
     }
@@ -288,8 +305,8 @@ async function runGuided(box, o, u) {
     clearInterval(tick);
     Speech.stopListening();
     Speech.stop();
-    me.remove();
-    teacher.remove();
+    dock.remove();
+    ro?.disconnect();
     // The units this lesson covered: the reading quiz (every question
     // answered) and, on a sentence-making lesson, the sentences.
     const results = [];
@@ -297,8 +314,8 @@ async function runGuided(box, o, u) {
     const qn = (o.lesson.questions ?? []).length;
     const base = `/api/courses/${encodeURIComponent(o.course.id)}/lessons/${o.number}/units/`;
     try {
-      if (!u.done && answers.length && answers.length >= qn) { reading = await api(`${base}${u.index}`, { answers }); results.push(reading); }
-      if (out && out.kind === "sentence-making" && items.length) results.push(await api(`${base}${out.index}`, { items }));
+      if (!u.done && answers.length && answers.length >= qn) { reading = await api(`${base}${u.index}`, { answers }); results.push(reading); if (reading.passed) u.done = true; }
+      if (out && !out.done && out.kind === "sentence-making" && items.length) { const r = await api(`${base}${out.index}`, { items }); results.push(r); if (r.passed) out.done = true; }
     } catch (e) { flash(e.message, true); }
     const pts = results.reduce((n, r) => n + (r.points ?? 0), 0);
     const last = results[results.length - 1];
@@ -312,7 +329,7 @@ async function runGuided(box, o, u) {
       total: reading ? qn : null,
       mistakes: answers.some((a) => !a.correct),
       levelUp: results.find((r) => r.level_up)?.level_up,
-      next: missed
+      next: missed || early
         ? [{ label: "再上一次", primary: true, onclick: () => runGuided(box, o, u) }, { label: "回到這一課", onclick: () => { state.step = null; render(); } }]
         : [await nextTodayStep(), { label: "回到這一課", onclick: () => { state.step = null; render(); } }],
     });

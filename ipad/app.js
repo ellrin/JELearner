@@ -671,7 +671,9 @@ function shrink(blob) {
       const k = Math.min(1, 800 / im.naturalWidth);
       const cv = document.createElement("canvas");
       cv.width = Math.round(im.naturalWidth * k); cv.height = Math.round(im.naturalHeight * k);
-      cv.getContext("2d").drawImage(im, 0, 0, cv.width, cv.height);
+      const g = cv.getContext("2d");
+      g.fillStyle = "#fff"; g.fillRect(0, 0, cv.width, cv.height);
+      g.drawImage(im, 0, 0, cv.width, cv.height);
       URL.revokeObjectURL(u);
       cv.toBlob((b) => (b ? resolve(b) : reject(new Error("圖片處理不了"))), "image/jpeg", 0.72);
     };
@@ -902,7 +904,12 @@ function drawConversation(box, pkg, u) {
 // The same flow as on the computer: the script written there, the teacher
 // speaking, the learner tapping to talk (20 s at most, 2.5 s of silence ends
 // it) or typing; live replies from Claude with the packed instructions.
-const DONT_KNOW = /\b(i\s*don'?t\s*know|no\s*idea|not\s*sure|i\s*forgot|pass)\b|わから|分から|知らない|しらない|不知道|不會|忘了/i;
+const DONT_KNOW_RE = /\b(i\s*don'?t\s*know|no\s*idea|not\s*sure|i\s*forgot|i\s*have\s*no\s*idea)\b|わかりません|わからない|分かりません|分からない|知らない|しらない|不知道|不會|忘了/i;
+const dontKnow = (said) => !String(said ?? "").trim() || (DONT_KNOW_RE.test(said) && String(said).trim().split(/\s+/).length <= 5 && String(said).length <= 30);
+function saidLetter(said) {
+  const t = String(said ?? "").normalize("NFKC").trim().toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, "").replace(/^(option|answer|letter|the answer is|it'?s|its)\s+/, "").trim();
+  return { a: "A", ay: "A", eh: "A", b: "B", bee: "B", be: "B", c: "C", see: "C", sea: "C", d: "D", dee: "D" }[t] ?? null;
+}
 const OUTPUT_KINDS = ["translation", "sentence-making", "cloze", "paraphrase"];
 function usesTerm(said, term, lang) {
   const s = String(said ?? "").toLowerCase();
@@ -937,6 +944,7 @@ function drawGuided(box, pkg, u) {
   const heard = el("div", "heard");
   const ctl = el("div", "row g-ctl");
   me.append(heard, ctl);
+  const dock = el("div", "g-dock");
   const card = el("div", "card");
   const tx = el("div", "text paras");
   const paras = [];
@@ -947,11 +955,24 @@ function drawGuided(box, pkg, u) {
     for (const pic of (pkg.pictures ?? []).filter((x) => x.paragraph === i)) tx.append(pictureFigure(pic));
   });
   card.append(tx);
-  box.append(head, teacher, me, card);
+  dock.append(head, teacher, me);
+  box.append(dock, card);
+  document.documentElement.style.setProperty("--top-h", `${$(".top").offsetHeight}px`);
+  const ro = window.ResizeObserver ? new ResizeObserver(() => box.style.setProperty("--dock-h", `${dock.offsetHeight}px`)) : null;
+  ro?.observe(dock);
   let stopped = false;
+  // Leaving this view (‹) ends the lesson: nothing keeps speaking or listening.
+  const gone = () => {
+    if (head.isConnected && !stopped) return false;
+    stopped = true;
+    clearInterval(tick); ro?.disconnect();
+    synth?.cancel();
+    try { currentRec?.abort(); } catch { /* none */ }
+    return true;
+  };
   const started = Date.now();
   const tick = setInterval(() => {
-    if (!box.isConnected) { clearInterval(tick); stopped = true; synth?.cancel(); try { currentRec?.abort(); } catch { /* none */ } return; }
+    if (gone()) return;
     const left = Math.max(0, minutes * 60 - (Date.now() - started) / 1000);
     clock.textContent = left > 0 ? `剩 ${Math.ceil(left / 60)} 分` : "超過時間了";
   }, 1000);
@@ -959,7 +980,7 @@ function drawGuided(box, pkg, u) {
   let progress = 0;
   const behind = () => (Date.now() - started) / 1000 > minutes * 60 * (0.15 + 0.65 * progress) + 45;
   const say = async (text) => {
-    if (stopped || !text) return;
+    if (gone() || !text) return;
     tText.innerHTML = ruby(text);
     teacher.classList.add("speaking");
     await speak(text, lang);
@@ -967,7 +988,7 @@ function drawGuided(box, pkg, u) {
   };
   const READY = "\u0000ready";
   const hear = ({ ready = false, placeholder = "" } = {}) => new Promise((resolve) => {
-    if (stopped) return resolve(null);
+    if (gone()) return resolve(null);
     ctl.innerHTML = ""; heard.textContent = "";
     let settled = false;
     const settle = (v) => {
@@ -1011,7 +1032,7 @@ function drawGuided(box, pkg, u) {
   const EXAMPLE = lang === "ja" ? "たとえば、" : "For example: ";
   const HINT = lang === "ja" ? "もう一度、本文を見てみましょう。" : "Have another look at the text.";
   const items = [], answers = [];
-  (async () => {
+  const run = async () => {
     stage(0);
     for (const q of [script.small_talk.opening, script.small_talk.follow_up]) {
       await say(q);
@@ -1030,7 +1051,7 @@ function drawGuided(box, pkg, u) {
       if (stopped) break;
       progress = i / Math.max(1, script.paragraphs.length);
       paras.forEach((x, k) => x.classList.toggle("g-now", k === i));
-      paras[i]?.scrollIntoView({ block: "center", behavior: "smooth" });
+      paras[i]?.scrollIntoView({ block: "start", behavior: "smooth" });
       await say(p.read);
       if ((await hear()) !== null) await say(p.after_read);
       for (const ex of p.explain) {
@@ -1060,8 +1081,10 @@ function drawGuided(box, pkg, u) {
     progress = 1;
     stage(3);
     const qs = data.questions ?? [];
+    // The script's lines only when they pair one to one with the lesson's questions.
+    const paired = script.quiz.length === qs.length;
     const quiz = (qs.length ? qs : script.quiz).map((lq, k) => {
-      const sq = script.quiz[k];
+      const sq = qs.length ? (paired ? script.quiz[k] : null) : lq;
       const opts = lq.kind === "choice" && lq.options?.length ? lq.options : null;
       const ask = opts ? `${plain(lq.question)} ${opts.map((x, i) => `${"ABCD"[i]}: ${plain(x)}.`).join(" ")}` : sq?.question ?? lq.question;
       return { question: ask, answer: lq.answer ?? sq?.answer ?? "", keywords: opts ? [] : sq?.keywords ?? [], hint: sq?.hint || HINT, reveal: sq?.reveal || lq.answer || "", options: opts };
@@ -1071,11 +1094,11 @@ function drawGuided(box, pkg, u) {
       await say(q.question);
       let said = await hear();
       if (said === null) continue;
-      if (!said || DONT_KNOW.test(said)) { await say(q.hint); said = await hear(); if (said === null) continue; }
+      if (dontKnow(said)) { await say(q.hint); said = await hear(); if (said === null) continue; }
       const keys = q.keywords.filter((x) => x.trim());
       const byWords = keys.length ? keys.filter((x) => usesTerm(said, x, lang)).length >= Math.max(1, Math.ceil(keys.length / 2)) : usesTerm(said, q.answer, lang);
       const letter = q.options ? "ABCD"[q.options.indexOf(q.answer)] : null;
-      const ok = !!said && !DONT_KNOW.test(said) && (byWords || (letter && new RegExp(`^\\W*(${letter}|${letter.toLowerCase()})\\W*$`).test(said)));
+      const ok = !dontKnow(said) && (byWords || (!!letter && saidLetter(said) === letter));
       await say(ok ? pick(RIGHT) : q.reveal);
       if (k < qs.length) answers.push({ index: k, answer: said, correct: ok });
     }
@@ -1085,13 +1108,28 @@ function drawGuided(box, pkg, u) {
     const qn = qs.length;
     if (answers.length >= qn && !doneOf(keyOf(pkg)).includes(u.index)) finishUnit(pkg, u, { answers });
     if (out?.kind === "sentence-making" && items.length) finishUnit(pkg, out, { items });
-    me.remove(); teacher.innerHTML = "";
-    const right = answers.filter((a) => a.correct).length;
-    teacher.append(el("b", null, answers.length >= qn ? `這段上完了！問答答對 ${right} / ${qn} 題` : "問答沒有全部答完，課文這一步還沒算"));
+    endCard(answers.length >= qn ? answers.filter((a) => a.correct).length : null, qn);
+  };
+  /** The end: how the quiz went, and the next step (or another go when it was not passed). */
+  const endCard = (right, qn, problem) => {
+    clearInterval(tick); ro?.disconnect();
+    stopped = true;
+    dock.remove();
+    const c = el("div", "card g-end");
+    const passed = right != null && (qn === 0 || right / qn >= 0.7);
+    c.append(el("b", null, problem ? "這段卡住了" : right == null ? "問答沒有全部答完，課文這一步還沒算" : passed ? `這段上完了！問答答對 ${right} / ${qn} 題` : `差一點：答對 ${right} / ${qn} 題，再上一次就好`));
+    if (problem) c.append(el("p", "note", problem));
     const row = el("div", "row");
-    row.append(button("回到這一課", "main", () => { stopped = true; stack.pop(); const v = stack[stack.length - 1]; show(v.title, v.draw, false); }));
-    teacher.append(row);
-  })();
+    const back = () => { stack.pop(); const v = stack[stack.length - 1]; show(v.title, v.draw, false); };
+    if (passed) row.append(...[...nextRow(pkg, u).childNodes]);
+    else row.append(button("再上一次", "main", () => show("老師帶著上", (b) => drawGuided(b, pkg, u), false)));
+    row.append(button("回到這一課", "", back));
+    c.append(row);
+    box.prepend(c);
+    c.scrollIntoView({ block: "start" });
+  };
+  // Anything going wrong ends with a way out, never a stuck screen.
+  run().catch((e) => { console.warn(e); if (head.isConnected) endCard(null, 0, e.message || "等一下再試一次"); });
 }
 
 // ── start ───────────────────────────────────────────────

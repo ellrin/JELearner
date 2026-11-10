@@ -1485,3 +1485,8 @@ table.grid.words tr.add input { min-width: 0; }
   .g-type input { min-width: 0; flex: 1; }
   .g-ctl, .g-type { width: 100%; }
 }
+/* The stage bar, the teacher and the learner's turn stay in view; the text scrolls under them. */
+.page-body:has(.guided) .steps-bar { position: static; }
+.g-dock { position: sticky; top: calc(var(--vb-h, 52px) + 2px); z-index: 4; background: var(--bg); display: flex; flex-direction: column; gap: 10px; padding-bottom: 8px; box-shadow: 0 8px 8px -8px var(--bg); }
+.g-dock .g-head { position: static; padding: 0; }
+.g-paper .lesson-text p { scroll-margin-top: calc(var(--vb-h, 52px) + var(--dock-h, 220px) + 12px); }
