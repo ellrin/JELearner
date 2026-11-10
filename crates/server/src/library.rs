@@ -33,7 +33,6 @@ pub fn routes() -> Router<Shared> {
         .route("/api/library", get(list))
         .route("/api/library/build", get(status).post(start))
         .route("/api/library/lesson", post(lesson))
-        .route("/api/courses/{id}/picture", get(picture_file))
 }
 
 /// The reference text sent per source (the start of a page is the overview).
@@ -381,41 +380,6 @@ async fn free_picture(s: &Shared, img: &str) -> Option<ImageRef> {
 
 // ── a lesson's picture: stored while the lesson is open ─
 
-fn picture_paths(ws: &jl_core::workspace::Workspace, lang: jl_core::Lang, course: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-    let dir = ws.lessons_dir(lang).join("images");
-    (dir.join(format!("{course}.jpg")), dir.join(format!("{course}.json")))
-}
-
-/// The picture of a course's lesson, as the lesson page shows it.
-pub(crate) fn picture_info(ws: &jl_core::workspace::Workspace, lang: jl_core::Lang, course: &str) -> Option<Value> {
-    let (jpg, meta) = picture_paths(ws, lang, course);
-    if !jpg.is_file() {
-        return None;
-    }
-    let r: ImageRef = serde_json::from_str(&std::fs::read_to_string(meta).ok()?).ok()?;
-    Some(json!({ "src": format!("/api/courses/{}/picture", urlencoding(course)), "author": r.author, "licence": r.licence, "licence_url": r.licence_url, "page": r.page }))
-}
-
-fn urlencoding(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
-}
-
-/// A finished lesson does not keep its picture (the credit stays in the text).
-pub(crate) fn remove_picture(ws: &jl_core::workspace::Workspace, lang: jl_core::Lang, course: &str) {
-    let (jpg, meta) = picture_paths(ws, lang, course);
-    let _ = std::fs::remove_file(jpg);
-    let _ = std::fs::remove_file(meta);
-}
-
-async fn picture_file(State(s): State<Shared>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<axum::response::Response, ApiError> {
-    use axum::response::IntoResponse;
-    let l = ws(&s).await?;
-    let c = store::load(&l.ws, &id).map_err(course_err)?;
-    let (jpg, _) = picture_paths(&l.ws, c.lang, &c.id);
-    let bytes = std::fs::read(jpg).map_err(|_| ApiError(axum::http::StatusCode::NOT_FOUND, "沒有圖片".into()))?;
-    Ok(([(axum::http::header::CONTENT_TYPE, "image/jpeg"), (axum::http::header::CACHE_CONTROL, "private, max-age=3600")], bytes).into_response())
-}
-
 // ── a lesson from a text ────────────────────────────────
 
 #[derive(Deserialize)]
@@ -435,8 +399,7 @@ async fn lesson(State(s): State<Shared>, Json(b): Json<LessonBody>) -> R<Value> 
     let l = ws(&s).await?;
     let course = course_from_text(&s, &l, &b.collection, &b.id, &date()).await?;
     let _ = mark_used(&l.ws, &b.id);
-    let picture = picture_paths(&l.ws, course.lang, &course.id).0.is_file();
-    Ok(Json(json!({ "id": course.id, "next": 1, "lessons": course.lessons.len(), "picture": picture })))
+    Ok(Json(json!({ "id": course.id, "next": 1, "lessons": course.lessons.len() })))
 }
 
 /// The collection for a language (the first one), if the workspace has one.
@@ -452,17 +415,6 @@ pub(crate) fn written_lessons(root: &Path, collection: &str) -> Vec<(Topic, Less
         .flat_map(|t| library::load_plan(root, collection, t).map(|p| p.lesson).unwrap_or_default().into_iter().map(move |l| (t.clone(), l)))
         .filter(|(t, l)| library::article_path(root, collection, t, &l.id).exists())
         .collect()
-}
-
-/// The picture of a lesson for the iPad: its path in the member's folder and its credit.
-pub(crate) fn picture_for_package(ws: &jl_core::workspace::Workspace, lang: jl_core::Lang, course: &str) -> Value {
-    let (jpg, meta) = picture_paths(ws, lang, course);
-    let Ok(r) = std::fs::read_to_string(meta).and_then(|t| serde_json::from_str::<ImageRef>(&t).map_err(std::io::Error::other)) else { return Value::Null };
-    if !jpg.is_file() {
-        return Value::Null;
-    }
-    let rel = jpg.strip_prefix(ws.profile_dir()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-    json!({ "path": rel, "author": r.author, "licence": r.licence, "page": r.page })
 }
 
 /// A one-lesson course from a library text for `l` (the active learner or a
@@ -493,15 +445,7 @@ pub(crate) async fn course_from_text(s: &Shared, l: &crate::Loaded, collection: 
     course.name = ls.zh.clone();
     course.summary = ls.goal.clone();
     store::save_new(&l.ws, &mut course).map_err(course_err)?;
-    // The picture: downloaded and shrunk now, removed when the lesson is done.
-    if let Some(img) = &a.image
-        && let Ok(bytes) = s.fetcher.get_bytes(&img.url).await
-        && let Ok(jpg) = picture::compress(&bytes)
-    {
-        let (p, meta) = picture_paths(&l.ws, syl.lang, &course.id);
-        if std::fs::create_dir_all(p.parent().expect("has a parent")).is_ok() && std::fs::write(&p, jpg).is_ok() {
-            let _ = std::fs::write(meta, serde_json::to_string_pretty(img).unwrap_or_default());
-        }
-    }
+    // Its pictures come from the text's reference pages (plan §19.4.1), found when the lesson is opened.
+    crate::pictures::remember_sources(s, &course.id, &a.sources.iter().map(|x| x.url.clone()).collect::<Vec<_>>()).await;
     Ok(course)
 }

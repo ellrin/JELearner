@@ -345,6 +345,8 @@ async fn package_course(s: &Shared, m: &Loaded, provider: &dyn jl_core::provider
             pkg["unit"] = json!(ui);
             conv = pkg;
         }
+        let text = data["text"].as_str().unwrap_or("").to_string();
+        let pics = crate::pictures::for_lesson(s, &course.id, n, &text, lp.article.as_ref().map(|a| a.url.as_str())).await;
         let rel = format!("ipad/{date}/{}-{n:02}.json", course.id);
         let package = json!({
             "version": 1,
@@ -355,8 +357,9 @@ async fn package_course(s: &Shared, m: &Loaded, provider: &dyn jl_core::provider
             "lesson": n,
             "lesson_id": lesson_id,
             "card": card,
-            // A library lesson's picture (in the member's folder while the lesson is open).
-            "picture": crate::library::picture_for_package(&m.ws, lang, &course.id),
+            // Pictures between the paragraphs: addresses and credits only; the
+            // iPad downloads, shrinks and keeps them two weeks (plan §19.4.1).
+            "pictures": pics,
             "plan": { "title": lp.title, "purpose": lp.purpose, "minutes": lp.minutes, "units": unit_json(&lp), "words": lp.words },
             "data": data,
             "review_cards": cards,

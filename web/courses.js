@@ -860,17 +860,24 @@ function stepReading(box, o, u) {
     guide.append(toggle);
     tx.before(guide);
   }
-  // The lesson's picture, with its credit (kept only while the lesson is open).
-  if (o.picture && tx) {
-    const fig = el("figure", "lesson-pic");
-    const img = el("img");
-    img.src = o.picture.src; img.alt = ""; img.loading = "lazy";
-    const cap = el("figcaption");
-    const a = el("a", null, `${o.picture.author}・${o.picture.licence}`);
-    a.href = o.picture.page; a.target = "_blank"; a.rel = "noopener noreferrer";
-    cap.append("圖片：", a);
-    fig.append(img, cap);
-    paper.querySelector(".read-guide")?.before(fig) ?? tx.before(fig);
+  // Pictures between the paragraphs (plan §19.4.1), each with its credit;
+  // a picture that does not load leaves no gap.
+  if (o.pictures?.length && tx) {
+    const paras = [...tx.querySelectorAll(":scope > p")];
+    for (const pic of o.pictures) {
+      const after = paras[pic.paragraph];
+      if (!after) continue;
+      const fig = el("figure", "lesson-pic");
+      const img = el("img");
+      img.src = pic.src; img.alt = pic.caption ?? ""; img.loading = "lazy";
+      img.onerror = () => fig.remove();
+      const cap = el("figcaption");
+      const a = el("a", null, `${pic.author}・${pic.licence}`);
+      a.href = pic.page; a.target = "_blank"; a.rel = "noopener noreferrer";
+      cap.append("圖片：", a);
+      fig.append(img, cap);
+      after.after(fig);
+    }
   }
   if (!quiz.total) reportUnit(box, o, u, { answers: [] }, "閱讀完成");
 }

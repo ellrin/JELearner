@@ -16,6 +16,7 @@ pub mod courses;
 pub mod family;
 pub mod git;
 pub mod notebook;
+pub mod pictures;
 pub mod secrets;
 pub mod settings;
 pub mod setup;
@@ -396,6 +397,10 @@ pub async fn build_state(settings: Settings, opts: Options) -> Shared {
         && let Some(dir) = &settings.app_dir
     {
         stop_leftover_local_model(dir);
+    }
+    // Lesson pictures are kept two weeks.
+    if let Some(dir) = &settings.app_dir {
+        pictures::prune(&pictures::dir(dir), std::time::SystemTime::now());
     }
     let (mailer, calendar, mock_mail, mock_calendar): (Arc<dyn Mailer>, Arc<dyn Calendar>, _, _) = match settings.google.mode {
         GoogleMode::Mock => {

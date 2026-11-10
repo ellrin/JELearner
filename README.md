@@ -238,6 +238,7 @@ scripts/            開發啟動與 Git hooks
 | POST | `/api/conversations/{id}/finish` | 評估、積分、存成 `conversations/<lang>/*.md` |
 | GET / POST | `/api/family/prepare`（POST `{ member \| members, lang, days, choices, source: library\|news\|mix }`） | 管理員替成員（可多位，可含自己）備 iPad 的課，在背景執行；GET 回傳進度 |
 | GET | `/api/buddies` | 學習戰友：工作區每位成員的今日積分、近 7 天、連續天數、等級（讀各自的 `records/points/`）；管理員另外看得到家人 iPad 的課備到哪一天 |
+| GET | `/api/pictures?u=` | 課文段落間的圖片（只限為某一課選好的 Wikimedia Commons 圖片）：第一次下載後壓縮成最寬 800 px 的 JPEG，存在設定資料夾的 `cache/pictures/`，14 天後刪除，不進工作區 |
 | POST / DELETE | `/api/user/avatar`（本文為圖片，≤ 2 MB） | 上傳或移除大頭貼（存在這台電腦，不進工作區） |
 | GET | `/api/avatars/{user}` | 大頭貼 |
 | POST | `/api/records/export` | 寫出 records/progress.csv、mistakes.csv |

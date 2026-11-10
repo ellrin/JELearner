@@ -81,9 +81,6 @@ label.f span { display: block; font-size: 15px; color: var(--muted); margin-bott
 .units li button.next { border-color: var(--acc-text); }
 .toast { cursor: pointer; }
 
-.pic { margin: 0 0 12px; }
-.pic img { display: block; width: 100%; max-height: 320px; object-fit: cover; border-radius: 10px; background: var(--surface); }
-.pic figcaption { margin-top: 4px; }
 .pic figcaption a { color: inherit; }
 /* Study buddies: everyone's points and the last seven days. */
 .buddies { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-bottom: 18px; }
@@ -107,3 +104,10 @@ label.f span { display: block; font-size: 15px; color: var(--muted); margin-bott
 .scan .btn { min-width: 140px; }
 details.manual { margin-top: 18px; }
 details.manual summary { color: var(--muted); font-size: 15px; padding: 10px 0; }
+/* The text paragraph by paragraph, pictures between them. */
+.text.paras { white-space: normal; }
+.text.paras p { margin: 0 0 14px; white-space: pre-wrap; }
+.pic { margin: 4px 0 16px; }
+.pic img { display: block; width: 100%; max-height: 420px; object-fit: cover; border-radius: 12px; background: var(--surface); }
+.pic figcaption { font-size: 13px; margin-top: 4px; }
+.pic figcaption a { color: inherit; }

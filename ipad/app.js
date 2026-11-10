@@ -114,6 +114,8 @@ async function sync() {
         if (!store.get(`jl.pkg:${e.file}`)) {
           try { store.set(`jl.pkg:${e.file}`, await readJson(e.file)); } catch (err) { console.warn(e.file, err); }
         }
+        // Its pictures too, for offline (shrunk, two weeks).
+        for (const pic of store.get(`jl.pkg:${e.file}`)?.pictures ?? []) pictureBlob(pic.url).catch(() => {});
       }
     }
     syncState(`已同步 ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
@@ -581,8 +583,13 @@ function drawReading(box, pkg, u) {
     g.append(gRow);
     box.append(g);
     const t = el("div", "card");
-    if (pkg.picture?.path) t.append(pictureFigure(pkg.picture));
-    t.append(rich("div", "text", data.text));
+    // Paragraph by paragraph, each picture after its paragraph.
+    const tx = el("div", "text paras");
+    String(data.text ?? "").split(/\n/).map((x) => x.trim()).filter(Boolean).forEach((p, i) => {
+      tx.append(rich("p", null, p));
+      for (const pic of (pkg.pictures ?? []).filter((x) => x.paragraph === i)) tx.append(pictureFigure(pic));
+    });
+    t.append(tx);
     const row = el("div", "row");
     row.append(button("🔊 唸課文", "", () => speak(data.text, lang)), button("停", "", () => synth?.cancel()));
     t.append(row);
@@ -638,26 +645,60 @@ function drawReading(box, pkg, u) {
   });
 }
 
-/** A library lesson's picture (from the repository; kept here for offline use) with its credit. */
+// ── pictures between the paragraphs (plan §19.4.1) ─────
+// Addresses and credits come with the lesson; the pictures themselves come
+// from Wikimedia Commons, shrunk here (≤ 800 px, JPEG) and kept in Cache
+// Storage for two weeks (localStorage is far too small for them).
+const PIC_CACHE = "jl-pictures";
+const PIC_KEEP = 14 * 24 * 3600 * 1000;
+function shrink(blob) {
+  return new Promise((resolve, reject) => {
+    const u = URL.createObjectURL(blob);
+    const im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, 800 / im.naturalWidth);
+      const cv = document.createElement("canvas");
+      cv.width = Math.round(im.naturalWidth * k); cv.height = Math.round(im.naturalHeight * k);
+      cv.getContext("2d").drawImage(im, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(u);
+      cv.toBlob((b) => (b ? resolve(b) : reject(new Error("圖片處理不了"))), "image/jpeg", 0.72);
+    };
+    im.onerror = () => { URL.revokeObjectURL(u); reject(new Error("圖片讀不了")); };
+    im.src = u;
+  });
+}
+async function pictureBlob(url) {
+  const c = await caches.open(PIC_CACHE);
+  const hit = await c.match(url);
+  if (hit) return hit.blob();
+  const r = await fetch(url, { mode: "cors" });
+  if (!r.ok) throw new Error(`picture ${r.status}`);
+  const small = await shrink(await r.blob());
+  await c.put(url, new Response(small, { headers: { "Content-Type": "image/jpeg", "X-Saved": String(Date.now()) } }));
+  return small;
+}
+async function prunePictures() {
+  try {
+    const c = await caches.open(PIC_CACHE);
+    for (const req of await c.keys()) {
+      const r = await c.match(req);
+      if (Date.now() - (Number(r?.headers.get("X-Saved")) || 0) > PIC_KEEP) await c.delete(req);
+    }
+  } catch { /* no Cache Storage: nothing kept */ }
+  // Pictures of the first version lived in localStorage.
+  try { Object.keys(localStorage).filter((k) => k.startsWith("jl.pic:")).forEach((k) => localStorage.removeItem(k)); } catch { /* nothing */ }
+}
+/** A picture with its credit; it leaves no gap when it cannot be shown. */
 function pictureFigure(pic) {
   const fig = el("figure", "pic");
   const img = el("img");
-  img.alt = "";
+  img.alt = pic.caption ?? "";
   const cap = el("figcaption", "note");
   const a = el("a", null, `${pic.author}・${pic.licence}`);
   a.href = pic.page; a.target = "_blank"; a.rel = "noopener";
   cap.append("圖片：", a);
   fig.append(img, cap);
-  const key = `jl.pic:${pic.path}`;
-  const cached = store.get(key);
-  if (cached) img.src = cached;
-  else {
-    gh(`/contents/${encodeURI(base() + pic.path)}`, { headers: { Accept: "application/vnd.github.raw+json" } })
-      .then((r) => r.blob())
-      .then((b) => new Promise((ok) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(b); }))
-      .then((url) => { img.src = url; store.set(key, url); })
-      .catch(() => fig.remove());
-  }
+  pictureBlob(pic.url).then((b) => { img.src = URL.createObjectURL(b); }).catch(() => fig.remove());
   return fig;
 }
 
@@ -852,6 +893,7 @@ else {
   show("今天", drawHome);
   sync().then(() => { if (stack.length === 1 && stack[0].draw === drawHome) show("今天", drawHome, false); }).catch(() => {});
 }
+prunePictures();
 window.addEventListener("online", () => sync().catch(() => {}));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") sync().catch(() => {}); });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

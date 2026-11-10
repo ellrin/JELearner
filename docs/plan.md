@@ -848,7 +848,7 @@ per_day = 10                # 每天帶入幾個新字
 ### 19.4.3 階段
 
 1. [x] 寫進本文件（2026-11-11）
-2. [ ] 圖文穿插（Mac＋iPad，14 天清除）
+2. [x] 圖文穿插（2026-11-11）：參考條目頁上的 Commons 圖片（`picture::page_images`，去掉旗幟、標誌、小圖示與不在 Commons 的檔案）依段落的共同字配對（`match_paragraphs`，每張一次，一課最多 4 張），各圖的授權在它的 File 頁讀（只收自由授權）；Mac 存在 `cache/pictures/`（壓縮成 800 px JPEG），iPad 下載後用畫布壓縮存在 Cache Storage；兩邊都 14 天後刪除。主題庫的課在建立時記下參考頁；robots.txt 不允許搜尋與 API，所以只讀條目頁與 File 頁。測試：`page_pictures_and_paragraph_matching`、`old_pictures_are_deleted_after_two_weeks`、主題庫測試的圖片部分。
 3. [ ] 講稿與上課流程（Mac，先用按鈕與打字，再接語音：20 秒上限、2.5 秒靜音停止）
 4. [ ] 即時回饋（閒聊、造句）
 5. [ ] iPad 版

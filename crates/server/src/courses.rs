@@ -633,6 +633,9 @@ async fn open_lesson_now(s: Shared, id: String, n: u32) -> R<Value> {
     // wait, and every request after it.
     let w = ws(&s).await?.ws.clone();
     let opened = plan::open_lesson(prov, &t, &w, &id, n, &lr, &ctx, &date()).await.map_err(course_err)?;
+    // Pictures between its paragraphs (found once, then from the cache; no lock held).
+    let text = lesson::extract_raw(&opened.markdown).and_then(|d| d["text"].as_str().map(str::to_string)).unwrap_or_default();
+    let pics = crate::pictures::for_lesson(&s, &id, n, &text, lp.article.as_ref().map(|a| a.url.as_str())).await;
     let l = ws(&s).await?;
     let lesson_id = match l.db.course_lesson_id(&id, n).await? {
         Some(x) if opened.generated.is_none() => x,
@@ -664,7 +667,7 @@ async fn open_lesson_now(s: Shared, id: String, n: u32) -> R<Value> {
         "row": { "title": row.title, "level": row.level, "lang": row.lang, "path": row.path, "engine": row.engine, "created_at": row.created_at, "source_url": row.source_url },
         "plan": { "number": lp.number, "role": lp.role, "title": lp.title, "angle": lp.angle, "purpose": lp.purpose, "units": units, "words": lp.words, "review": lp.review, "status": lp.status },
         "review_cards": cards,
-        "picture": crate::library::picture_info(&l.ws, course.lang, &course.id),
+        "pictures": pics.iter().map(crate::pictures::for_page).collect::<Vec<_>>(),
         "generated": opened.generated.is_some(),
         "missing": opened.generated.as_ref().map(|g| g.missing.clone()).unwrap_or_default(),
         "notebook": page,
@@ -790,9 +793,6 @@ pub(crate) async fn apply_unit(l: &Loaded, r: &jl_core::rules::Rules, id: &str, 
         };
         let was_done = lp.units_done.contains(&u);
         let res = store::mark_unit(&mut course, n, u, passed, score.map(|x| x as f32), today).map_err(course_err)?;
-        if res.lesson_done {
-            crate::library::remove_picture(&l.ws, course.lang, &course.id);
-        }
         store::save_progress(&l.ws, &course).map_err(course_err)?;
         // A repeat of a passed unit earns nothing and is not written again.
         let pts = if res.points > 0.0 { points::award(true, score, false, &r.points) } else { 0.0 };
@@ -841,9 +841,6 @@ async fn after_unit(s: &Shared, r: &jl_core::rules::Rules, id: &str, n: u32, lan
 pub(crate) async fn conversation_unit_done(l: &Loaded, link: &CourseLink, passed: bool, score: Option<f64>) -> Result<Value, ApiError> {
     let mut course = store::load(&l.ws, &link.course).map_err(course_err)?;
     let res = store::mark_unit(&mut course, link.lesson, link.unit, passed, score.map(|x| x as f32), &date()).map_err(course_err)?;
-    if res.lesson_done {
-        crate::library::remove_picture(&l.ws, course.lang, &course.id);
-    }
     store::save_progress(&l.ws, &course).map_err(course_err)?;
     if let Some(lid) = l.db.course_lesson_id(&link.course, link.lesson).await? {
         refresh_lesson_page(l, lid).await;

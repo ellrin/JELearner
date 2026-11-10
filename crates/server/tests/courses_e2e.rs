@@ -1173,7 +1173,7 @@ async fn library_themes_split_into_lessons_with_texts() {
     let wiki = serve(
         Router::new()
             .route("/robots.txt", get(|| async { "User-agent: *\nDisallow: /private/\n" }))
-            .route("/wiki/Haggis", get(|| async { axum::response::Html("<html><head><title>Haggis - Wikipedia</title><meta property=\"og:image\" content=\"/wikipedia/commons/thumb/a/ab/Haggis.png/960px-Haggis.png?utm_source=x\"></head><body><div id='mw-content-text'><div class='mw-parser-output'><p>Haggis is a savoury pudding containing sheep's pluck.[1][2] It is traditionally eaten on Burns Night.[citation needed]</p><p>Today it is served in restaurants across Scotland and sold in supermarkets.</p></div></div></body></html>") }))
+            .route("/wiki/Haggis", get(|| async { axum::response::Html("<html><head><title>Haggis - Wikipedia</title><meta property=\"og:image\" content=\"/wikipedia/commons/thumb/a/ab/Haggis.png/960px-Haggis.png?utm_source=x\"></head><body><div id='mw-content-text'><div class='mw-parser-output'><p>Haggis is a savoury pudding containing sheep's pluck.[1][2] It is traditionally eaten on Burns Night.[citation needed]</p><figure><a href=\"/wiki/File:Haggis.png\"><img src=\"/wikipedia/commons/thumb/a/ab/Haggis.png/960px-Haggis.png\" width=\"300\"></a><figcaption>Haggis served in a restaurant in Edinburgh</figcaption></figure><p>Today it is served in restaurants across Scotland and sold in supermarkets.</p></div></div></body></html>") }))
             .route("/private/secret", get(|| async { "<p>should never be read, robots.txt forbids it</p>" }))
             .route("/wikipedia/commons/thumb/a/ab/Haggis.png/960px-Haggis.png", get(|| async {
                 let img = image::RgbImage::from_fn(1200, 600, |x, y| image::Rgb([(x % 255) as u8, (y % 255) as u8, 90]));
@@ -1244,16 +1244,26 @@ async fn library_themes_split_into_lessons_with_texts() {
     assert_eq!(c.post("/api/library/lesson", json!({"collection": "uk", "id": "secret-1"})).await.0, StatusCode::BAD_REQUEST);
     assert_eq!(c.post("/api/library/lesson", json!({"collection": "../x", "id": "haggis-1"})).await.0, StatusCode::BAD_REQUEST);
 
-    // The picture: its credit in the text; downloaded and shrunk for the lesson; gone when the lesson is done.
+    // Pictures between the paragraphs (plan §19.4.1): from the reference
+    // page, the licence read from the file's page, shrunk, kept in this
+    // computer's cache (never in the workspace).
     let md = std::fs::read_to_string(dir.join("飲食/haggis-1.md")).unwrap();
-    assert!(md.contains("image: ") && md.contains("A. Cook") && md.contains("Picture: A. Cook — CC BY-SA 4.0"), "{md}");
-    assert_eq!(les["picture"], true, "{les}");
-    let pic = o["picture"].clone();
-    assert_eq!((pic["author"].as_str(), pic["licence"].as_str()), (Some("A. Cook"), Some("CC BY-SA 4.0")), "{pic}");
+    assert!(md.contains("A. Cook"), "the text keeps its picture credit: {md}");
+    let pics = o["pictures"].as_array().unwrap().clone();
+    assert_eq!(pics.len(), 1, "{o}");
+    let pic = pics[0].clone();
+    assert_eq!((pic["author"].as_str(), pic["licence"].as_str(), pic["paragraph"].as_u64()), (Some("A. Cook"), Some("CC BY-SA 4.0"), Some(0)), "{pic}");
     let got = c.http.get(format!("{}{}", c.base, pic["src"].as_str().unwrap())).send().await.unwrap();
     assert_eq!(got.headers()["content-type"], "image/jpeg");
     let jpg = image::load_from_memory(&got.bytes().await.unwrap()).unwrap();
     assert_eq!((jpg.width(), jpg.height()), (800, 400), "shrunk to 800 wide");
+    assert!(walk(&ws_path).iter().all(|p| !p.extension().is_some_and(|e| e == "jpg")), "no picture in the workspace");
+    assert!(walk(&app_dir.path().join("cache/pictures")).iter().any(|p| p.extension().is_some_and(|e| e == "jpg")), "kept in the cache");
+    // Only addresses chosen for a lesson are fetched.
+    assert_eq!(c.http.get(format!("{}/api/pictures?u=https%3A%2F%2Fexample.com%2Fx.jpg", c.base)).send().await.unwrap().status().as_u16(), 404);
+    // Opened again: from the cache, no page read again.
+    let (_, again) = c.post(&format!("/api/courses/{id}/lessons/1/open"), json!({})).await;
+    assert_eq!(again["pictures"], o["pictures"]);
     let units = o["plan"]["units"].as_array().unwrap().clone();
     for u in &units {
         let i = u["index"].as_u64().unwrap();
@@ -1278,7 +1288,7 @@ async fn library_themes_split_into_lessons_with_texts() {
     let (_, course) = c.get(&format!("/api/courses/{id}")).await;
     assert_eq!(course["lessons"][0]["status"], "done", "{course}");
     let got = c.http.get(format!("{}{}", c.base, pic["src"].as_str().unwrap())).send().await.unwrap();
-    assert_eq!(got.status().as_u16(), 404, "the picture is removed once the lesson is done");
+    assert_eq!(got.status().as_u16(), 200, "kept two weeks, also after the lesson is done");
     assert!(std::fs::read_to_string(dir.join("飲食/haggis-1.md")).unwrap().contains("A. Cook"), "the credit stays in the text");
 }
 

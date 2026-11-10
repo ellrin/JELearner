@@ -6,7 +6,8 @@ self.addEventListener("install", (e) => e.waitUntil(caches.open(CACHE).then((c) 
 self.addEventListener("activate", (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method !== "GET" || url.hostname === "api.github.com" || url.hostname === "api.anthropic.com") return;
+  // GitHub, Claude and the lesson pictures (kept by the page itself, shrunk) are never cached here.
+  if (e.request.method !== "GET" || url.hostname === "api.github.com" || url.hostname === "api.anthropic.com" || url.hostname === "upload.wikimedia.org") return;
   e.respondWith(
     caches.open(CACHE).then(async (c) => {
       const hit = await c.match(e.request);
