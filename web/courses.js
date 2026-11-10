@@ -52,6 +52,9 @@ async function weeklyBar() {
   const st = state.status;
   const admin = !!(st?.users ?? []).find((x) => x.id === st?.user?.id)?.admin;
   if (!admin || st.demo || st.family?.ready || (st.users ?? []).length < 2) return null;
+  // A redrawn page has a new bar: the old bar's timer stops here, and each
+  // bar keeps its own (a shared one froze the new bar during a run).
+  clearInterval(weeklyTimer); weeklyTimer = null;
   const data = await fetchBuddies();
   const members = (data.buddies ?? []).filter((b) => b.levels?.[state.lang]);
   if (members.length < 2) return null;
@@ -60,13 +63,17 @@ async function weeklyBar() {
   const info = el("div", "wk-info");
   info.append(el("b", null, "本週的課"));
   const who = el("div", "wk-who");
-  for (const b of members) {
-    const left = b.prepared?.days ?? 0;
-    const chip = el("span", `wk-m${left <= 1 ? " low" : ""}`);
-    const dot = el("span", "dot"); setAvatar(dot, b);
-    chip.append(dot, document.createTextNode(`${b.name}・${left ? `到 ${fmtDate(b.prepared.until)}` : "還沒有"}`));
-    who.append(chip);
-  }
+  const drawWho = (list) => {
+    who.innerHTML = "";
+    for (const b of list) {
+      const left = b.prepared?.days ?? 0;
+      const chip = el("span", `wk-m${left <= 1 ? " low" : ""}`);
+      const dot = el("span", "dot"); setAvatar(dot, b);
+      chip.append(dot, document.createTextNode(`${b.name}・${left ? `到 ${fmtDate(b.prepared.until)}` : "還沒有"}`));
+      who.append(chip);
+    }
+  };
+  drawWho(members);
   info.append(who);
   const go1 = primaryButton("派本週的課", null, true);
   const help = el("button", "help", "?");
@@ -76,27 +83,31 @@ async function weeklyBar() {
   out.setAttribute("role", "status");
   bar.append(info, go1, help, out);
   const finish = async (p) => {
-    out.innerHTML = "";
     go1.disabled = false; go1.textContent = "派本週的課";
-    for (const e of p.errors ?? []) out.append(el("div", "note err", e));
-    if (!p.done) { if (!(p.errors ?? []).length) out.append(el("div", "note", "沒有做出新的課：主題都備過了。")); return; }
-    if (!weeklyMine) { out.append(el("div", "note ok", `上次做好 ${p.done} 堂。`)); return; }
+    // What did not go as planned stays on screen, also after the sync line.
+    const notes = prepNotes(p);
+    const show = (line) => { out.innerHTML = ""; if (line) out.append(line); out.append(...notes.map((n) => n.cloneNode(true))); };
+    if (!p.done) { show(notes.length ? null : el("div", "note", "沒有做出新的課：主題都備過了。")); return; }
+    if (!weeklyMine) { show(el("div", "note ok", `上次做好 ${p.done} 堂。`)); return; }
     weeklyMine = false;
-    out.append(el("div", "note", `做好 ${p.done} 堂，同步中…`));
+    show(el("div", "note", `做好 ${p.done} 堂，同步中…`));
     try {
       await api("/api/records/export", {});
       const r = await api("/api/git/sync", {});
-      out.innerHTML = "";
-      out.append(el("div", "note ok", r.pushed ? `做好 ${p.done} 堂，已經送出。` : `做好 ${p.done} 堂。這個工作區還沒有連到 repo，連上後按同步。`));
+      show(el("div", "note ok", r.pushed ? `做好 ${p.done} 堂，已經送出。` : `做好 ${p.done} 堂。這個工作區還沒有連到 repo，連上後按同步。`));
     } catch (e) {
-      out.innerHTML = "";
-      out.append(el("div", "note err", `做好 ${p.done} 堂，但同步沒有成功：${e.message}`));
+      show(el("div", "note err", `做好 ${p.done} 堂，但同步沒有成功：${e.message}`));
     }
     buddyCache = null;
     paintFoot(state.status);
+    fetchBuddies(true).then((d) => drawWho((d.buddies ?? []).filter((b) => b.levels?.[state.lang])));
   };
+  let t = null;
+  let shown = false;
+  const startPolling = () => { if (t) return; t = setInterval(poll, 3000); weeklyTimer = t; };
+  const stopPolling = () => { clearInterval(t); if (weeklyTimer === t) weeklyTimer = null; t = null; };
   const poll = async () => {
-    if (!bar.isConnected) { clearInterval(weeklyTimer); weeklyTimer = null; return; }
+    if (!bar.isConnected) { stopPolling(); return; }
     try {
       const p = (await api("/api/family/prepare")).progress;
       if (!p) return;
@@ -107,9 +118,11 @@ async function weeklyBar() {
         pr.setAttribute("aria-label", "備課進度");
         const name = members.find((b) => b.id === p.member)?.name ?? p.member;
         out.append(pr, el("div", "note", `${p.done} / ${p.total} 堂・${name}${p.current ? `・${p.current}` : ""}`));
-        if (!weeklyTimer) weeklyTimer = setInterval(poll, 3000);
-      } else if (weeklyTimer || weeklyMine) {
-        clearInterval(weeklyTimer); weeklyTimer = null;
+        startPolling();
+      } else if (t || weeklyMine || (!shown && p.planned && members.some((b) => (p.members ?? []).includes(b.id)))) {
+        // Also the last run when the page is first shown (after a restart of the page).
+        shown = true;
+        stopPolling();
         await finish(p);
       }
     } catch { /* next tick */ }
@@ -122,13 +135,40 @@ async function weeklyBar() {
       await api(`/api/news?lang=${state.lang}&refresh=true`).catch(() => {});
       await api("/api/family/prepare", { members: members.map((b) => b.id), lang: state.lang, days: WEEK.days, choices: WEEK.choices, source: "mix" });
       weeklyMine = true;
-      clearInterval(weeklyTimer); weeklyTimer = setInterval(poll, 3000);
+      startPolling();
       poll();
     } catch (e) { go1.textContent = "派本週的課"; out.innerHTML = ""; out.append(el("div", "note err", e.message)); }
   });
   // Coming back to the page: a run in progress shows itself (and is finished here).
   setTimeout(poll, 0);
   return bar;
+}
+
+/**
+ * A run's problems in a few lines: repeated ones once, the library writing
+ * failures as one line (details in its tooltip), the library shortfall as a
+ * plain note (not an error), and how many lessons were not made.
+ */
+function prepNotes(p) {
+  const errs = [...new Set(p.errors ?? [])];
+  const out = [];
+  const short = errs.filter((e) => /用新聞補上/.test(e));
+  const writing = errs.filter((e) => /寫主題庫的課・/.test(e));
+  const other = errs.filter((e) => !short.includes(e) && !writing.includes(e));
+  for (const e of [...new Set(short.map((x) => x.replace(/^[^：]*：/, "")))]) out.push(el("div", "note", e));
+  if (writing.length) {
+    const n = el("div", "note err", `主題庫有 ${writing.length} 個主題沒寫成，用其他的課補上。`);
+    n.title = writing.join("\n");
+    out.push(n);
+  }
+  // Different raw errors can read the same once made friendly: once each.
+  const plain = new Map();
+  for (const e of other) plain.set(friendly(e), [...(plain.get(friendly(e)) ?? []), e]);
+  [...plain].slice(0, 3).forEach(([text, raw]) => { const n = el("div", "note err", text); n.title = raw.join("\n"); out.push(n); });
+  if (plain.size > 3) out.push(el("div", "note err", `還有 ${plain.size - 3} 個問題`));
+  const planned = p.planned || p.total;
+  if (planned && p.done < planned) out.push(el("div", "note", `比預定的 ${planned} 堂少了 ${planned - p.done} 堂。`));
+  return out;
 }
 
 function kindTag(kind, label) {
@@ -459,7 +499,8 @@ async function renderCourseLesson(page) {
   state.paintNow?.();
   // A lesson opened for the first time is written now: on a local model that
   // takes minutes. Say so after a while; leaving is fine, it is kept.
-  const slow = setTimeout(() => { waitNote.textContent = "第一次打開，正在寫這一課（本機模型要幾分鐘）。可以先去別的地方，寫好會留著。"; }, 8000);
+  const local = /^llama-server/.test(state.status?.engine ?? "");
+  const slow = setTimeout(() => { waitNote.textContent = local ? "第一次打開，正在寫這一課（本機模型要幾分鐘）。可以先去別的地方，寫好會留著。" : "第一次打開，正在寫這一課，約一兩分鐘。可以先去別的地方，寫好會留著。"; }, 8000);
   let o;
   try {
     o = await api(`/api/courses/${encodeURIComponent(id)}/lessons/${n}/open`, {}, "POST", state.signal);
@@ -1235,6 +1276,11 @@ async function drawLibrary(box) {
       });
       row.append(sel, go);
       adminRow = row;
+      // From 「寫更多課」 on the today page: straight to this button.
+      if (state.libWrite) {
+        state.libWrite = false;
+        requestAnimationFrame(() => { row.scrollIntoView({ block: "center" }); go.focus({ preventScroll: true }); });
+      }
       poll().then(() => { if (go.disabled) { clearInterval(libTimer); libTimer = setInterval(poll, 3000); } });
     }
     // Written lessons, by category; themes with lessons still to write are folded (admin).

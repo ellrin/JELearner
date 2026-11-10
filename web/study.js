@@ -592,9 +592,9 @@ function todayStart(ready, minutes) {
       if (todayPick.newsErr) box.append(el("p", "ts-note", "新聞暫時抓不到，先從興趣與通識挑。"));
       // The library ran low: say so once, with the way to write more (admin).
       if (todayPick.libShort) {
-        const n = el("p", "ts-note", "主題庫還沒上過的課不多了，先用英國的新聞補上。");
+        const n = el("p", "ts-note", "主題庫還沒上過的課不多了，先用新聞補上。");
         const me = (state.status?.users ?? []).find((x) => x.id === state.status?.user?.id);
-        if (me?.admin) n.append(" ", ghostButton("book", "寫更多課", () => go("courses", { course: null, courseLesson: null, courseCreate: "library" })));
+        if (me?.admin) n.append(" ", ghostButton("book", "寫更多課", () => go("courses", { course: null, courseLesson: null, courseCreate: "library", libWrite: true })));
         box.append(n);
       }
       const grid = el("div", "ts-cards");

@@ -1396,7 +1396,7 @@ function openPrep(m, watching = false) {
     for (const o of others) {
       const l = el("label", "check");
       const c = el("input"); c.type = "checkbox"; c.value = o.id;
-      c.checked = store.get("jl.prepAlso", []).includes(o.id);
+      c.checked = store.get(`jl.prepAlso.${m.id}`, []).includes(o.id);
       l.append(c, el("span", null, o.id === state.status?.user?.id ? `${o.name}（我的 iPad）` : o.name));
       who.append(l);
       also.push(c);
@@ -1476,7 +1476,7 @@ function openPrep(m, watching = false) {
       bar.setAttribute("aria-label", "備課進度");
       const whom = (p.members?.length ?? 0) > 1 ? `${nameOf(p.member)}・` : "";
       out.append(bar, el("div", "note", `${p.done} / ${p.total} 堂・${whom}${p.current ? `正在做「${p.current}」` : "正在挑主題"}`));
-      for (const e of p.errors ?? []) out.append(errLine(e));
+      out.append(...prepNotes({ ...p, planned: 0, total: 0 }));
       return;
     }
     if (!inRun) return;
@@ -1485,13 +1485,15 @@ function openPrep(m, watching = false) {
     status.setAttribute("role", "status");
     if (p.done) {
       status.append(say("ok", `${prefix}做好 ${p.done} 堂。按同步就會送到 iPad。`, { icon: "cloud", label: "同步", onclick: () => $("#actSync").click() }));
-      if (p.done < p.total) status.append(say("", `比預定的 ${p.total} 堂少：想不出更多沒備過的主題。可以設定重點主題，或過幾天再備。`));
     } else if (!(p.errors ?? []).length) {
       status.append(say("", `${prefix}這次沒有做出課：想不出沒備過的主題。可以設定重點主題，或過幾天再備。`));
     }
     out.append(status);
-    if (p.made?.length) out.append(el("div", "note", p.made.join("、")));
-    for (const e of p.errors ?? []) out.append(/新的主題|換一批/.test(e) ? say("", "想不出更多沒備過的主題。可以設定重點主題，或過幾天再備。") : errLine(e));
+    if (p.made?.length) out.append(el("div", "note", [...new Set(p.made)].join("、")));
+    // Problems once each, short; the details are in their tooltips (prepNotes).
+    const tooFew = (p.errors ?? []).some((e) => /新的主題|換一批/.test(e));
+    out.append(...prepNotes({ ...p, errors: (p.errors ?? []).filter((e) => !/新的主題|換一批/.test(e)) }));
+    if (tooFew) out.append(say("", "想不出更多沒備過的主題。可以設定重點主題，或過幾天再備。"));
   };
   const poll = async () => {
     // The settings were closed: stop asking.
@@ -1512,7 +1514,7 @@ function openPrep(m, watching = false) {
     }
     try {
       startedHere = true;
-      store.set("jl.prepAlso", also.filter((c) => c.checked).map((c) => c.value));
+      store.set(`jl.prepAlso.${m.id}`, also.filter((c) => c.checked).map((c) => c.value));
       await api("/api/family/prepare", { members: picked(), lang: lang.value, days: Number(days.value), choices: Number(choices.value), source: source.value });
       watch();
     } catch (e) { lastKey = ""; out.innerHTML = ""; out.append(errLine(e.message)); }
@@ -1581,6 +1583,8 @@ function ipadSetup(m) {
   // keys go straight into the app on the home screen. Always black on white.
   const qrBox = el("div", "qr-box");
   qrBox.hidden = true;
+  // A changed field makes the shown code wrong: it goes away.
+  form.addEventListener("input", () => { if (!qrBox.hidden) { qrBox.hidden = true; qrBox.innerHTML = ""; show.textContent = "顯示 QR code"; } });
   const show = primaryButton("顯示 QR code", () => {
     if (!qrBox.hidden) { qrBox.hidden = true; qrBox.innerHTML = ""; show.textContent = "顯示 QR code"; return; }
     const url = link();

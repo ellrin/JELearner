@@ -52,6 +52,8 @@ pub struct Progress {
     pub rest: usize,
     pub lang: String,
     pub total: usize,
+    /// What was asked for (days × topics × members), before anything ran short.
+    pub planned: usize,
     pub done: usize,
     /// What is being made now (a topic title).
     pub current: String,
@@ -131,7 +133,7 @@ async fn start(State(s): State<Shared>, Json(b): Json<StartBody>) -> R<Value> {
         return Err(bad("已經在備課了，等這一批做完"));
     }
     let per = (b.days * b.choices) as usize;
-    set(&s, Progress { running: true, member: members[0].clone(), members: members.clone(), lang: lang.code().into(), total: per * members.len(), ..Default::default() });
+    set(&s, Progress { running: true, member: members[0].clone(), members: members.clone(), lang: lang.code().into(), total: per * members.len(), planned: per * members.len(), ..Default::default() });
     let s2 = s.clone();
     tokio::spawn(async move {
         for (i, m) in members.iter().enumerate() {
