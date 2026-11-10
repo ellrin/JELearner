@@ -86,6 +86,10 @@ pub struct Settings {
     /// The private workspace, when chosen.
     pub workspace: Option<PathBuf>,
     pub engine: EngineKind,
+    /// The engine for conversations (`[engine] realtime`); `None` = the same
+    /// as `engine`. Lessons can be written by Claude while a local model
+    /// answers in conversations, or the other way round.
+    pub realtime_engine: Option<EngineKind>,
     pub claude: ClaudeConfig,
     /// The model for answers the learner waits for (conversation turns and
     /// their evaluation); lessons and courses use `claude.model`.
@@ -172,6 +176,7 @@ pub struct Realtime {
 #[derive(Deserialize, Default)]
 struct EngineSection {
     kind: Option<String>,
+    realtime: Option<String>,
 }
 #[derive(Deserialize, Default)]
 struct ClaudeSection {
@@ -259,7 +264,9 @@ impl Settings {
             Some("api") | Some("google") => GoogleMode::Api,
             _ => GoogleMode::Mock,
         };
+        let realtime_engine = env("JELEARNER_REALTIME_ENGINE").or(cfg.engine.realtime).and_then(|k| EngineKind::parse(&k));
         Settings {
+            realtime_engine,
             paths,
             workspace: env("JELEARNER_WORKSPACE").map(PathBuf::from).or(cfg.workspace_path),
             engine,
@@ -314,6 +321,7 @@ impl Settings {
             app_dir: Some(app_dir),
             workspace,
             engine: EngineKind::Auto,
+            realtime_engine: None,
             claude: ClaudeConfig {
                 base_url: "http://127.0.0.1:9".into(),
                 model: catalog.cloud.default.clone(),

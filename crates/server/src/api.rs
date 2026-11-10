@@ -228,6 +228,10 @@ struct Status {
     /// 「Claude 訂閱」「Claude API」「本機模型」
     engine_label: String,
     engine_error: Option<String>,
+    /// Conversations' own engine, when set apart from the lessons' one.
+    realtime_engine: Option<String>,
+    realtime_label: Option<String>,
+    realtime_ready: bool,
     google: &'static str,
     import: Option<ImportReport>,
     stats: Value,
@@ -282,6 +286,14 @@ async fn status(State(s): State<Shared>) -> R<Status> {
             }
         }
     };
+    let rt_kind = s.settings.read().await.realtime_engine;
+    let (realtime_engine, realtime_label, realtime_ready) = match (rt_kind, &s.provider_override) {
+        (Some(k), None) => match crate::resolve_engine_task(&s, crate::Task::Realtime, false).await {
+            Ok(r) => (Some(k.as_str().to_string()), Some(r.label().to_string()), true),
+            Err(_) => (Some(k.as_str().to_string()), None, false),
+        },
+        _ => (None, None, engine_ready),
+    };
     let error = s.load_error.read().await.clone();
     let st_now = s.settings.read().await.clone();
     let root = s.root.read().await;
@@ -323,6 +335,9 @@ async fn status(State(s): State<Shared>) -> R<Status> {
         engine_ready,
         engine_label,
         engine_error,
+        realtime_engine,
+        realtime_label,
+        realtime_ready,
         google: s.mailer.mode(),
         import: None,
         stats: json!({}),
@@ -1346,18 +1361,32 @@ async fn claude_status(State(s): State<Shared>, Query(q): Query<FreshQuery>) -> 
 
 #[derive(Deserialize)]
 struct EngineBody {
-    kind: String,
+    /// The engine for lessons and courses (and conversations, unless set apart).
+    kind: Option<String>,
+    /// Conversations: an engine, or "same" for the lessons' one.
+    realtime: Option<String>,
 }
 
 /// Choose the engine: auto, subscription, api or llama-server.
 async fn set_engine(State(s): State<Shared>, Json(b): Json<EngineBody>) -> R<Value> {
-    let kind = settings::EngineKind::parse(&b.kind).ok_or_else(|| bad("engine 只能是 auto、subscription、api、llama-server"))?;
     let mut st = s.settings.write().await;
-    if let Some(dir) = &st.app_dir {
-        settings::write_config_value(dir, Some("engine"), "kind", toml::Value::String(kind.as_str().into())).map_err(fail)?;
+    if let Some(k) = b.kind.as_deref() {
+        let kind = settings::EngineKind::parse(k).ok_or_else(|| bad("engine 只能是 auto、subscription、api、llama-server"))?;
+        if let Some(dir) = &st.app_dir {
+            settings::write_config_value(dir, Some("engine"), "kind", toml::Value::String(kind.as_str().into())).map_err(fail)?;
+        }
+        st.engine = kind;
     }
-    st.engine = kind;
-    Ok(Json(json!({ "engine": kind.as_str() })))
+    if let Some(r) = b.realtime.as_deref() {
+        let rt = if r == "same" || r.is_empty() { None } else { Some(settings::EngineKind::parse(r).ok_or_else(|| bad("對話的引擎只能是 same、auto、subscription、api、llama-server"))?) };
+        if let Some(dir) = &st.app_dir {
+            // "same" leaves the key out, so the file says only what was chosen.
+            let v = rt.map(|k| toml::Value::String(k.as_str().into())).unwrap_or_else(|| toml::Value::String("same".into()));
+            settings::write_config_value(dir, Some("engine"), "realtime", v).map_err(fail)?;
+        }
+        st.realtime_engine = rt;
+    }
+    Ok(Json(json!({ "engine": st.engine.as_str(), "realtime": st.realtime_engine.map(|k| k.as_str()).unwrap_or("same") })))
 }
 
 /// `claude auth login --claudeai`: the browser opens on Anthropic's sign-in

@@ -812,6 +812,7 @@ per_day = 10                # 每天帶入幾個新字
   - 「寫更多課」沒有指定主題時，輪流從各類別挑主題（原本照課綱順序，會一次全是同一類）。
   - 主題卡的 `why` 改成對學習者說話（「你」），不再寫「這能幫助學習者…」。
   - 測試：`today_cards_follow_the_library_share`、`weekly_mix_follows_the_library_share`。實際模型寫出的卡片文字只能用真的模型看。
+- **備課與對話分開選引擎（作者，2026-11-11）**：「設定 → 04 Claude」的「使用」管寫課文、備課、大綱與主題卡，新增「對話用」管 AI 對話的回覆與評分（`config.toml` 的 `[engine] realtime`，`same` = 跟「使用」一樣）。例如課文用 Claude（Sonnet），對話用本機的 Gemma E4B 或 Qwen 4B。狀態列兩個不同時寫成「Claude・對話用本機模型」。iPad 上的對話不受影響，固定用 Claude API（Haiku）。測試：`conversations_can_use_their_own_engine`。
 - 已知：替管理員自己備的課也會出現在他 Mac 的課程頁（同一份課，可以在任一邊上）。
 - **iPad 用 QR code 設定**：備課面板「顯示 QR code」（`web/vendor/qrcode.js`，黑白、不隨主題變色）；iPad App「第一次使用」的主要按鈕是「掃描電腦上的 QR code」（相機＋`ipad/vendor/jsQR.js`），掃到就存進這個 App 自己的儲存空間並同步。加入主畫面的 App 與 Safari 的儲存空間是分開的，所以要從主畫面打開後再掃。已用假相機畫面在 Chrome 驗證來回；**實機 iPad Safari 尚未測**。
 - 還沒做：戰友之間的鼓勵訊息；每週排行的歷史。

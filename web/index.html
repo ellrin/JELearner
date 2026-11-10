@@ -360,6 +360,13 @@
               <option value="api">Claude API key</option>
               <option value="llama-server">本機模型（Gemma／Qwen，在「本機模型」選）</option>
             </select></label>
+            <label><span>對話用</span><select id="setEngineRt" aria-label="AI 對話用的引擎">
+              <option value="same">和上面一樣</option>
+              <option value="llama-server">本機模型（免費，比較慢）</option>
+              <option value="auto">Claude（自動，訂閱優先）</option>
+              <option value="subscription">Claude 訂閱（Claude Code）</option>
+              <option value="api">Claude API key</option>
+            </select><span class="inline"><button class="help" aria-label="說明：對話用的引擎" data-tip="上面的「使用」寫課文、備課；這裡選 AI 對話每一句回覆用哪一個。例如課文交給 Claude（品質好），對話用本機模型（免費）。iPad 上的對話固定用 Claude API。">?</button></span></label>
             <div class="now" id="setActive"></div>
           </div>
           <div class="seg-row">

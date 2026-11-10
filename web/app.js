@@ -286,7 +286,10 @@ async function refreshStatus() {
   const eng = el("button", "eng", null);
   // Which engine is in use: a local model is not Claude.
   const local = /^llama-server/.test(s.engine ?? "");
-  eng.append(dot, document.createTextNode(s.family?.ready ? (s.engine_ready ? "AI 老師準備好了" : "AI 老師還沒準備好") : `${local ? "本機模型" : "Claude"}${s.engine_ready ? " 已連線" : " 未連線"}`));
+  // Conversations on their own engine: both names, e.g. 「Claude・對話用本機模型」.
+  const rt = s.realtime_engine ? (s.realtime_engine === "llama-server" ? "本機模型" : "Claude") : null;
+  const both = rt && rt !== (local ? "本機模型" : "Claude") ? `・對話用${rt}` : "";
+  eng.append(dot, document.createTextNode(s.family?.ready ? (s.engine_ready ? "AI 老師準備好了" : "AI 老師還沒準備好") : `${local ? "本機模型" : "Claude"}${both}${s.engine_ready && (s.realtime_ready ?? true) ? " 已連線" : " 未連線"}`));
   eng.title = s.engine_ready ? `${s.engine_label}・${s.engine}` : (s.engine_error ?? "設定 → Claude");
   eng.onclick = () => openSettings(local ? 4 : 3);
   sb.append(eng, el("span", "grow"));
@@ -1666,6 +1669,7 @@ function setVia(v) {
 async function loadClaudeStep(fresh = false) {
   const c = await api(`/api/claude${fresh ? "?fresh=true" : ""}`);
   $("#setEngine").value = c.engine;
+  $("#setEngineRt").value = state.status?.realtime_engine ?? "same";
   const act = $("#setActive");
   act.className = `now ${c.active ? "" : "warn"}`;
   // Not connected yet: this tab is where it happens, so no "go to Settings".
@@ -1710,6 +1714,10 @@ async function loadClaudeStep(fresh = false) {
   $("#setEffort").value = c.effort ?? "";
   return c;
 }
+$("#setEngineRt").onchange = async () => {
+  try { await api("/api/settings/engine", { realtime: $("#setEngineRt").value }); await refreshStatus(); await loadClaudeStep(); }
+  catch (e) { flash(e.message, true); }
+};
 $("#setEngine").onchange = async () => {
   try { await api("/api/settings/engine", { kind: $("#setEngine").value }); await loadClaudeStep(); await refreshStatus(); greet(); }
   catch (e) { flash(e.message, true); }

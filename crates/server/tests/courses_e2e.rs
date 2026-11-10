@@ -1617,3 +1617,63 @@ async fn weekly_mix_writes_missing_texts_and_stops_on_failures() {
     let kinds: Vec<String> = v["days"].as_object().unwrap().values().flat_map(|d| d.as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>()).collect();
     assert_eq!(kinds.iter().filter(|k| *k == "library").count(), 2, "{kinds:?}");
 }
+
+/// Lessons and conversations on different engines: lessons by Claude,
+/// conversations by the local model (`[engine] realtime`), kept in config.toml.
+#[tokio::test]
+async fn conversations_can_use_their_own_engine() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let claude_calls = Arc::new(Mutex::new(vec![]));
+    let claude = serve(mock_claude(claude_calls.clone())).await;
+    let local_calls = Arc::new(Mutex::new(0usize));
+    let lc = local_calls.clone();
+    let local = serve(Router::new().route(
+        "/v1/chat/completions",
+        post(move |Json(_b): Json<Value>| {
+            let lc = lc.clone();
+            async move {
+                *lc.lock().unwrap() += 1;
+                let reply = json!({ "recast": "", "question": "What do you do after class?", "used_targets": [], "starters": [] });
+                Json(json!({ "choices": [{ "message": { "role": "assistant", "content": reply.to_string() }, "finish_reason": "stop" }] }))
+            }
+        }),
+    ))
+    .await;
+    let mut s = Settings::for_tests(Paths::from_repo(), app_dir.path().to_path_buf());
+    s.claude.base_url = claude;
+    s.claude_api_key = Some("sk-ant-test-key-0000".into());
+    s.llama.url = format!("{local}/v1");
+    let app = jl_server::router(s, Options { provider: None }).await;
+    let c = Client { base: serve(app).await, http: reqwest::Client::new() };
+    assert_eq!(c.post("/api/setup/workspace", json!({ "path": ws_path, "init": true })).await.0, StatusCode::OK);
+    assert_eq!(c.post("/api/users", json!({ "name": "Ellrin", "languages": ["en"], "majors": { "en": "B1" } })).await.0, StatusCode::OK);
+
+    let (st, r) = c.post("/api/settings/engine", json!({ "kind": "api", "realtime": "llama-server" })).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["realtime"], "llama-server");
+    let cfg = std::fs::read_to_string(app_dir.path().join("config.toml")).unwrap();
+    assert!(cfg.contains("realtime = \"llama-server\""), "{cfg}");
+    let (_, status) = c.get("/api/status").await;
+    assert_eq!((status["realtime_engine"].as_str(), status["realtime_ready"].as_bool()), (Some("llama-server"), Some(true)), "{status}");
+
+    // A conversation: its opening and turns go to the local model only.
+    let (st, conv) = c.post("/api/conversations", json!({ "lang": "en" })).await;
+    assert_eq!(st, StatusCode::OK, "{conv}");
+    let id = conv["id"].as_i64().unwrap();
+    assert_eq!(c.post(&format!("/api/conversations/{id}/turns"), json!({ "text": "I usually play basketball with my friends." })).await.0, StatusCode::OK);
+    assert_eq!(*local_calls.lock().unwrap(), 2, "opening and one turn on the local model");
+    let claude_conv = claude_calls.lock().unwrap().iter().filter(|b| b["output_config"]["format"]["schema"]["properties"]["recast"].is_object()).count();
+    assert_eq!(claude_conv, 0, "no conversation call to Claude");
+    // A lesson is still Claude's.
+    let (st, course) = c.post("/api/courses", json!({ "kind": "topic", "lang": "en", "keywords": ["AI chips"] })).await;
+    assert_eq!(st, StatusCode::OK, "{course}");
+    assert!(claude_calls.lock().unwrap().iter().any(|b| b["output_config"]["format"]["schema"]["properties"]["enough_material"].is_object()), "the outline by Claude");
+
+    // Back to one engine for both.
+    let (_, r) = c.post("/api/settings/engine", json!({ "realtime": "same" })).await;
+    assert_eq!(r["realtime"], "same");
+    let (_, status) = c.get("/api/status").await;
+    assert!(status["realtime_engine"].is_null(), "{status}");
+}

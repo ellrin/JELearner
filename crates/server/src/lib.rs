@@ -308,7 +308,15 @@ const NO_CLAUDE: &str = "Claude 還沒連上：到「設定 → Claude」用瀏�
 /// Pick the engine from the settings: `auto` prefers the subscription when
 /// Claude Code is signed in, then an API key.
 pub async fn resolve_engine(s: &Shared, fresh: bool) -> Result<Resolved, String> {
-    let kind = s.settings.read().await.engine;
+    resolve_engine_task(s, Task::Generate, fresh).await
+}
+
+/// The engine for one kind of work: conversations may have their own.
+pub async fn resolve_engine_task(s: &Shared, task: Task, fresh: bool) -> Result<Resolved, String> {
+    let kind = {
+        let st = s.settings.read().await;
+        if task == Task::Realtime { st.realtime_engine.unwrap_or(st.engine) } else { st.engine }
+    };
     let has_key = api_key(s).await.is_some();
     let (who, cli) = claude_identity(s).await;
     if who.is_none() && kind != EngineKind::LlamaServer && s.settings.read().await.claude_api_key.is_none() && !has_key {
@@ -346,7 +354,7 @@ pub async fn provider_task(s: &Shared, task: Task) -> Result<Arc<dyn LlmProvider
     if let Some(p) = &s.provider_override {
         return Ok(p.clone());
     }
-    let which = resolve_engine(s, false).await.map_err(unavailable)?;
+    let which = resolve_engine_task(s, task, false).await.map_err(unavailable)?;
     provider_for_task(s, which, task).await
 }
 
