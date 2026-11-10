@@ -1445,3 +1445,8 @@ table.grid.words tr.add input { min-width: 0; }
 .weekly .wk-out { flex-basis: 100%; }
 .weekly .wk-out:empty { display: none; }
 .weekly .wk-out progress { width: 100%; }
+
+/* iPad setup: the QR code (always black on white) beside its three steps. */
+.qr-box { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: center; margin-top: 10px; }
+.qr-box canvas { width: min(320px, 100%); height: auto; border-radius: 8px; border: 1px solid var(--line); image-rendering: pixelated; background: #fff; }
+.qr-box .qr-steps { margin: 0; padding-left: 20px; font-size: 14.5px; line-height: 1.9; flex: 1; min-width: 200px; }

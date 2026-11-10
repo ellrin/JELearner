@@ -13,6 +13,8 @@ trap 'git worktree remove --force "$WT"' EXIT
 rm -rf "$WT/app"
 mkdir -p "$WT/app"
 cp "$SRC"/index.html "$SRC"/app.js "$SRC"/style.css "$SRC"/sw.js "$SRC"/manifest.webmanifest "$SRC"/icon-256.png "$SRC"/icon-512.png "$WT/app/"
+mkdir -p "$WT/app/vendor"
+cp "$SRC"/vendor/*.js "$WT/app/vendor/"
 # A new cache name on every publish, so iPads pick up the new version.
 sed -i.bak "s/const CACHE = \"jl-app-v[^\"]*\"/const CACHE = \"jl-app-$(git rev-parse --short HEAD)\"/" "$WT/app/sw.js" && rm "$WT/app/sw.js.bak"
 cd "$WT"

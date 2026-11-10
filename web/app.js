@@ -1544,26 +1544,62 @@ function ipadSetup(m) {
   const row = el("div", "actions-row");
   const note = el("span", "note");
   note.setAttribute("role", "status");
-  const copy = primaryButton("複製設定連結", async () => {
+  /** The link from the form, or null with a word about what is missing. */
+  const link = () => {
     note.className = "note err";
     const base = app.value.trim(), r = repo.value.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
-    if (!/^https?:\/\//.test(base)) { note.textContent = "先填 iPad App 的網址"; app.focus(); return; }
-    if (!/^[\w.-]+\/[\w.-]+$/.test(r)) { note.textContent = "repo 寫成「帳號/名稱」"; repo.focus(); return; }
-    if (!token.value.trim()) { note.textContent = "還需要 GitHub 鑰匙"; token.focus(); return; }
+    if (!/^https?:\/\//.test(base)) { note.textContent = "先填 iPad App 的網址"; app.focus(); return null; }
+    if (!/^[\w.-]+\/[\w.-]+$/.test(r)) { note.textContent = "repo 寫成「帳號/名稱」"; repo.focus(); return null; }
+    if (!token.value.trim()) { note.textContent = "還需要 GitHub 鑰匙"; token.focus(); return null; }
     store.set("jl.ipadApp", base);
     const json = JSON.stringify({ repo: r, member: m.id, token: token.value.trim(), apiKey: key.value.trim() });
     const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(json))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    note.className = "note";
+    note.textContent = "";
+    return `${base.replace(/#.*$/, "")}#setup=${b64}`;
+  };
+  // The QR code: scanned from inside the iPad app (第一次使用 › 掃描), so the
+  // keys go straight into the app on the home screen. Always black on white.
+  const qrBox = el("div", "qr-box");
+  qrBox.hidden = true;
+  const show = primaryButton("顯示 QR code", () => {
+    if (!qrBox.hidden) { qrBox.hidden = true; qrBox.innerHTML = ""; show.textContent = "顯示 QR code"; return; }
+    const url = link();
+    if (!url) return;
     try {
-      await navigator.clipboard.writeText(`${base.replace(/#.*$/, "")}#setup=${b64}`);
-      note.className = "note";
-      note.textContent = `已複製。用 AirDrop 或訊息傳到 ${m.name} 的 iPad，用 Safari 打開，再「加入主畫面」。`;
-    } catch { note.textContent = "無法複製，請允許剪貼簿"; }
+      const qr = qrcode(0, "L");
+      qr.addData(url);
+      qr.make();
+      const n = qr.getModuleCount(), quiet = 4, px = Math.max(3, Math.floor(720 / (n + quiet * 2)));
+      const cv = el("canvas");
+      cv.width = cv.height = (n + quiet * 2) * px;
+      const g = cv.getContext("2d");
+      g.fillStyle = "#fff"; g.fillRect(0, 0, cv.width, cv.height);
+      g.fillStyle = "#000";
+      for (let r2 = 0; r2 < n; r2++) for (let c2 = 0; c2 < n; c2++) if (qr.isDark(r2, c2)) g.fillRect((c2 + quiet) * px, (r2 + quiet) * px, px, px);
+      cv.setAttribute("role", "img");
+      cv.setAttribute("aria-label", `${m.name} 的 iPad 設定 QR code`);
+      const ol = el("ol", "qr-steps");
+      for (const t of [`在 ${m.name} 的 iPad 用 Safari 打開上面的網址`, "分享 → 加入主畫面，從主畫面打開", "按「掃描電腦上的 QR code」，對準這裡"]) ol.append(el("li", null, t));
+      qrBox.append(cv, ol);
+      qrBox.hidden = false;
+      show.textContent = "收起 QR code";
+      qrBox.scrollIntoView({ block: "nearest" });
+    } catch { note.className = "note err"; note.textContent = "內容太長，做不出 QR code，請用複製連結"; }
   }, true);
+  const copy = ghostButton("copy", "複製連結", async () => {
+    const url = link();
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      note.textContent = `已複製。傳到 ${m.name} 的 iPad，用 Safari 打開。`;
+    } catch { note.className = "note err"; note.textContent = "無法複製，請允許剪貼簿"; }
+  });
   const help = el("button", "help", "?");
   help.setAttribute("aria-label", "說明：iPad 設定連結");
-  help.dataset.tip = "連結裡有兩把鑰匙，只傳給那台 iPad，用完就把訊息刪掉。鑰匙只留在那台 iPad 的瀏覽器裡，這台電腦不保存。";
-  row.append(copy, help, note);
-  d.append(form, row);
+  help.dataset.tip = "QR code 和連結裡有兩把鑰匙：掃完就收起來，連結傳完把訊息刪掉。鑰匙只留在那台 iPad 裡，這台電腦不保存。";
+  row.append(show, copy, help, note);
+  d.append(form, row, qrBox);
   return d;
 }
 

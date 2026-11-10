@@ -223,19 +223,105 @@ async function claude(system, messages, schema, maxTokens) {
 // ── setup ───────────────────────────────────────────────
 // A setup link from the admin: …/app/#setup=<base64url JSON> (stays in this browser).
 function readSetupLink() {
-  const m = location.hash.match(/^#setup=([A-Za-z0-9_-]+)/);
+  if (!/^#setup=/.test(location.hash)) return false;
+  if (!takeSetup(location.hash)) toast("設定連結讀不懂", true);
+  history.replaceState(null, "", location.pathname);
+  return true;
+}
+/** Settings from a setup link or a scanned QR code (`…#setup=<base64url JSON>`); true when taken. */
+function takeSetup(text) {
+  const m = String(text ?? "").match(/#setup=([A-Za-z0-9_-]+)/);
   if (!m) return false;
   try {
     const json = new TextDecoder().decode(Uint8Array.from(atob(m[1].replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0)));
     const c = JSON.parse(json);
-    if (c.repo && c.token && c.member) { cfg = c; store.set("jl.cfg", cfg); }
-  } catch { toast("設定連結讀不懂", true); }
-  history.replaceState(null, "", location.pathname);
-  return true;
+    if (!(c.repo && c.token && c.member)) return false;
+    cfg = c; store.set("jl.cfg", cfg);
+    return true;
+  } catch { return false; }
+}
+
+// Scan the QR code on the admin's computer with this iPad's camera: the
+// settings go straight into this app (on the home screen it has its own
+// storage, which a link opened in Safari does not reach).
+let jsqrLoading = null;
+function loadJsQR() {
+  jsqrLoading ??= new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "vendor/jsQR.js";
+    s.onload = () => resolve(window.jsQR);
+    s.onerror = () => { jsqrLoading = null; reject(new Error("掃描功能下載不了，連上網路再試")); };
+    document.head.append(s);
+  });
+  return jsqrLoading;
+}
+/** The text of a QR code in the frame, or null. */
+function decodeQR(image) {
+  const r = window.jsQR?.(image.data, image.width, image.height, { inversionAttempts: "dontInvert" });
+  return r?.data || null;
+}
+async function scanSetup() {
+  if (!navigator.mediaDevices?.getUserMedia) { toast("這個瀏覽器不能用相機，請用設定連結", true); return; }
+  let stream;
+  try {
+    await loadJsQR();
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 } }, audio: false });
+  } catch (e) {
+    toast(e.name === "NotAllowedError" ? "相機沒有打開：請允許使用相機，再按一次" : e.message || "相機打不開", true);
+    return;
+  }
+  const overlay = el("div", "scan");
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-label", "掃描 QR code");
+  const video = el("video");
+  video.playsInline = true; video.muted = true; video.autoplay = true;
+  video.srcObject = stream;
+  const hint = el("p", "scan-hint", "對準電腦上的 QR code");
+  hint.setAttribute("role", "status");
+  let stopped = false;
+  const stop = () => { stopped = true; stream.getTracks().forEach((t) => t.stop()); overlay.remove(); };
+  const cancel = button("取消", "", stop);
+  overlay.append(video, hint, cancel);
+  document.body.append(overlay);
+  cancel.focus();
+  const cv = document.createElement("canvas");
+  const g = cv.getContext("2d", { willReadFrequently: true });
+  const tick = async () => {
+    if (stopped) return;
+    if (video.readyState >= 2 && video.videoWidth) {
+      // The middle square, at most 800 px: enough for a dense code, quick to read.
+      const side = Math.min(video.videoWidth, video.videoHeight), size = Math.min(800, side);
+      cv.width = cv.height = size;
+      g.drawImage(video, (video.videoWidth - side) / 2, (video.videoHeight - side) / 2, side, side, 0, 0, size, size);
+      const text = decodeQR(g.getImageData(0, 0, size, size));
+      if (text) {
+        if (takeSetup(text)) {
+          stop();
+          toast("設定好了");
+          stack.length = 0;
+          show("今天", drawHome);
+          sync().then(() => show("今天", drawHome, false)).catch(() => show("今天", drawHome, false));
+          return;
+        }
+        hint.textContent = "這不是 JELearner 的設定 QR code";
+      }
+    }
+    setTimeout(tick, 150);
+  };
+  tick();
 }
 function drawSettings(box) {
   box.append(el("h2", null, cfg ? "設定" : "第一次使用"));
-  if (!cfg) box.append(el("p", "muted", "請家人幫忙：從家人的電腦傳來的設定連結打開，或在這裡填好。"));
+  if (!cfg) {
+    box.append(el("p", "muted", "請家人幫忙：掃描家人電腦上的 QR code 就設定好了。"));
+    const top = el("div", "row");
+    top.append(button("掃描電腦上的 QR code", "main", scanSetup));
+    box.append(top);
+    const manual = el("details", "manual");
+    manual.append(el("summary", null, "手動填寫"));
+    box.append(manual);
+    box = manual;
+  }
   const f = (label, type, v, ph) => { const l = el("label", "f"); const i = el("input"); i.type = type; i.value = v ?? ""; i.placeholder = ph ?? ""; i.autocomplete = "off"; i.autocapitalize = "off"; l.append(el("span", null, label), i); box.append(l); return i; };
   const repo = f("資料 repo（帳號/名稱）", "text", cfg?.repo, "ellrin/JELearner-private");
   const member = f("你的使用者 id", "text", cfg?.member, "daidai");
@@ -250,6 +336,8 @@ function drawSettings(box) {
   }));
   if (cfg) {
     row.append(button("立即同步", "", async () => { try { await sync(); toast("同步好了"); } catch (e) { toast(e.message, true); } }));
+    // A new key (the old one ran out): scan the computer's QR code again.
+    row.append(button("重新掃描 QR code", "", scanSetup));
   }
   box.append(row);
   if (st.queue.length) box.append(el("p", "note", `有 ${st.queue.length} 筆作答還沒送出，連上網路會自動送。`));

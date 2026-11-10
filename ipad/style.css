@@ -100,3 +100,10 @@ label.f span { display: block; font-size: 15px; color: var(--muted); margin-bott
 .buddy .bd i { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-style: normal; color: var(--muted); border: 1px solid var(--line-strong); }
 .buddy .bd i.on { background: var(--ok); border-color: var(--ok); color: var(--panel); }
 .buddy .bd i.today { box-shadow: 0 0 0 2px var(--acc-text); }
+/* Scanning the setup QR code. */
+.scan { position: fixed; inset: 0; z-index: 20; background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom)); }
+.scan video { width: min(86vw, 70vh); aspect-ratio: 1; object-fit: cover; border-radius: 18px; border: 3px solid #fff; background: #111; }
+.scan .scan-hint { color: #fff; margin: 0; }
+.scan .btn { min-width: 140px; }
+details.manual { margin-top: 18px; }
+details.manual summary { color: var(--muted); font-size: 15px; padding: 10px 0; }
