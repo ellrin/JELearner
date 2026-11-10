@@ -1384,6 +1384,11 @@ async fn admin_prepares_library_lessons_for_a_member() {
     assert!(today.iter().all(|e| e["kind"] == "library"));
     let pkg: Value = serde_json::from_str(&std::fs::read_to_string(ipad.join(today[0]["file"].as_str().unwrap().trim_start_matches("ipad/"))).unwrap()).unwrap();
     assert!(pkg["data"]["text"].is_string() && pkg["conversation"]["system"].is_string(), "{pkg}");
+    // The lesson taught out loud travels with it: the script, one entry per
+    // paragraph, and the live-reply system text and schema.
+    let paras = pkg["data"]["text"].as_str().unwrap().lines().filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(pkg["guided"]["script"]["paragraphs"].as_array().map(|a| a.len()), Some(paras), "{}", pkg["guided"]);
+    assert!(pkg["guided"]["reply"]["system"].as_str().is_some_and(|x| x.contains("small_talk")) && pkg["guided"]["reply"]["schema"].is_object());
     assert_eq!(pkg["card"]["why"], "能說一句話");
     let used_file = ws_path.join("profiles").join(&member).join("library-used.txt");
     let used = std::fs::read_to_string(&used_file).unwrap();

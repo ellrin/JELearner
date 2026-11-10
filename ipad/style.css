@@ -111,3 +111,21 @@ details.manual summary { color: var(--muted); font-size: 15px; padding: 10px 0; 
 .pic img { display: block; width: 100%; max-height: 420px; object-fit: cover; border-radius: 12px; background: var(--surface); }
 .pic figcaption { font-size: 13px; margin-top: 4px; }
 .pic figcaption a { color: inherit; }
+/* 老師帶著上 */
+.g-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.g-stages { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; flex: 1; }
+.g-stages li { font-size: 14px; color: var(--muted); padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line-strong); }
+.g-stages li.done { color: var(--ok); border-color: var(--ok); }
+.g-stages li.on { color: var(--acc-ink); background: var(--acc); border-color: var(--acc); }
+.g-clock { font-size: 14px; color: var(--muted); }
+.g-teacher { border-left: 4px solid var(--acc-text); }
+.g-teacher .who { font-size: 13px; color: var(--acc-text); display: block; margin-bottom: 4px; }
+.g-teacher .t { font-size: 21px; line-height: 1.55; }
+.g-teacher.speaking .who::after { content: " ●"; }
+.g-me { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin-bottom: 12px; }
+.g-me .heard { background: var(--surface); border-radius: 12px; padding: 8px 14px; max-width: 85%; }
+.g-me .heard:empty { display: none; }
+.g-ctl { justify-content: flex-end; margin: 0; }
+.g-ctl input { flex: 1; min-width: 160px; border: 1px solid var(--line-strong); border-radius: 12px; padding: 10px 12px; background: var(--panel); font-size: 18px; }
+.g-ctl .btn.on { background: var(--err); border-color: var(--err); color: #fff; }
+.text.paras p.g-now { background: var(--surface); border-radius: 8px; box-shadow: -6px 0 0 var(--surface), 6px 0 0 var(--surface); }

@@ -347,6 +347,20 @@ async fn package_course(s: &Shared, m: &Loaded, provider: &dyn jl_core::provider
         }
         let text = data["text"].as_str().unwrap_or("").to_string();
         let pics = crate::pictures::for_lesson(s, &course.id, n, &text, lp.article.as_ref().map(|a| a.url.as_str())).await;
+        // The lesson taught out loud (plan §19.4.2): the teacher's script, and
+        // for its live replies the system text and schema the iPad sends as is.
+        // A lesson whose script fails is still packed (the iPad then has no 老師帶著上).
+        let guided = match crate::courses::script_for(s, &m.ws, &m.db, &course.id, n).await {
+            Ok((script, _)) => {
+                let level = m.ws.profile.difficulty(lang);
+                let system = jl_core::course::script::reply_system(&t, lang, &jl_core::level::describe(lang, &level)).unwrap_or_default();
+                json!({ "script": script, "reply": { "system": system, "schema": jl_core::course::script::reply_schema(), "max_tokens": jl_core::course::script::REPLY_MAX_TOKENS } })
+            }
+            Err(e) => {
+                update(s, |p| p.errors.push(format!("{}：講稿沒有寫成（{}）", lp.title, e.1)));
+                Value::Null
+            }
+        };
         let rel = format!("ipad/{date}/{}-{n:02}.json", course.id);
         let package = json!({
             "version": 1,
@@ -360,6 +374,7 @@ async fn package_course(s: &Shared, m: &Loaded, provider: &dyn jl_core::provider
             // Pictures between the paragraphs: addresses and credits only; the
             // iPad downloads, shrinks and keeps them two weeks (plan §19.4.1).
             "pictures": pics,
+            "guided": guided,
             "plan": { "title": lp.title, "purpose": lp.purpose, "minutes": lp.minutes, "units": unit_json(&lp), "words": lp.words },
             "data": data,
             "review_cards": cards,

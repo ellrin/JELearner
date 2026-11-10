@@ -90,8 +90,11 @@ async function putNew(rel, text, message) {
 let syncing = false;
 let syncError = null;
 function syncState(text, bad = false) { const s = $("#syncState"); s.textContent = text; s.className = `sync${bad ? " bad" : ""}`; }
+let syncAgain = false;
 async function sync() {
-  if (!cfg || syncing) return;
+  // Something new while syncing (two results at once): one more round after this one.
+  if (syncing) { syncAgain = true; return; }
+  if (!cfg) return;
   syncing = true;
   syncState("同步中…");
   try {
@@ -125,7 +128,10 @@ async function sync() {
     syncState(navigator.onLine ? "沒有同步成功" : "離線中", navigator.onLine);
     if (navigator.onLine) console.warn(e);
     throw e;
-  } finally { syncing = false; }
+  } finally {
+    syncing = false;
+    if (syncAgain) { syncAgain = false; setTimeout(() => sync().catch(() => {}), 0); }
+  }
 }
 /** A result for the admin's computer; sent with the next sync. */
 function queue(result) {
@@ -157,24 +163,28 @@ function speak(text, lang) {
 const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 let currentRec = null;
 /** Tap to talk: a new recognizer each time (the iPad audio session). */
-function listen(lang, onText) {
+function listen(lang, onText, { max = 15, silence = 0, onLoud } = {}) {
   return new Promise((resolve, reject) => {
     if (!Rec) return reject(new Error("這個瀏覽器不能聽寫，請用打字的"));
     synth?.cancel();
     const r = new Rec();
     currentRec = r;
     r.lang = lang === "ja" ? "ja-JP" : "en-US";
-    r.interimResults = true; r.continuous = false;
-    let final = "", interim = "", err = null;
+    // With a silence stop the recognizer keeps listening; we end it after the pause.
+    r.interimResults = true; r.continuous = !!silence;
+    let final = "", interim = "", err = null, last = 0;
+    const quiet = silence ? setInterval(() => { if (last && Date.now() - last > silence * 1000) { try { r.stop(); } catch { /* ended */ } } }, 250) : null;
     r.onresult = (e) => {
+      if (!last) onLoud?.();
+      last = Date.now();
       final = ""; interim = "";
       for (const res of e.results) { if (res.isFinal) final += res[0].transcript; else interim += res[0].transcript; }
       onText?.(final + interim);
     };
     r.onerror = (e) => { err = e.error; };
-    r.onend = () => (err && err !== "no-speech" && !final && !interim ? reject(new Error(err === "not-allowed" ? "麥克風沒有開放，到 設定 › Safari › 麥克風 允許" : "沒聽清楚，再說一次，或用打字的")) : resolve(final || interim));
+    r.onend = () => (clearInterval(quiet), err && err !== "no-speech" && !final && !interim ? reject(new Error(err === "not-allowed" ? "麥克風沒有開放，到 設定 › Safari › 麥克風 允許" : "沒聽清楚，再說一次，或用打字的")) : resolve(final || interim));
     try { r.start(); } catch (e) { reject(e); }
-    setTimeout(() => { try { r.stop(); } catch { /* ended */ } }, 15000);
+    setTimeout(() => { try { r.stop(); } catch { /* ended */ } }, max * 1000);
   });
 }
 function micButton(lang, target) {
@@ -580,6 +590,8 @@ function drawReading(box, pkg, u) {
       });
       g.replaceWith(panel);
     }));
+    // The lesson taught out loud (plan §19.4.2), when the computer packed its script.
+    if (pkg.guided?.script) gRow.prepend(button("老師帶著上", "main", () => show("老師帶著上", (b) => drawGuided(b, pkg, u))));
     g.append(gRow);
     box.append(g);
     const t = el("div", "card");
@@ -884,6 +896,202 @@ function drawConversation(box, pkg, u) {
   send.onclick = turn;
   if (me() >= c.turns) finish();
   else if (conv.turns.length === 1 && c.opening) speak(c.opening, lang);
+}
+
+// ── 老師帶著上: the lesson taught out loud (plan §19.4.2) ──
+// The same flow as on the computer: the script written there, the teacher
+// speaking, the learner tapping to talk (20 s at most, 2.5 s of silence ends
+// it) or typing; live replies from Claude with the packed instructions.
+const DONT_KNOW = /\b(i\s*don'?t\s*know|no\s*idea|not\s*sure|i\s*forgot|pass)\b|わから|分から|知らない|しらない|不知道|不會|忘了/i;
+const OUTPUT_KINDS = ["translation", "sentence-making", "cloze", "paraphrase"];
+function usesTerm(said, term, lang) {
+  const s = String(said ?? "").toLowerCase();
+  const t = plain(term).toLowerCase().replace(/[〜~…().,!?]/g, " ").trim();
+  if (!t) return false;
+  if (lang === "ja") return t.split(/\s+/).every((p) => s.includes(p));
+  const parts = t.split(/[\s/+]+/).filter((w) => w.length >= 3 && !["the", "and", "for", "with"].includes(w));
+  return (parts.length ? parts : [t]).every((w) => new RegExp(`\\b${w.slice(0, Math.max(3, w.length - 2)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(s));
+}
+/** The live reply's user message: the same text the computer builds (script::reply_user). */
+function replyUser(a) {
+  let s = `Moment: ${a.kind}\nTeacher said: ${a.question.trim()}\n`;
+  if (a.kind === "sentence") s += `Target: ${a.target.trim()}\nExample: ${a.example.trim()}\n`;
+  return s + `Learner said: ${a.said.trim()}`;
+}
+function drawGuided(box, pkg, u) {
+  const lang = pkg.lang;
+  const script = pkg.guided.script;
+  const data = pkg.data ?? {};
+  const units = pkg.plan.units;
+  const out = units.find((x) => OUTPUT_KINDS.includes(x.kind) && !doneOf(keyOf(pkg)).includes(x.index));
+  const minutes = units.filter((x) => x === u || x === out).reduce((n, x) => n + (x.minutes ?? 0), 0) || 15;
+  const head = el("div", "g-head");
+  const stages = el("ol", "g-stages");
+  ["閒聊", "今天", "課文", "問答"].forEach((t) => stages.append(el("li", null, t)));
+  const clock = el("span", "g-clock");
+  head.append(stages, clock);
+  const teacher = el("div", "card g-teacher");
+  const tText = el("div", "t");
+  teacher.append(el("span", "who", "老師"), tText);
+  const me = el("div", "g-me");
+  const heard = el("div", "heard");
+  const ctl = el("div", "row g-ctl");
+  me.append(heard, ctl);
+  const card = el("div", "card");
+  const tx = el("div", "text paras");
+  const paras = [];
+  String(data.text ?? "").split(/\n/).map((x) => x.trim()).filter(Boolean).forEach((p, i) => {
+    const pe = rich("p", null, p);
+    tx.append(pe);
+    paras.push(pe);
+    for (const pic of (pkg.pictures ?? []).filter((x) => x.paragraph === i)) tx.append(pictureFigure(pic));
+  });
+  card.append(tx);
+  box.append(head, teacher, me, card);
+  let stopped = false;
+  const started = Date.now();
+  const tick = setInterval(() => {
+    if (!box.isConnected) { clearInterval(tick); stopped = true; synth?.cancel(); try { currentRec?.abort(); } catch { /* none */ } return; }
+    const left = Math.max(0, minutes * 60 - (Date.now() - started) / 1000);
+    clock.textContent = left > 0 ? `剩 ${Math.ceil(left / 60)} 分` : "超過時間了";
+  }, 1000);
+  const stage = (i) => [...stages.children].forEach((li, k) => { li.classList.toggle("on", k === i); li.classList.toggle("done", k < i); });
+  let progress = 0;
+  const behind = () => (Date.now() - started) / 1000 > minutes * 60 * (0.15 + 0.65 * progress) + 45;
+  const say = async (text) => {
+    if (stopped || !text) return;
+    tText.innerHTML = ruby(text);
+    teacher.classList.add("speaking");
+    await speak(text, lang);
+    teacher.classList.remove("speaking");
+  };
+  const READY = "\u0000ready";
+  const hear = ({ ready = false, placeholder = "" } = {}) => new Promise((resolve) => {
+    if (stopped) return resolve(null);
+    ctl.innerHTML = ""; heard.textContent = "";
+    let settled = false;
+    const settle = (v) => {
+      if (settled) return;
+      settled = true;
+      try { currentRec?.stop(); } catch { /* ended */ }
+      ctl.innerHTML = "";
+      if (v) heard.textContent = v === READY ? "Ready!" : v;
+      resolve(v);
+    };
+    if (Rec) {
+      const mic = button(ready ? "🎤 說一聲" : "🎤 按一下說話", "main", async () => {
+        if (mic.classList.contains("on")) { try { currentRec?.stop(); } catch { /* ended */ } return; }
+        mic.classList.add("on"); mic.textContent = "■ 說完了";
+        try {
+          const t = await listen(lang, (x) => (heard.textContent = x), { max: 20, silence: 2.5, onLoud: ready ? () => settle(READY) : null });
+          settle(t ?? "");
+        } catch (e) { toast(e.message, true); mic.classList.remove("on"); mic.textContent = "🎤 再試一次"; }
+      });
+      ctl.append(mic);
+    }
+    if (ready) ctl.append(button("Ready!", Rec ? "" : "main", () => settle(READY)));
+    else {
+      const i = el("input"); i.type = "text"; i.placeholder = placeholder || (Rec ? "或用打的" : "用打的回答");
+      if (lang === "ja") i.lang = "ja";
+      i.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); settle(i.value.trim()); } };
+      ctl.append(i, button("送出", "", () => settle(i.value.trim())));
+    }
+    ctl.append(button("跳過", "", () => settle(null)));
+  });
+  const pick = (l) => l[Math.floor(Math.random() * l.length)] ?? "";
+  const live = async (ask) => {
+    const r = pkg.guided.reply;
+    if (!r?.system || !cfg.apiKey || !navigator.onLine) return null;
+    try {
+      const res = await Promise.race([claude(r.system, [{ role: "user", content: replyUser(ask) }], r.schema, r.max_tokens ?? 300), new Promise((_, no) => setTimeout(() => no(new Error("slow")), 10000))]);
+      return res?.reply ? res : null;
+    } catch { return null; }
+  };
+  const RIGHT = lang === "ja" ? ["そのとおり！", "正解です！", "いいですね！"] : ["That's right!", "Exactly!", "Well done!"];
+  const EXAMPLE = lang === "ja" ? "たとえば、" : "For example: ";
+  const HINT = lang === "ja" ? "もう一度、本文を見てみましょう。" : "Have another look at the text.";
+  const items = [], answers = [];
+  (async () => {
+    stage(0);
+    for (const q of [script.small_talk.opening, script.small_talk.follow_up]) {
+      await say(q);
+      const said = await hear();
+      if (said === null) continue;
+      const r = said ? await live({ kind: "small_talk", question: q, said }) : null;
+      await say(r?.reply ?? pick(script.small_talk.praise));
+    }
+    await say(script.small_talk.to_lesson);
+    stage(1);
+    for (const l of script.intro.lines) await say(l);
+    await say(script.intro.ready);
+    await hear({ ready: true });
+    stage(2);
+    for (const [i, p] of script.paragraphs.entries()) {
+      if (stopped) break;
+      progress = i / Math.max(1, script.paragraphs.length);
+      paras.forEach((x, k) => x.classList.toggle("g-now", k === i));
+      paras[i]?.scrollIntoView({ block: "center", behavior: "smooth" });
+      await say(p.read);
+      if ((await hear()) !== null) await say(p.after_read);
+      for (const ex of p.explain) {
+        if (ex.optional && behind()) continue;
+        await say(ex.line);
+      }
+      if (p.sentence?.target) {
+        const judge = async (said) => {
+          if (!said) return { ok: false, reply: null };
+          const r = await live({ kind: "sentence", question: p.sentence.prompt, target: p.sentence.target, example: p.sentence.example, said });
+          return r ? { ok: !!r.ok, reply: r.reply } : { ok: usesTerm(said, p.sentence.target, lang), reply: null };
+        };
+        await say(p.sentence.prompt);
+        let said = await hear({ placeholder: p.sentence.target });
+        let j = said !== null ? await judge(said) : { ok: false, reply: null };
+        if (said !== null && !j.ok) {
+          await say(j.reply ?? p.sentence.retry);
+          const again = await hear({ placeholder: p.sentence.target });
+          if (again) { said = again; j = await judge(said); } else j = { ok: false, reply: null };
+        }
+        if (j.ok) await say(j.reply ?? p.sentence.praise);
+        else if (said !== null) await say(`${EXAMPLE}${p.sentence.example}`);
+        if (said !== null) items.push({ prompt: p.sentence.prompt, answer: said ?? "", model: p.sentence.example, correct: j.ok });
+      }
+    }
+    paras.forEach((x) => x.classList.remove("g-now"));
+    progress = 1;
+    stage(3);
+    const qs = data.questions ?? [];
+    const quiz = (qs.length ? qs : script.quiz).map((lq, k) => {
+      const sq = script.quiz[k];
+      const opts = lq.kind === "choice" && lq.options?.length ? lq.options : null;
+      const ask = opts ? `${plain(lq.question)} ${opts.map((x, i) => `${"ABCD"[i]}: ${plain(x)}.`).join(" ")}` : sq?.question ?? lq.question;
+      return { question: ask, answer: lq.answer ?? sq?.answer ?? "", keywords: opts ? [] : sq?.keywords ?? [], hint: sq?.hint || HINT, reveal: sq?.reveal || lq.answer || "", options: opts };
+    });
+    for (const [k, q] of quiz.entries()) {
+      if (stopped) break;
+      await say(q.question);
+      let said = await hear();
+      if (said === null) continue;
+      if (!said || DONT_KNOW.test(said)) { await say(q.hint); said = await hear(); if (said === null) continue; }
+      const keys = q.keywords.filter((x) => x.trim());
+      const byWords = keys.length ? keys.filter((x) => usesTerm(said, x, lang)).length >= Math.max(1, Math.ceil(keys.length / 2)) : usesTerm(said, q.answer, lang);
+      const letter = q.options ? "ABCD"[q.options.indexOf(q.answer)] : null;
+      const ok = !!said && !DONT_KNOW.test(said) && (byWords || (letter && new RegExp(`^\\W*(${letter}|${letter.toLowerCase()})\\W*$`).test(said)));
+      await say(ok ? pick(RIGHT) : q.reveal);
+      if (k < qs.length) answers.push({ index: k, answer: said, correct: ok });
+    }
+    await say(script.goodbye);
+    clearInterval(tick);
+    // The lesson's own units, sent with the next sync (points on the computer).
+    const qn = qs.length;
+    if (answers.length >= qn && !doneOf(keyOf(pkg)).includes(u.index)) finishUnit(pkg, u, { answers });
+    if (out?.kind === "sentence-making" && items.length) finishUnit(pkg, out, { items });
+    me.remove(); teacher.innerHTML = "";
+    const right = answers.filter((a) => a.correct).length;
+    teacher.append(el("b", null, answers.length >= qn ? `這段上完了！問答答對 ${right} / ${qn} 題` : "問答沒有全部答完，課文這一步還沒算"));
+    const row = el("div", "row");
+    row.append(button("回到這一課", "main", () => { stopped = true; stack.pop(); const v = stack[stack.length - 1]; show(v.title, v.draw, false); }));
+    teacher.append(row);
+  })();
 }
 
 // ── start ───────────────────────────────────────────────
