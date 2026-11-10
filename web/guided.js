@@ -171,6 +171,19 @@ async function runGuided(box, o, u) {
     ctl.append(ghostButton("arrow", "跳過", () => settle(null)));
   });
   const pick = (list) => list[Math.floor(Math.random() * list.length)] ?? "";
+  /**
+   * A live reply (small talk, a sentence of the learner's own) from the
+   * conversation engine; null when it fails or takes over 10 s, and the
+   * script's own line is said instead.
+   */
+  const live = async (ask) => {
+    const ctl2 = new AbortController();
+    const t = setTimeout(() => ctl2.abort(), 10000);
+    try {
+      const r = await api(`/api/courses/${encodeURIComponent(o.course.id)}/lessons/${o.number}/reply`, ask, "POST", ctl2.signal);
+      return r?.reply ? r : null;
+    } catch { return null; } finally { clearTimeout(t); }
+  };
   const RIGHT = lang === "ja" ? ["そのとおり！", "正解です！", "いいですね！"] : ["That's right!", "Exactly!", "Well done!"];
   const EXAMPLE = lang === "ja" ? "たとえば、" : "For example: ";
 
@@ -179,10 +192,14 @@ async function runGuided(box, o, u) {
   const answers = [];
   try {
     stage(0);
-    await say(script.small_talk.opening);
-    if ((await hear()) !== null) await say(pick(script.small_talk.praise));
-    await say(script.small_talk.follow_up);
-    if ((await hear()) !== null) await say(pick(script.small_talk.praise));
+    // Two short exchanges; the teacher answers what was actually said.
+    for (const q of [script.small_talk.opening, script.small_talk.follow_up]) {
+      await say(q);
+      const said = await hear();
+      if (said === null) continue;
+      const r = said ? await live({ kind: "small_talk", question: q, said }) : null;
+      await say(r?.reply ?? pick(script.small_talk.praise));
+    }
     await say(script.small_talk.to_lesson);
 
     stage(1);
@@ -206,15 +223,23 @@ async function runGuided(box, o, u) {
       }
       paras[i]?.querySelectorAll("mark.g-term").forEach((m) => m.classList.remove("g-term"));
       if (p.sentence?.target) {
+        // The teacher's word on the sentence: live when it comes, else the rule (the term used).
+        const judge = async (said) => {
+          if (!said) return { ok: false, reply: null };
+          const r = await live({ kind: "sentence", question: p.sentence.prompt, target: p.sentence.target, example: p.sentence.example, said });
+          return r ? { ok: !!r.ok, reply: r.reply } : { ok: usesTerm(said, p.sentence.target, lang), reply: null };
+        };
         await say(p.sentence.prompt);
         let said = await hear({ placeholder: p.sentence.target });
-        let ok = said ? usesTerm(said, p.sentence.target, lang) : false;
-        if (said !== null && !ok) {
-          await say(p.sentence.retry);
+        let j = said !== null ? await judge(said) : { ok: false, reply: null };
+        if (said !== null && !j.ok) {
+          await say(j.reply ?? p.sentence.retry);
           const again2 = await hear({ placeholder: p.sentence.target });
-          if (again2) { said = again2; ok = usesTerm(said, p.sentence.target, lang); }
+          if (again2) { said = again2; j = await judge(said); }
+          else j = { ok: false, reply: null };
         }
-        if (ok) await say(p.sentence.praise);
+        const ok = j.ok;
+        if (ok) await say(j.reply ?? p.sentence.praise);
         else if (said !== null) await say(`${EXAMPLE}${p.sentence.example}`);
         if (said !== null) items.push({ prompt: p.sentence.prompt, answer: said ?? "", model: p.sentence.example, correct: ok });
       }

@@ -7,7 +7,7 @@
 //! asks a model live for short replies. A script whose paragraphs do not
 //! match the text is mended with plain lines, never thrown away.
 
-use super::prompts::{CourseTemplates, SCRIPT_SYSTEM, SCRIPT_USER};
+use super::prompts::{CourseTemplates, REPLY_SYSTEM, SCRIPT_SYSTEM, SCRIPT_USER};
 use super::{parse_json, strict_object, CourseError};
 use crate::lang::Lang;
 use crate::provider::CompletionRequest;
@@ -185,6 +185,65 @@ pub fn mend(s: &mut Script, paragraphs: usize, lang: Lang) {
     s.quiz.retain(|q| !q.question.trim().is_empty());
 }
 
+// ── live replies (the only parts not written in advance) ──
+
+/// A moment of the lesson the teacher answers live.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReplyAsk {
+    /// `small_talk` or `sentence`.
+    pub kind: String,
+    /// What the teacher had just said.
+    #[serde(default)]
+    pub question: String,
+    /// The word or grammar to use (`sentence`).
+    #[serde(default)]
+    pub target: String,
+    #[serde(default)]
+    pub example: String,
+    pub said: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Reply {
+    pub reply: String,
+    pub ok: bool,
+}
+
+pub fn reply_schema() -> Value {
+    strict_object(json!({ "reply": { "type": "string" }, "ok": { "type": "boolean" } }))
+}
+
+/// The teacher's instructions for live replies in one lesson (also what the
+/// iPad sends as is: it builds only the user message, [`reply_user`]).
+pub fn reply_system(t: &CourseTemplates, lang: Lang, level_description: &str) -> Result<String, CourseError> {
+    Ok(t.render(REPLY_SYSTEM, json!({ "language": lang.english_name(), "lang": lang.code(), "level_description": level_description }))?)
+}
+
+/// The user message for a live reply. The iPad builds the same text.
+pub fn reply_user(a: &ReplyAsk) -> String {
+    let mut s = format!("Moment: {}\nTeacher said: {}\n", a.kind, a.question.trim());
+    if a.kind == "sentence" {
+        s.push_str(&format!("Target: {}\nExample: {}\n", a.target.trim(), a.example.trim()));
+    }
+    s.push_str(&format!("Learner said: {}", a.said.trim()));
+    s
+}
+
+/// Short replies: a cap that also keeps a slow local model quick.
+pub const REPLY_MAX_TOKENS: u32 = 300;
+
+pub fn reply_request(system: String, a: &ReplyAsk) -> CompletionRequest {
+    CompletionRequest { system, user: reply_user(a), max_tokens: REPLY_MAX_TOKENS, json_schema: Some(reply_schema()) }
+}
+
+pub fn parse_reply(text: &str) -> Result<Reply, CourseError> {
+    let r: Reply = parse_json(text)?;
+    if r.reply.trim().is_empty() {
+        return Err(CourseError::Invalid("老師沒有回答".into()));
+    }
+    Ok(r)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +276,20 @@ mod tests {
         assert_eq!(short.paragraphs.len(), 3);
         assert_eq!(short.paragraphs[0].read, "ここを声に出して読んでみましょう。");
         assert!(parse_script("not json", 1, Lang::En).is_err());
+    }
+
+    #[test]
+    fn live_replies() {
+        let t = CourseTemplates::bundled();
+        let sys = reply_system(&t, Lang::En, "B1").unwrap();
+        assert!(sys.contains("English only") && sys.contains("small_talk") && sys.contains("sentence"), "{sys}");
+        let a = ReplyAsk { kind: "sentence".into(), question: "Make a sentence with a dram.".into(), target: "a dram".into(), example: "I'd like a dram.".into(), said: " I want a dram please ".into() };
+        assert_eq!(reply_user(&a), "Moment: sentence\nTeacher said: Make a sentence with a dram.\nTarget: a dram\nExample: I'd like a dram.\nLearner said: I want a dram please");
+        let small = ReplyAsk { kind: "small_talk".into(), question: "How is your day?".into(), target: String::new(), example: String::new(), said: "Busy!".into() };
+        assert!(!reply_user(&small).contains("Target"));
+        assert_eq!(reply_request(sys, &a).max_tokens, REPLY_MAX_TOKENS);
+        assert_eq!(parse_reply(r#"{"reply":"Nice! You could say: I'd like a dram, please.","ok":true}"#).unwrap().ok, true);
+        assert!(parse_reply(r#"{"reply":" ","ok":true}"#).is_err());
     }
 
     #[test]

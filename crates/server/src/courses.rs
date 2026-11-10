@@ -37,6 +37,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/courses/{id}/extend", post(extend_course))
         .route("/api/courses/{id}/lessons/{n}/open", post(open_lesson))
         .route("/api/courses/{id}/lessons/{n}/script", post(lesson_script))
+        .route("/api/courses/{id}/lessons/{n}/reply", post(lesson_reply))
         .route("/api/courses/{id}/lessons/{n}/units/{u}", post(report_unit))
         .route("/api/daily", post(start_daily))
 }
@@ -622,6 +623,26 @@ async fn lesson_script(State(s): State<Shared>, AxPath((id, n)): AxPath<(String,
     })
     .await
     .map_err(|e| fail(format!("講稿沒有準備好：{e}")))?
+}
+
+/// A live reply in a lesson taught out loud (small talk, a sentence of the
+/// learner's own), by the conversation engine; the page falls back to the
+/// script's own lines when this fails or is slow.
+async fn lesson_reply(State(s): State<Shared>, AxPath((id, _n)): AxPath<(String, u32)>, Json(a): Json<jl_core::course::script::ReplyAsk>) -> R<Value> {
+    use jl_core::course::script;
+    if a.said.trim().is_empty() || !matches!(a.kind.as_str(), "small_talk" | "sentence") {
+        return Err(bad("沒有內容可以回應"));
+    }
+    let system = {
+        let l = ws(&s).await?;
+        let lang = store::load(&l.ws, &id).map_err(course_err)?.lang;
+        let level = l.ws.profile.difficulty(lang);
+        script::reply_system(&templates(&l.ws), lang, &jl_core::level::describe(lang, &level)).map_err(course_err)?
+    };
+    let p = crate::provider_task(&s, crate::Task::Realtime).await?;
+    let reply = p.complete(&script::reply_request(system, &a)).await.map_err(crate::study::api_err)?;
+    let r = script::parse_reply(&reply).map_err(course_err)?;
+    Ok(Json(json!({ "reply": r.reply, "ok": r.ok })))
 }
 
 /// The script of an opened lesson for `w` (the active learner or a member).

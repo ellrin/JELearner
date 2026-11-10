@@ -340,11 +340,26 @@ fn lesson_script(user: &str) -> Value {
     })
 }
 
+/// A live reply in 老師帶著上: what was said, back; a sentence is right when it has the target.
+fn live_reply(user: &str) -> Value {
+    let get = |k: &str| user.lines().find_map(|l| l.strip_prefix(k)).unwrap_or("").trim().to_string();
+    let said = get("Learner said: ");
+    if user.starts_with("Moment: sentence") {
+        let target = get("Target: ");
+        let ok = said.to_lowercase().contains(&target.to_lowercase());
+        json!({ "reply": if ok { format!("Great sentence! \"{said}\" sounds natural.") } else { format!("Nice try! Can you use \"{target}\" in it?") }, "ok": ok })
+    } else {
+        json!({ "reply": format!("Oh, you said \"{said}\". That sounds nice!"), "ok": true })
+    }
+}
+
 async fn messages(Json(b): Json<Value>) -> Json<Value> {
     let user = b["messages"][0]["content"].as_str().unwrap_or("");
     let ja = user.chars().any(|c| ('\u{3040}'..='\u{30ff}').contains(&c));
     let props = &b["output_config"]["format"]["schema"]["properties"];
-    let (text, wait) = if props["small_talk"].is_object() {
+    let (text, wait) = if props["reply"].is_object() && props["ok"].is_object() {
+        (live_reply(user).to_string(), 700)
+    } else if props["small_talk"].is_object() {
         (lesson_script(user).to_string(), 1200)
     } else if props["cards"].is_object() {
         (topic_cards(user).to_string(), 900)

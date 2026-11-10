@@ -173,6 +173,19 @@ fn script_reply(user: &str) -> Value {
     })
 }
 
+/// A live reply in 老師帶著上: what was said, back; a sentence is right when it has the target.
+fn live_reply(user: &str) -> Value {
+    let get = |k: &str| user.lines().find_map(|l| l.strip_prefix(k)).unwrap_or("").trim().to_string();
+    let said = get("Learner said: ");
+    if user.starts_with("Moment: sentence") {
+        let target = get("Target: ");
+        let ok = said.to_lowercase().contains(&target.to_lowercase());
+        json!({ "reply": if ok { format!("Great sentence! \"{said}\" sounds natural.") } else { format!("Nice try! Can you use \"{target}\" in it?") }, "ok": ok })
+    } else {
+        json!({ "reply": format!("Oh, you said \"{said}\". That sounds nice!"), "ok": true })
+    }
+}
+
 fn focus_sheet() -> Value {
     json!({ "summary": "蘇格蘭與英國", "cities": ["Edinburgh", "Glasgow"], "streets": ["Princes Street", "Royal Mile"], "shops": ["Tesco", "Greggs"],
         "transport": ["ScotRail", "Edinburgh Trams"], "foods": ["haggis"], "drinks": ["whisky"], "landmarks": ["Edinburgh Castle"],
@@ -196,7 +209,9 @@ fn mock_claude_slow(calls: Arc<Mutex<Vec<Value>>>, lesson_ms: u64) -> Router {
                     tokio::time::sleep(std::time::Duration::from_millis(lesson_ms)).await;
                 }
                 let user = b["messages"][0]["content"].as_str().unwrap_or("").to_string();
-                let text = if props["small_talk"].is_object() {
+                let text = if props["reply"].is_object() && props["ok"].is_object() {
+                    live_reply(&user)
+                } else if props["small_talk"].is_object() {
                     script_reply(&user)
                 } else if props["cards"].is_object() {
                     topic_cards(&user)
@@ -1740,4 +1755,20 @@ async fn a_lesson_script_is_written_once_and_kept() {
     let (_, again) = c.post(&format!("/api/courses/{id}/lessons/1/script"), json!({})).await;
     assert_eq!((again["generated"].as_bool(), script_calls()), (Some(false), 1), "read from the file");
     assert_eq!(again["script"], r["script"]);
+
+    // Live replies, on the conversation model (Haiku), short.
+    let path = format!("/api/courses/{id}/lessons/1/reply");
+    let (st, small) = c.post(&path, json!({ "kind": "small_talk", "question": "How is your day going?", "said": "Busy but good." })).await;
+    assert_eq!(st, StatusCode::OK, "{small}");
+    assert!(small["reply"].as_str().unwrap().contains("Busy but good."), "{small}");
+    let last = calls.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(last["model"], "claude-haiku-5-5", "the conversation model");
+    assert!(last["max_tokens"].as_u64().unwrap() <= 300);
+    let target = sc["paragraphs"][0]["sentence"]["target"].as_str().unwrap().to_string();
+    let (_, good) = c.post(&path, json!({ "kind": "sentence", "question": "Make a sentence.", "target": target, "example": "x", "said": format!("I think {target} matters.") })).await;
+    assert_eq!(good["ok"], true, "{good}");
+    let (_, miss) = c.post(&path, json!({ "kind": "sentence", "question": "Make a sentence.", "target": target, "example": "x", "said": "I like cats." })).await;
+    assert_eq!(miss["ok"], false, "{miss}");
+    assert_eq!(c.post(&path, json!({ "kind": "sentence", "said": "  " })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(c.post(&path, json!({ "kind": "essay", "said": "x" })).await.0, StatusCode::BAD_REQUEST);
 }
