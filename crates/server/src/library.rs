@@ -188,20 +188,39 @@ pub(crate) fn pick_unused(ws: &jl_core::workspace::Workspace, collection: &str, 
     spread(avail, |(t, _)| t.cat.clone()).into_iter().take(n).collect()
 }
 
-/// Write up to `n` more lesson texts (themes in turns over the categories),
-/// for a run that found too few; returns how many were written.
-pub(crate) async fn write_more(s: &Shared, root: &Path, collection: &str, native: &str, n: usize) -> Result<usize, ApiError> {
-    let syl = library::load_syllabus(root, collection).map_err(course_err)?;
+/// Write up to `n` more lesson texts (one per theme, themes in turns over
+/// the categories), for a run that found too few. A slow or failing model
+/// must not walk the whole syllabus: at most `n + 3` themes are tried and
+/// three failures in a row stop it. `on_theme` is told each theme (progress).
+/// Returns how many were written and what went wrong.
+pub(crate) async fn write_more(s: &Shared, root: &Path, collection: &str, native: &str, n: usize, on_theme: impl Fn(&str)) -> (usize, Vec<String>) {
+    let syl = match library::load_syllabus(root, collection) {
+        Ok(y) => y,
+        Err(e) => return (0, vec![e.to_string()]),
+    };
     let themes = spread(syl.topic.iter().filter(|t| has_work(root, collection, t)).cloned().collect(), |t| t.cat.clone());
-    let mut written = 0;
-    // One lesson per theme each pass, so the new ones are spread too.
-    for t in themes {
-        if written >= n {
+    let (mut written, mut errors, mut failed_in_row) = (0, vec![], 0);
+    for (tried, t) in themes.iter().enumerate() {
+        if written >= n || tried >= n + 3 || failed_in_row >= 3 {
             break;
         }
-        written += work_on_theme(s, root, collection, &syl, &t, native, 1).await.unwrap_or(0);
+        on_theme(&t.zh);
+        match work_on_theme(s, root, collection, &syl, t, native, 1).await {
+            Ok(k) if k > 0 => {
+                written += k;
+                failed_in_row = 0;
+            }
+            Ok(_) => {
+                failed_in_row += 1;
+                errors.push(format!("{}：沒有寫出文章", t.zh));
+            }
+            Err(e) => {
+                failed_in_row += 1;
+                errors.push(format!("{}：{}", t.zh, e.1));
+            }
+        }
     }
-    Ok(written)
+    (written, errors)
 }
 
 /// A theme with work left: not split yet, or a planned lesson without its text.

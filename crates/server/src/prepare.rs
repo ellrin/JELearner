@@ -199,9 +199,8 @@ async fn run(s: &Shared, member: &str, lang: Lang, days: u32, choices: u32, sour
         let missing = lib_want - picked.len();
         update(s, |p| p.current = format!("主題庫的課不夠，先寫 {missing} 堂新的"));
         let native = m.ws.profile.native_language.clone();
-        if let Err(e) = crate::library::write_more(s, &m.ws.root, c, &native, missing).await {
-            update(s, |p| p.errors.push(format!("寫主題庫的課：{}", e.1)));
-        }
+        let (_, errors) = crate::library::write_more(s, &m.ws.root, c, &native, missing, |zh| update(s, |p| p.current = format!("寫主題庫的新課：{zh}"))).await;
+        update(s, |p| p.errors.extend(errors.into_iter().map(|e| format!("寫主題庫的課・{e}"))));
         picked = crate::library::pick_unused(&m.ws, c, lib_want, &[]);
         if picked.len() < lib_want {
             let short = lib_want - picked.len();

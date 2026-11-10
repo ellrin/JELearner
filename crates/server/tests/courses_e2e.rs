@@ -1565,3 +1565,55 @@ async fn weekly_mix_follows_the_library_share() {
     assert_eq!(p["done"], 2, "{p}");
     assert!(p["errors"].as_array().unwrap().iter().any(|e| e.as_str().unwrap().contains("用新聞補上")), "{p}");
 }
+
+/// 派本週的課 with too few library texts: the missing ones are written first
+/// (references read, robots.txt checked); themes that fail are reported and
+/// three failures in a row stop the writing, so a failing model never walks
+/// the whole syllabus; whatever is still missing comes from the news.
+#[tokio::test]
+async fn weekly_mix_writes_missing_texts_and_stops_on_failures() {
+    use axum::routing::get;
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, _calls) = setup(app_dir.path(), &ws_path).await;
+    let wiki = serve(
+        Router::new()
+            .route("/robots.txt", get(|| async { "User-agent: *\nDisallow: /private/\n" }))
+            .route("/wiki/Haggis", get(|| async { axum::response::Html("<html><body><div id='mw-content-text'><div class='mw-parser-output'><p>Haggis is a savoury pudding. It is eaten on Burns Night.</p><p>Today it is served across Scotland.</p></div></div></body></html>") })),
+    )
+    .await;
+    // One written lesson; one theme that can be written; four that cannot.
+    write_library(&ws_path, &[("whisky", "飲食")], 1);
+    let syl_path = ws_path.join("library/uk/syllabus.toml");
+    let mut syl = std::fs::read_to_string(&syl_path).unwrap().trim_end().trim_end_matches(']').to_string();
+    syl.push_str(&format!("  {{ id = \"haggis\", cat = \"飲食\", zh = \"哈吉斯\", en = \"Haggis\", refs = [\"{wiki}/wiki/Haggis\"] }},\n"));
+    for i in 1..=4 {
+        syl.push_str(&format!("  {{ id = \"closed{i}\", cat = \"人文\", zh = \"不能讀{i}\", en = \"Closed {i}\", refs = [\"{wiki}/private/page{i}\"] }},\n"));
+    }
+    syl.push_str("]\n");
+    std::fs::write(&syl_path, syl).unwrap();
+    let (_, me) = c.get("/api/status").await;
+    let admin = me["user"]["id"].as_str().unwrap().to_string();
+
+    // 2 × 2 = 4 lessons, 3 wanted from the library, 1 written.
+    c.post("/api/family/prepare", json!({ "members": [admin], "lang": "en", "days": 2, "choices": 2, "source": "mix" })).await;
+    let mut p = Value::Null;
+    for _ in 0..400 {
+        p = c.get("/api/family/prepare").await.1["progress"].clone();
+        if p["running"] == false {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(p["running"], false, "{p}");
+    let errors: Vec<String> = p["errors"].as_array().unwrap().iter().map(|e| e.as_str().unwrap().to_string()).collect();
+    assert!(ws_path.join("library/uk/plans/haggis.toml").is_file(), "the writable theme was split and written");
+    assert!(errors.iter().any(|e| e.contains("不能讀1")) && errors.iter().any(|e| e.contains("不能讀3")), "{errors:?}");
+    assert!(!errors.iter().any(|e| e.contains("不能讀4")), "three failures in a row stop it: {errors:?}");
+    assert!(errors.iter().any(|e| e.contains("少了 1 堂")), "{errors:?}");
+    assert_eq!(p["done"], 4, "the news fills in: {p}");
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(ws_path.join(format!("profiles/{admin}/ipad/index.json"))).unwrap()).unwrap();
+    let kinds: Vec<String> = v["days"].as_object().unwrap().values().flat_map(|d| d.as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap_or("").to_string()).collect::<Vec<_>>()).collect();
+    assert_eq!(kinds.iter().filter(|k| *k == "library").count(), 2, "{kinds:?}");
+}

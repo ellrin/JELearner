@@ -71,7 +71,7 @@ async function weeklyBar() {
   const go1 = primaryButton("派本週的課", null, true);
   const help = el("button", "help", "?");
   help.setAttribute("aria-label", "說明：派本週的課");
-  help.dataset.tip = `抓最新新聞，加上主題庫還沒上過的課，替每個人依各自的程度做好 ${WEEK.days} 天的課（每天 ${WEEK.choices} 個主題可選），做完自動同步，iPad 打開就看得到。每堂課要一兩分鐘，可以先去做別的事。想自己選天數或對象：設定 › 使用者 › 備課。`;
+  help.dataset.tip = `抓最新新聞，加上主題庫還沒上過的課，替每個人依各自的程度做好 ${WEEK.days} 天的課（每天 ${WEEK.choices} 個主題可選），做完自動同步，iPad 打開就看得到。雲端的 Claude 每堂約一兩分鐘；本機模型每堂要好幾分鐘，一週的課可能要好幾個小時，第一次建議先在 設定 › 使用者 › 備課 選「主題庫七成＋新聞」試 1 天。`;
   const out = el("div", "wk-out");
   out.setAttribute("role", "status");
   bar.append(info, go1, help, out);

@@ -1415,7 +1415,11 @@ function openPrep(m, watching = false) {
   const fillSource = () => {
     const lib = libs.find((c) => c.lang === lang.value && c.written > 0);
     source.innerHTML = "";
-    if (lib) { const o = el("option", null, `主題庫・${lib.name}（${lib.written} 堂）`); o.value = "library"; source.append(o); }
+    // The mix is what 派本週的課 uses: try it small here (1 day, 1 person).
+    if (lib) {
+      const mix = el("option", null, `主題庫七成＋新聞（和「派本週的課」一樣）`); mix.value = "mix"; source.append(mix);
+      const o = el("option", null, `只用主題庫・${lib.name}（${lib.written} 堂）`); o.value = "library"; source.append(o);
+    }
     const n = el("option", null, "每日新聞"); n.value = "news"; source.append(n);
   };
   lang.addEventListener("change", fillSource);
