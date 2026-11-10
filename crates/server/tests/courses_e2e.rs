@@ -155,6 +155,24 @@ fn topic_cards(user: &str) -> Value {
     json!({ "cards": cards })
 }
 
+/// A teacher's script: one entry per numbered paragraph, the first word explained.
+fn script_reply(user: &str) -> Value {
+    let n = user.lines().filter(|l| l.starts_with('[') && l.contains("] ")).count();
+    let word = user.lines().skip_while(|l| !l.starts_with("Words:")).nth(1).and_then(|l| l.strip_prefix("- ")).and_then(|l| l.split(": ").next()).unwrap_or("word").to_string();
+    let paras: Vec<Value> = (0..n).map(|i| json!({
+        "read": format!("Please read part {}.", i + 1), "after_read": "Nice reading!",
+        "explain": [{ "kind": "word", "term": word, "line": format!("{word} is a useful word."), "optional": i > 0 }],
+        "sentence": { "prompt": format!("Make a sentence with {word}."), "target": word, "example": format!("I like {word}."), "praise": "Great sentence!", "retry": format!("Try again with {word}.") }
+    })).collect();
+    json!({
+        "small_talk": { "opening": "Hi! How is your day going?", "follow_up": "What did you do?", "praise": ["Nice!", "Great!", "Cool!"], "to_lesson": "Let's start." },
+        "intro": { "lines": ["Today we read about chips."], "ready": "Ready?" },
+        "paragraphs": paras,
+        "quiz": [{ "question": "What is the text about?", "answer": "chips", "keywords": ["chip"], "hint": "Look at the title.", "reveal": "It is about chips." }],
+        "goodbye": "See you!"
+    })
+}
+
 fn focus_sheet() -> Value {
     json!({ "summary": "蘇格蘭與英國", "cities": ["Edinburgh", "Glasgow"], "streets": ["Princes Street", "Royal Mile"], "shops": ["Tesco", "Greggs"],
         "transport": ["ScotRail", "Edinburgh Trams"], "foods": ["haggis"], "drinks": ["whisky"], "landmarks": ["Edinburgh Castle"],
@@ -178,7 +196,9 @@ fn mock_claude_slow(calls: Arc<Mutex<Vec<Value>>>, lesson_ms: u64) -> Router {
                     tokio::time::sleep(std::time::Duration::from_millis(lesson_ms)).await;
                 }
                 let user = b["messages"][0]["content"].as_str().unwrap_or("").to_string();
-                let text = if props["cards"].is_object() {
+                let text = if props["small_talk"].is_object() {
+                    script_reply(&user)
+                } else if props["cards"].is_object() {
                     topic_cards(&user)
                 } else if props["news_keywords"].is_object() {
                     focus_sheet()
@@ -1686,4 +1706,38 @@ async fn conversations_can_use_their_own_engine() {
     assert_eq!(r["realtime"], "same");
     let (_, status) = c.get("/api/status").await;
     assert!(status["realtime_engine"].is_null(), "{status}");
+}
+
+/// The teacher's script (plan §19.4.2): written once by the lessons model in
+/// the language studied, one entry per paragraph of the text, kept next to
+/// the lesson file; asked again, it is read from there.
+#[tokio::test]
+async fn a_lesson_script_is_written_once_and_kept() {
+    let app_dir = tempfile::tempdir().unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().join("JELearner-private");
+    let (c, calls) = setup(app_dir.path(), &ws_path).await;
+    let (_, course) = c.post("/api/courses", json!({ "kind": "topic", "lang": "en", "keywords": ["AI chips"] })).await;
+    let id = course["id"].as_str().unwrap().to_string();
+    assert_eq!(c.post(&format!("/api/courses/{id}/lessons/1/script"), json!({})).await.0, StatusCode::BAD_REQUEST, "a lesson not opened yet has no script");
+    let (_, o) = c.post(&format!("/api/courses/{id}/lessons/1/open"), json!({})).await;
+    let paras = o["lesson"]["text"].as_str().unwrap().lines().filter(|l| !l.trim().is_empty()).count();
+    let script_calls = || calls.lock().unwrap().iter().filter(|b| b["output_config"]["format"]["schema"]["properties"]["small_talk"].is_object()).count();
+
+    let (st, r) = c.post(&format!("/api/courses/{id}/lessons/1/script"), json!({})).await;
+    assert_eq!(st, StatusCode::OK, "{r}");
+    assert_eq!(r["generated"], true);
+    let sc = &r["script"];
+    assert_eq!(sc["lang"], "en");
+    assert_eq!(sc["paragraphs"].as_array().unwrap().len(), paras, "one per paragraph: {sc}");
+    assert_eq!(sc["small_talk"]["praise"].as_array().unwrap().len(), 3);
+    let req = calls.lock().unwrap().iter().rev().find(|b| b["output_config"]["format"]["schema"]["properties"]["small_talk"].is_object()).cloned().unwrap();
+    let prompt = format!("{}{}", req["system"], req["messages"][0]["content"]);
+    assert!(prompt.contains("[1] ") && prompt.contains("Words:"), "the paragraphs and words go to the model");
+    let file = ws_path.join(o["file"].as_str().unwrap()).with_extension("script.json");
+    assert!(file.is_file(), "kept next to the lesson: {}", file.display());
+
+    let (_, again) = c.post(&format!("/api/courses/{id}/lessons/1/script"), json!({})).await;
+    assert_eq!((again["generated"].as_bool(), script_calls()), (Some(false), 1), "read from the file");
+    assert_eq!(again["script"], r["script"]);
 }

@@ -1450,3 +1450,38 @@ table.grid.words tr.add input { min-width: 0; }
 .qr-box { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: center; margin-top: 10px; }
 .qr-box canvas { width: min(320px, 100%); height: auto; border-radius: 8px; border: 1px solid var(--line); image-rendering: pixelated; background: #fff; }
 .qr-box .qr-steps { margin: 0; padding-left: 20px; font-size: 14.5px; line-height: 1.9; flex: 1; min-width: 200px; }
+
+/* ── 老師帶著上 (plan §19.4.2) ───────────────────────── */
+.guided { display: flex; flex-direction: column; gap: 12px; }
+.g-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; position: sticky; top: calc(var(--vb-h, 52px) + 4px); z-index: 2; background: var(--bg); padding: 4px 0; }
+.g-stages { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; }
+.g-stages li { font: 500 12.5px var(--mono); color: var(--muted); padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
+.g-stages li.done { color: var(--accent-2-text, var(--accent-text)); border-color: var(--accent-2-text, var(--accent-text)); }
+.g-stages li.on { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+.g-clock { font: 600 13px var(--mono); color: var(--muted); white-space: nowrap; }
+.g-clock.over { color: var(--accent-text); }
+.g-teacher { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: start; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent-text); border-radius: 10px; padding: 14px 16px; }
+.g-teacher .who { font: 600 12px var(--mono); color: var(--accent-text); padding-top: 4px; }
+.g-teacher .t { font: 500 19px/1.55 var(--sans); }
+.g-teacher.ja .t { font-family: var(--jp); }
+.g-teacher.speaking .who::after { content: " ●"; animation: g-blink 1s infinite; }
+@keyframes g-blink { 50% { opacity: .2; } }
+@media (prefers-reduced-motion: reduce) { .g-teacher.speaking .who::after { animation: none; } }
+.g-me { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.g-me .heard { align-self: flex-end; max-width: 80%; background: var(--accent-soft); border-radius: 10px; padding: 8px 12px; font-size: 16px; }
+.g-me .heard:empty { display: none; }
+.g-ctl { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+.g-ctl:empty { display: none; }
+.g-mic { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 18px; font-size: 16px; }
+.g-mic .secs { font: 600 13px var(--mono); opacity: .8; min-width: 1.5em; }
+.g-me.listening .g-mic { box-shadow: 0 0 0 3px var(--accent-soft); }
+.g-type { display: flex; gap: 6px; }
+.g-type input { min-width: 220px; }
+.g-paper .lesson-text p { transition: background .2s; border-radius: 6px; }
+.g-paper .lesson-text p.g-now { background: var(--accent-soft); box-shadow: -8px 0 0 var(--accent-soft), 8px 0 0 var(--accent-soft); }
+.g-paper mark.g-term { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+@media (max-width: 560px) {
+  .g-teacher .t { font-size: 17px; }
+  .g-type input { min-width: 0; flex: 1; }
+  .g-ctl, .g-type { width: 100%; }
+}

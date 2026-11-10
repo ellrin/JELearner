@@ -312,11 +312,41 @@ fn focus_sheet(user: &str) -> Value {
         "daily_life": ["pounds and pence"], "news_keywords": ["Edinburgh", "Holyrood"] })
 }
 
+/// A teacher's script for 老師帶著上: one entry per numbered paragraph.
+fn lesson_script(user: &str) -> Value {
+    let paras: Vec<&str> = user.lines().filter(|l| l.starts_with('[') && l.contains("] ")).collect();
+    let words: Vec<String> = user.lines().skip_while(|l| !l.starts_with("Words:")).skip(1).take_while(|l| l.starts_with("- ")).filter_map(|l| l.strip_prefix("- ").and_then(|x| x.split(": ").next()).map(str::to_string)).collect();
+    let entries: Vec<Value> = paras
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let w = words.get(i).or(words.first()).cloned().unwrap_or_else(|| "today".into());
+            let after = ["Nice reading!", "Good job!", "Very clear!"][i % 3];
+            json!({
+                "read": if i == 0 { "Let's start. Can you read the first part out loud?".to_string() } else { format!("Now please read part {}.", i + 1) },
+                "after_read": after,
+                "explain": [{ "kind": "word", "term": w, "line": format!("Look at the word {w}. We use it when we talk about this topic. For example: I learned about {w} today."), "optional": false },
+                            { "kind": "word", "term": w, "line": format!("You can also use {w} at work or at school."), "optional": true }],
+                "sentence": { "prompt": format!("Now make your own sentence with {w}."), "target": w, "example": format!("I want to learn more about {w}."), "praise": "Great sentence!", "retry": format!("Good try! Can you use {w} in your sentence?") }
+            })
+        })
+        .collect();
+    json!({
+        "small_talk": { "opening": "Hi! Good to see you. How is your day going?", "follow_up": "That's interesting. What are you going to do after the lesson?", "praise": ["That sounds nice!", "Great, thanks for telling me!", "I see, good for you!"], "to_lesson": "OK, let's start today's lesson." },
+        "intro": { "lines": ["Today we will read a short text and learn some useful words.", "After the lesson, you can talk about it in English."], "ready": "Are you ready?" },
+        "paragraphs": entries,
+        "quiz": [{ "question": "What is the text about?", "answer": "the topic of the title", "keywords": ["chip", "factory"], "hint": "Look at the title of the text.", "reveal": "The text is about the new chip factory." }],
+        "goodbye": "Great work today. See you tomorrow!"
+    })
+}
+
 async fn messages(Json(b): Json<Value>) -> Json<Value> {
     let user = b["messages"][0]["content"].as_str().unwrap_or("");
     let ja = user.chars().any(|c| ('\u{3040}'..='\u{30ff}').contains(&c));
     let props = &b["output_config"]["format"]["schema"]["properties"];
-    let (text, wait) = if props["cards"].is_object() {
+    let (text, wait) = if props["small_talk"].is_object() {
+        (lesson_script(user).to_string(), 1200)
+    } else if props["cards"].is_object() {
         (topic_cards(user).to_string(), 900)
     } else if props["news_keywords"].is_object() {
         (focus_sheet(user).to_string(), 900)

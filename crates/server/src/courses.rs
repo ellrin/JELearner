@@ -36,6 +36,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/courses/{id}", get(get_course))
         .route("/api/courses/{id}/extend", post(extend_course))
         .route("/api/courses/{id}/lessons/{n}/open", post(open_lesson))
+        .route("/api/courses/{id}/lessons/{n}/script", post(lesson_script))
         .route("/api/courses/{id}/lessons/{n}/units/{u}", post(report_unit))
         .route("/api/daily", post(start_daily))
 }
@@ -600,6 +601,67 @@ async fn open_lesson(State(s): State<Shared>, AxPath((id, n)): AxPath<(String, u
     })
     .await
     .map_err(|e| fail(format!("這一課沒有準備好：{e}")))?
+}
+
+/// The teacher's script for a lesson taught out loud (plan §19.4.2): written
+/// once by the lessons model, kept next to the lesson file
+/// (`<lesson>.script.json`, in the workspace like the lesson), read after
+/// that. Like opening, one at a time per lesson and finished when the page
+/// is left.
+async fn lesson_script(State(s): State<Shared>, AxPath((id, n)): AxPath<(String, u32)>) -> R<Value> {
+    let s2 = s.clone();
+    tokio::spawn(async move {
+        let gate = opening_gate(&s2, &format!("{id}#script"), n);
+        let _one = gate.lock().await;
+        let (w, db) = {
+            let l = ws(&s2).await?;
+            (l.ws.clone(), l.db.clone())
+        };
+        let (script, generated) = script_for(&s2, &w, &db, &id, n).await?;
+        Ok(Json(json!({ "script": script, "generated": generated })))
+    })
+    .await
+    .map_err(|e| fail(format!("講稿沒有準備好：{e}")))?
+}
+
+/// The script of an opened lesson for `w` (the active learner or a member).
+pub(crate) async fn script_for(s: &Shared, w: &jl_core::workspace::Workspace, db: &jl_core::db::Db, id: &str, n: u32) -> Result<(jl_core::course::script::Script, bool), ApiError> {
+    use jl_core::course::script;
+    let course = store::load(w, id).map_err(course_err)?;
+    let lp = course.lesson(n).cloned().ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("沒有第 {n} 課")))?;
+    let lesson_id = db.course_lesson_id(id, n).await?.ok_or_else(|| bad("先打開這一課"))?;
+    let row = db.get_lesson(lesson_id).await?.ok_or_else(|| fail("教材消失了"))?;
+    let data: Value = serde_json::from_str(&row.data).unwrap_or(Value::Null);
+    let paras = crate::pictures::paragraphs(data["text"].as_str().unwrap_or(""));
+    let path = w.root.join(&row.path).with_extension("script.json");
+    if let Some(mut sc) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<script::Script>(&t).ok()) {
+        script::mend(&mut sc, paras.len(), course.lang);
+        return Ok((sc, false));
+    }
+    let lang = course.lang;
+    let level = w.profile.difficulty(lang);
+    let words: Vec<Value> = data["vocabulary"].as_array().cloned().unwrap_or_default().iter().map(|v| json!({ "term": v["term"], "meaning": v["meaning"] })).collect();
+    let grammar: Vec<Value> = data["grammar"].as_array().cloned().unwrap_or_default().iter().map(|g| json!({ "pattern": g["pattern"], "meaning": g["meaning"], "example": g["example"] })).collect();
+    let questions: Vec<Value> = data["questions"].as_array().cloned().unwrap_or_default().iter().map(|q| json!({ "question": q["question"], "answer": q["answer"] })).collect();
+    // The text and its own practice: the reading and output units' minutes.
+    let minutes: u32 = lp.units.iter().filter(|u| !matches!(u.kind, UnitKind::Review | UnitKind::Conversation)).map(|u| u.minutes).sum();
+    let input = script::ScriptInput {
+        lang,
+        level_description: jl_core::level::describe(lang, &level),
+        native_language: w.profile.native_language.clone(),
+        title: data["title"].as_str().unwrap_or(&lp.title),
+        paragraphs: &paras,
+        words,
+        grammar,
+        questions,
+        minutes: minutes.max(5),
+    };
+    let req = script::script_request(&templates(w), &input).map_err(course_err)?;
+    let p = provider(s).await?;
+    let reply = p.complete(&req).await.map_err(crate::study::api_err)?;
+    let sc = script::parse_script(&reply, paras.len(), lang).map_err(course_err)?;
+    std::fs::write(&path, serde_json::to_string_pretty(&sc).unwrap_or_default()).map_err(|e| fail(e.to_string()))?;
+    Ok((sc, true))
 }
 
 async fn open_lesson_now(s: Shared, id: String, n: u32) -> R<Value> {

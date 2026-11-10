@@ -180,10 +180,13 @@ const Speech = (() => {
    * and `onEnd(text)` with the result ("" on failure, with a flash).
    * Returns a stop function that sends what was recorded.
    */
-  function recordLocal(lang, { onText, onEnd, onTick, onBusy } = {}) {
+  // Options for a lesson taught out loud (plan §19.4.2): `max` seconds at
+  // most, `silence` seconds without sound after speaking stop it, `onLoud()`
+  // the first time sound is heard ("Ready?" only needs that).
+  function recordLocal(lang, { onText, onEnd, onTick, onBusy, max = MAX_SECONDS, silence = 0, onLoud } = {}) {
     let stream = null, ctx = null, node = null, timer = null, done = false;
     const chunks = [];
-    let startedAt = 0;
+    let startedAt = 0, heard = false, lastLoud = 0;
     const cleanup = () => {
       clearInterval(timer);
       try { node?.disconnect(); } catch {}
@@ -231,14 +234,25 @@ const Speech = (() => {
       const src = ctx.createMediaStreamSource(stream);
       // ScriptProcessor: deprecated but in every browser, and needs no module file.
       node = ctx.createScriptProcessor(4096, 1, 1);
-      node.onaudioprocess = (e) => { if (!done) chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+      node.onaudioprocess = (e) => {
+        if (done) return;
+        const x = new Float32Array(e.inputBuffer.getChannelData(0));
+        chunks.push(x);
+        // Loudness of this chunk: speech is well above room noise.
+        let sum = 0;
+        for (let i = 0; i < x.length; i++) sum += x[i] * x[i];
+        if (Math.sqrt(sum / x.length) > 0.02) {
+          lastLoud = Date.now();
+          if (!heard) { heard = true; onLoud?.(); }
+        }
+      };
       src.connect(node);
       node.connect(ctx.destination);
       startedAt = Date.now();
-      onTick?.(MAX_SECONDS);
+      onTick?.(max);
       timer = setInterval(() => {
-        const left = MAX_SECONDS - Math.floor((Date.now() - startedAt) / 1000);
-        if (left <= 0) finish(true); else onTick?.(left);
+        const left = max - Math.floor((Date.now() - startedAt) / 1000);
+        if (left <= 0 || (silence && heard && Date.now() - lastLoud > silence * 1000)) finish(true); else onTick?.(left);
       }, 250);
     })();
     return () => finish(true);
@@ -252,16 +266,18 @@ const Speech = (() => {
    * and `onBusy` only fire for on-device recording. Returns a stop function
    * (on-device: stop and send).
    */
-  function listen(lang, { onText, onEnd, onTick, onBusy } = {}) {
+  function listen(lang, { onText, onEnd, onTick, onBusy, max, silence, onLoud } = {}) {
     if (!canListen(lang)) return () => {};
     stopListening();
-    if (usesLocal(lang)) return recordLocal(lang, { onText, onEnd, onTick, onBusy });
+    if (usesLocal(lang)) return recordLocal(lang, { onText, onEnd, onTick, onBusy, max, silence, onLoud });
     const r = new Rec();
     r.lang = PREFERRED[lang]?.[0] ?? lang;
     r.interimResults = true;
     r.continuous = false;
     r.maxAlternatives = 1;
-    let finalText = "";
+    let finalText = "", heardAny = false;
+    // The browser stops by itself after a pause; `max` caps it.
+    const cap = max ? setTimeout(() => { try { r.stop(); } catch { /* ignore */ } }, max * 1000) : null;
     r.onresult = (e) => {
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -269,13 +285,14 @@ const Speech = (() => {
         if (res.isFinal) finalText += res[0].transcript;
         else interim += res[0].transcript;
       }
+      if (!heardAny) { heardAny = true; onLoud?.(); }
       onText?.((finalText + interim).trim(), !interim);
     };
     r.onerror = (e) => {
       const msg = { "not-allowed": "麥克風沒有權限", "service-not-allowed": "麥克風沒有權限", "no-speech": "沒有聽到聲音", network: "語音辨識需要網路", "audio-capture": "找不到麥克風" }[e.error];
       if (e.error !== "aborted") flash(msg ?? "語音辨識失敗", true);
     };
-    r.onend = () => { if (rec === r) rec = null; onEnd?.(finalText.trim()); };
+    r.onend = () => { clearTimeout(cap); if (rec === r) rec = null; onEnd?.(finalText.trim()); };
     rec = r;
     try { r.start(); } catch { rec = null; onEnd?.(""); }
     return () => { try { r.stop(); } catch { /* ignore */ } };

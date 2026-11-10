@@ -20,8 +20,12 @@ pub const LIBRARY_SYSTEM: &str = "library_article_system.md";
 pub const LIBRARY_USER: &str = "library_article_user.md";
 pub const LIBRARY_SPLIT_SYSTEM: &str = "library_split_system.md";
 pub const LIBRARY_SPLIT_USER: &str = "library_split_user.md";
+pub const SCRIPT_SYSTEM: &str = "lesson_script_system.md";
+pub const SCRIPT_USER: &str = "lesson_script_user.md";
 
-const BUNDLED: [(&str, &str); 15] = [
+const BUNDLED: [(&str, &str); 17] = [
+    (SCRIPT_SYSTEM, include_str!("../../../../prompts/lesson_script_system.md")),
+    (SCRIPT_USER, include_str!("../../../../prompts/lesson_script_user.md")),
     (LIBRARY_SPLIT_SYSTEM, include_str!("../../../../prompts/library_split_system.md")),
     (LIBRARY_SPLIT_USER, include_str!("../../../../prompts/library_split_user.md")),
     (LIBRARY_SYSTEM, include_str!("../../../../prompts/library_article_system.md")),

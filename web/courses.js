@@ -833,13 +833,15 @@ function stepReading(box, o, u) {
     const guide = el("div", "read-guide");
     const listenOnly = !Speech.canListen(lang);
     const label = listenOnly ? "逐句聽" : "逐句跟讀";
-    guide.append(el("span", null, listenOnly ? "先一句一句聽，跟著唸出來，再回答下面的問題。" : "先聽一句、跟著唸一句，唸完整篇再回答下面的問題。"));
-    const toggle = primaryButton(label, null, true);
+    guide.append(el("span", null, "讓老師帶你上：聊兩句、每段唸一遍、講單字文法、造句、口說問答。也可以自己逐句跟讀。"));
+    // The lesson taught out loud is the main way; reading sentence by sentence stays.
+    const toggle = ghostButton("speaker", label, null);
+    toggle.classList.add("small");
     toggle.setAttribute("aria-expanded", "false");
     const smooth = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
     const close = () => {
       guide.nextElementSibling?.classList.contains("shadow") && guide.nextElementSibling.remove();
-      toggle.textContent = label; toggle.setAttribute("aria-expanded", "false");
+      toggle.replaceChildren(icon("speaker"), document.createTextNode(label)); toggle.setAttribute("aria-expanded", "false");
     };
     toggle.onclick = () => {
       if (toggle.getAttribute("aria-expanded") === "true") { close(); return; }
@@ -853,33 +855,38 @@ function stepReading(box, o, u) {
       };
       const panel = Speech.shadowPanel(text.replace(/\n+/g, " "), lang, toQuestions);
       guide.after(panel);
-      toggle.textContent = "收起"; toggle.setAttribute("aria-expanded", "true");
+      toggle.replaceChildren(icon("x"), document.createTextNode("收起")); toggle.setAttribute("aria-expanded", "true");
       panel.scrollIntoView({ block: "nearest", behavior: smooth });
       panel.querySelector("button.big, button")?.focus({ preventScroll: true });
     };
-    guide.append(toggle);
+    guide.append(guidedButton(box, o, u), toggle);
     tx.before(guide);
   }
-  // Pictures between the paragraphs (plan §19.4.1), each with its credit;
-  // a picture that does not load leaves no gap.
-  if (o.pictures?.length && tx) {
-    const paras = [...tx.querySelectorAll(":scope > p")];
-    for (const pic of o.pictures) {
-      const after = paras[pic.paragraph];
-      if (!after) continue;
-      const fig = el("figure", "lesson-pic");
-      const img = el("img");
-      img.src = pic.src; img.alt = pic.caption ?? ""; img.loading = "lazy";
-      img.onerror = () => fig.remove();
-      const cap = el("figcaption");
-      const a = el("a", null, `${pic.author}・${pic.licence}`);
-      a.href = pic.page; a.target = "_blank"; a.rel = "noopener noreferrer";
-      cap.append("圖片：", a);
-      fig.append(img, cap);
-      after.after(fig);
-    }
-  }
+  if (o.pictures?.length && tx) addPictures(tx, o.pictures);
+
   if (!quiz.total) reportUnit(box, o, u, { answers: [] }, "閱讀完成");
+}
+
+/**
+ * Pictures between the paragraphs (plan §19.4.1), each with its credit, after
+ * the paragraph it goes with; a picture that does not load leaves no gap.
+ */
+function addPictures(tx, pictures) {
+  const paras = [...tx.querySelectorAll(":scope > p")];
+  for (const pic of pictures ?? []) {
+    const after = paras[pic.paragraph];
+    if (!after) continue;
+    const fig = el("figure", "lesson-pic");
+    const img = el("img");
+    img.src = pic.src; img.alt = pic.caption ?? ""; img.loading = "lazy";
+    img.onerror = () => fig.remove();
+    const cap = el("figcaption");
+    const a = el("a", null, `${pic.author}・${pic.licence}`);
+    a.href = pic.page; a.target = "_blank"; a.rel = "noopener noreferrer";
+    cap.append("圖片：", a);
+    fig.append(img, cap);
+    after.after(fig);
+  }
 }
 
 // Step 3: output exercises, checked against the model answer.

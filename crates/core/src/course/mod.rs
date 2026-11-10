@@ -21,6 +21,7 @@ pub mod picker;
 pub mod picture;
 pub mod plan;
 pub mod prompts;
+pub mod script;
 pub mod sizing;
 pub mod store;
 pub mod topics;
