@@ -106,7 +106,14 @@ async function sync() {
       st.queue.splice(0, results.length);
       save();
     }
-    const index = await readJson("ipad/index.json");
+    // No lessons prepared yet (the folder may not even be in the repository):
+    // when the repository itself answers, that is "no lessons", not a wrong setting.
+    let index;
+    try { index = await readJson("ipad/index.json"); } catch (e) {
+      if (e.status !== 404) throw e;
+      await gh("");
+      index = { version: 1, days: {} };
+    }
     store.set("jl.index", index);
     // Everyone's points, worked out on the admin's computer (the buddies strip).
     try { store.set("jl.buddies", await readJson("ipad/buddies.json")); } catch { /* not written yet */ }
@@ -1137,7 +1144,9 @@ readSetupLink();
 if (!cfg) show("設定", drawSettings);
 else {
   show("今天", drawHome);
-  sync().then(() => { if (stack.length === 1 && stack[0].draw === drawHome) show("今天", drawHome, false); }).catch(() => {});
+  // Redraw the home page either way: the lessons, or why they cannot be had.
+  const home = () => { if (stack.length === 1 && stack[0].draw === drawHome) show("今天", drawHome, false); };
+  sync().then(home, home);
 }
 prunePictures();
 window.addEventListener("online", () => sync().catch(() => {}));
