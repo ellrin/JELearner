@@ -204,28 +204,39 @@ function speak(text, lang) {
 const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 let currentRec = null;
 /** Tap to talk: a new recognizer each time (the iPad audio session). */
-function listen(lang, onText, { max = 15, silence = 0, onLoud } = {}) {
+function listen(lang, onText, { max = 15, silence = 0, onLoud, onHearing } = {}) {
   return new Promise((resolve, reject) => {
     if (!Rec) return reject(new Error("這個瀏覽器不能聽寫，請用打字的"));
     synth?.cancel();
-    const r = new Rec();
-    currentRec = r;
-    r.lang = lang === "ja" ? "ja-JP" : "en-US";
-    // With a silence stop the recognizer keeps listening; we end it after the pause.
-    r.interimResults = true; r.continuous = !!silence;
-    let final = "", interim = "", err = null, last = 0;
-    const quiet = silence ? setInterval(() => { if (last && Date.now() - last > silence * 1000) { try { r.stop(); } catch { /* ended */ } } }, 250) : null;
-    r.onresult = (e) => {
-      if (!last) onLoud?.();
-      last = Date.now();
-      final = ""; interim = "";
-      for (const res of e.results) { if (res.isFinal) final += res[0].transcript; else interim += res[0].transcript; }
-      onText?.(final + interim);
-    };
-    r.onerror = (e) => { err = e.error; };
-    r.onend = () => (clearInterval(quiet), err && err !== "no-speech" && !final && !interim ? reject(new Error(err === "not-allowed" ? "麥克風沒有開放，到 設定 › Safari › 麥克風 允許" : "沒聽清楚，再說一次，或用打字的")) : resolve(final || interim));
-    try { r.start(); } catch (e) { reject(e); }
-    setTimeout(() => { try { r.stop(); } catch { /* ended */ } }, max * 1000);
+    // Safari on the iPad: one sentence at a time (continuous mode often returns
+    // nothing there); it ends by itself after the speaker pauses. A short wait
+    // first lets the audio switch from speaking to listening.
+    setTimeout(() => {
+      const r = new Rec();
+      currentRec = r;
+      r.lang = lang === "ja" ? "ja-JP" : "en-US";
+      r.interimResults = true; r.continuous = false;
+      let final = "", interim = "", err = null, last = 0, sound = false;
+      const heard = () => { if (!sound) { sound = true; onLoud?.(); onHearing?.(); } };
+      const quiet = silence ? setInterval(() => { if (last && Date.now() - last > silence * 1000) { try { r.stop(); } catch { /* ended */ } } }, 250) : null;
+      const cap = setTimeout(() => { try { r.stop(); } catch { /* ended */ } }, max * 1000);
+      r.onspeechstart = heard;
+      r.onresult = (e) => {
+        heard();
+        last = Date.now();
+        final = ""; interim = "";
+        for (const res of e.results) { if (res.isFinal) final += res[0].transcript; else interim += res[0].transcript; }
+        onText?.(final + interim);
+      };
+      r.onerror = (e) => { err = e.error; };
+      r.onend = () => {
+        clearInterval(quiet); clearTimeout(cap);
+        if (currentRec === r) currentRec = null;
+        if (err && err !== "no-speech" && err !== "aborted" && !final && !interim) reject(new Error(err === "not-allowed" || err === "service-not-allowed" ? "麥克風沒有開放，到 設定 › Safari › 麥克風 允許" : "沒聽清楚，再說一次，或用打字的"));
+        else resolve((final || interim).trim());
+      };
+      try { r.start(); } catch (e) { reject(e); }
+    }, 300);
   });
 }
 function micButton(lang, target) {
@@ -1053,14 +1064,26 @@ function drawGuided(box, pkg, u) {
       resolve(v);
     };
     if (Rec) {
+      const idle = (label) => { mic.classList.remove("on"); mic.textContent = label; };
       const mic = button(ready ? "🎤 說一聲" : "🎤 按一下說話", "main", async () => {
         if (mic.classList.contains("on")) { try { currentRec?.stop(); } catch { /* ended */ } return; }
-        mic.classList.add("on"); mic.textContent = "■ 說完了";
+        mic.classList.add("on"); mic.textContent = "■ 準備中…";
+        heard.textContent = "";
+        // The microphone opens after a short wait: then it says so.
+        setTimeout(() => { if (mic.textContent === "■ 準備中…") mic.textContent = "■ 請說…"; }, 400);
         try {
-          const t = await listen(lang, (x) => (heard.textContent = x), { max: 20, silence: 2.5, onLoud: ready ? () => settle(READY) : null });
-          settle(t ?? "");
-        } catch (e) { toast(e.message, true); mic.classList.remove("on"); mic.textContent = "🎤 再試一次"; }
+          const t = await listen(lang, (x) => (heard.textContent = x), {
+            max: 20, silence: 2.5,
+            onLoud: ready ? () => settle(READY) : null,
+            onHearing: () => { if (!settled) mic.textContent = "■ 在聽…說完會自己停"; },
+          });
+          if (settled) return;
+          // Nothing came back: stay here, the learner tries again or types.
+          if (!t) { heard.textContent = "沒聽到，再按一次說話，或用打的"; idle("🎤 再說一次"); return; }
+          settle(t);
+        } catch (e) { toast(e.message, true); idle("🎤 再說一次"); }
       });
+
       ctl.append(mic);
     }
     if (ready) ctl.append(button("Ready!", Rec ? "" : "main", () => settle(READY)));
