@@ -141,3 +141,5 @@ button.sync.bad { color: var(--err); }
 .rate-row { gap: 12px; }
 .rate-name { min-width: 3em; color: var(--muted); }
 .g-head .rate .btn { min-height: 32px; padding: 2px 10px; font-size: 14px; }
+/* A microphone still opening: not lit, not pressable. */
+.btn.preparing, .mic.preparing { opacity: .55; pointer-events: none; }

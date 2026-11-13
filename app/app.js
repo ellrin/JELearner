@@ -188,39 +188,97 @@ function rateSwitch(lang, onChange) {
   draw();
   return box;
 }
-function speak(text, lang) {
+/**
+ * Speak, and always come back. Safari on the iPad sometimes never reports the
+ * end of an utterance after the microphone was used (the lesson then waited
+ * for ever): a line not started within 1.5 s is spoken again once, and a line
+ * that never reports its end is taken as done after the time it should take.
+ */
+async function speak(text, lang) {
+  // The last turn's recording is fully over before the teacher speaks.
+  await micOff();
   return new Promise((resolve) => {
-    if (!synth) return resolve();
-    synth.cancel();
-    const u = new SpeechSynthesisUtterance(plain(text));
-    const v = pickVoice(lang);
-    if (v) u.voice = v;
-    u.lang = v?.lang ?? (lang === "ja" ? "ja-JP" : "en-US");
-    u.rate = rateOf(lang);
-    u.onend = u.onerror = () => resolve();
-    synth.speak(u);
+    const t = plain(text).trim();
+    if (!synth || !t) return resolve();
+    let done = false, started = false, tries = 0;
+    const rate = rateOf(lang);
+    // About 14 characters a second at normal speed (Japanese about 7), plus room.
+    const expect = (t.length / ((lang === "ja" ? 7 : 14) * rate)) * 1000 + 3000;
+    const finish = () => { if (done) return; done = true; clearTimeout(guard); clearTimeout(startGuard); resolve(); };
+    const go = () => {
+      tries += 1;
+      try { synth.cancel(); synth.resume?.(); } catch { /* nothing */ }
+      const u = new SpeechSynthesisUtterance(t);
+      const v = pickVoice(lang);
+      if (v) u.voice = v;
+      u.lang = v?.lang ?? (lang === "ja" ? "ja-JP" : "en-US");
+      u.rate = rate;
+      u.onstart = () => { started = true; };
+      u.onend = finish;
+      u.onerror = finish;
+      // Speaking right after cancel() can be dropped: a moment in between.
+      setTimeout(() => { if (!done) { try { synth.speak(u); } catch { finish(); } } }, 60);
+    };
+    const startGuard = setTimeout(() => { if (!started && !done && tries < 2) go(); }, 1500);
+    const guard = setTimeout(() => { try { synth.cancel(); } catch { /* nothing */ } finish(); }, expect + 1500);
+    go();
   });
 }
 const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 let currentRec = null;
 /** Tap to talk: a new recognizer each time (the iPad audio session). */
-function listen(lang, onText, { max = 15, silence = 0, onLoud, onHearing } = {}) {
+/** Resolves when no recognizer is running (the last one asked to stop, at most `ms` waited). */
+function micOff(ms = 2000) {
+  if (!currentRec) return Promise.resolve();
+  stopListening();
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const check = () => (!currentRec || Date.now() - t0 > ms ? resolve() : setTimeout(check, 50));
+    check();
+  });
+}
+/** Resolves when the voice has finished (Safari's own flag; at most `ms` waited). */
+function voiceOff(ms = 2000) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const check = () => (!synth?.speaking || Date.now() - t0 > ms ? resolve() : setTimeout(check, 50));
+    check();
+  });
+}
+/** Stop the recognizer now (it then sends what it heard; never left hanging). */
+function stopListening() {
+  try { currentRec?.stopNow ? currentRec.stopNow() : currentRec?.stop(); } catch { /* ended */ }
+}
+function listen(lang, onText, { max = 15, silence = 0, onLoud, onHearing, onStart } = {}) {
   return new Promise((resolve, reject) => {
     if (!Rec) return reject(new Error("這個瀏覽器不能聽寫，請用打字的"));
     synth?.cancel();
     // Safari on the iPad: one sentence at a time (continuous mode often returns
     // nothing there); it ends by itself after the speaker pauses. A short wait
     // first lets the audio switch from speaking to listening.
-    setTimeout(() => {
+    // A recognizer left from the last turn is closed first (a second one does not start otherwise),
+    // and the teacher's voice has really finished.
+    try { currentRec?.abort(); } catch { /* ended */ }
+    currentRec = null;
+    voiceOff().then(() => new Promise((ok) => setTimeout(ok, 300))).then(() => {
       const r = new Rec();
       currentRec = r;
       r.lang = lang === "ja" ? "ja-JP" : "en-US";
       r.interimResults = true; r.continuous = false;
-      let final = "", interim = "", err = null, last = 0, sound = false;
-      const heard = () => { if (!sound) { sound = true; onLoud?.(); onHearing?.(); } };
-      const quiet = silence ? setInterval(() => { if (last && Date.now() - last > silence * 1000) { try { r.stop(); } catch { /* ended */ } } }, 250) : null;
-      const cap = setTimeout(() => { try { r.stop(); } catch { /* ended */ } }, max * 1000);
+      let final = "", interim = "", err = null, last = 0, sound = false, opened = false;
+      // Sound coming back also means the microphone is open (a browser without audiostart).
+      const open = () => { if (!opened) { opened = true; onStart?.(); } };
+      const heard = () => { open(); if (!sound) { sound = true; onLoud?.(); onHearing?.(); } };
+      const quiet = silence ? setInterval(() => { if (last && Date.now() - last > silence * 1000) { clearInterval(quiet); stopNow(); } }, 250) : null;
+      let ended = false;
+      // After stop() the end should come at once; if it does not within 2 s, end here.
+      const stopNow = () => { try { r.stop(); } catch { /* ended */ } setTimeout(() => { if (!ended) { try { r.abort(); } catch { /* ended */ } r.onend?.(); } }, 2000); };
+      const cap = setTimeout(stopNow, max * 1000);
+      r.stopNow = stopNow;
       r.onspeechstart = heard;
+      // The microphone is really open (Safari: audiostart; start as a fallback).
+      r.onaudiostart = open;
+      r.onstart = open;
       r.onresult = (e) => {
         heard();
         last = Date.now();
@@ -230,23 +288,27 @@ function listen(lang, onText, { max = 15, silence = 0, onLoud, onHearing } = {})
       };
       r.onerror = (e) => { err = e.error; };
       r.onend = () => {
+        if (ended) return;
+        ended = true;
         clearInterval(quiet); clearTimeout(cap);
         if (currentRec === r) currentRec = null;
         if (err && err !== "no-speech" && err !== "aborted" && !final && !interim) reject(new Error(err === "not-allowed" || err === "service-not-allowed" ? "麥克風沒有開放，到 設定 › Safari › 麥克風 允許" : "沒聽清楚，再說一次，或用打字的"));
         else resolve((final || interim).trim());
       };
-      try { r.start(); } catch (e) { reject(e); }
-    }, 300);
+      try { r.start(); } catch (e) { currentRec = null; reject(e); }
+    });
   });
 }
 function micButton(lang, target) {
   const b = el("button", "mic", "🎤");
-  const idle = () => { b.classList.remove("on"); b.textContent = "🎤"; b.setAttribute("aria-label", "按一下開始說"); };
+  const idle = () => { b.classList.remove("on", "preparing"); b.textContent = "🎤"; b.setAttribute("aria-label", "按一下開始說"); };
   idle();
   b.onclick = async () => {
-    if (b.classList.contains("on")) { try { currentRec?.stop(); } catch { /* ended */ } return; }
-    b.classList.add("on"); b.textContent = "■"; b.setAttribute("aria-label", "正在聽，再按一下停");
-    try { const t = await listen(lang, (x) => { target.value = x; target.dispatchEvent(new Event("input")); }); idle(); target.value = t; target.dispatchEvent(new Event("input")); }
+    if (b.classList.contains("preparing")) return;
+    if (b.classList.contains("on")) { try { stopListening(); } catch { /* ended */ } return; }
+    b.classList.add("preparing"); b.textContent = "…"; b.setAttribute("aria-label", "麥克風準備中");
+    const lit = () => { b.classList.remove("preparing"); b.classList.add("on"); b.textContent = "■"; b.setAttribute("aria-label", "正在聽，再按一下停"); };
+    try { const t = await listen(lang, (x) => { target.value = x; target.dispatchEvent(new Event("input")); }, { onStart: lit }); idle(); target.value = t; target.dispatchEvent(new Event("input")); }
     catch (e) { toast(e.message, true); }
     finally { idle(); }
   };
@@ -1058,22 +1120,24 @@ function drawGuided(box, pkg, u) {
     const settle = (v) => {
       if (settled) return;
       settled = true;
-      try { currentRec?.stop(); } catch { /* ended */ }
+      try { stopListening(); } catch { /* ended */ }
       ctl.innerHTML = "";
       if (v) heard.textContent = v === READY ? "Ready!" : v;
       resolve(v);
     };
     if (Rec) {
-      const idle = (label) => { mic.classList.remove("on"); mic.textContent = label; };
+      const idle = (label) => { mic.classList.remove("on", "preparing"); mic.removeAttribute("aria-busy"); mic.textContent = label; };
       const mic = button(ready ? "🎤 說一聲" : "🎤 按一下說話", "main", async () => {
-        if (mic.classList.contains("on")) { try { currentRec?.stop(); } catch { /* ended */ } return; }
-        mic.classList.add("on"); mic.textContent = "■ 準備中…";
+        if (mic.classList.contains("preparing")) return; // the microphone is still opening
+        if (mic.classList.contains("on")) { try { stopListening(); } catch { /* ended */ } return; }
+        // Not lit until the last recording is closed, the voice is done and this one is really open.
+        mic.classList.add("preparing"); mic.textContent = "準備中…";
+        mic.setAttribute("aria-busy", "true");
         heard.textContent = "";
-        // The microphone opens after a short wait: then it says so.
-        setTimeout(() => { if (mic.textContent === "■ 準備中…") mic.textContent = "■ 請說…"; }, 400);
         try {
           const t = await listen(lang, (x) => (heard.textContent = x), {
             max: 20, silence: 2.5,
+            onStart: () => { mic.classList.remove("preparing"); mic.removeAttribute("aria-busy"); mic.classList.add("on"); if (!settled) mic.textContent = "■ 請說…"; },
             onLoud: ready ? () => settle(READY) : null,
             onHearing: () => { if (!settled) mic.textContent = "■ 在聽…說完會自己停"; },
           });
