@@ -160,6 +160,34 @@ function pickVoice(lang) {
   const rank = (v) => (/premium|enhanced|加強|高品質/i.test(v.name) ? 0 : 1) + (v.localService ? 0 : 2);
   return vs.sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }
+// Speaking speed per language (this iPad only): 慢 / 正常 / 快.
+const RATES = [["slow", "慢", 0.8], ["normal", "正常", 1], ["fast", "快", 1.15]];
+const BASE_RATE = { en: 1, ja: 0.95 };
+function rateOf(lang) {
+  const pick = store.get("jl.rate", {})[lang] ?? "normal";
+  return (BASE_RATE[lang] ?? 1) * (RATES.find((r) => r[0] === pick)?.[2] ?? 1);
+}
+/** Three buttons for one language's speed; `onChange` after a choice. */
+function rateSwitch(lang, onChange) {
+  const box = el("div", "rate");
+  box.setAttribute("role", "group");
+  box.setAttribute("aria-label", `${lang === "ja" ? "日文" : "英文"}朗讀速度`);
+  const draw = () => {
+    box.innerHTML = "";
+    const cur = store.get("jl.rate", {})[lang] ?? "normal";
+    for (const [k, label] of RATES) {
+      const b = button(label, k === cur ? "main" : "", () => {
+        store.set("jl.rate", { ...store.get("jl.rate", {}), [lang]: k });
+        draw();
+        onChange?.();
+      });
+      b.setAttribute("aria-pressed", String(k === cur));
+      box.append(b);
+    }
+  };
+  draw();
+  return box;
+}
 function speak(text, lang) {
   return new Promise((resolve) => {
     if (!synth) return resolve();
@@ -168,7 +196,7 @@ function speak(text, lang) {
     const v = pickVoice(lang);
     if (v) u.voice = v;
     u.lang = v?.lang ?? (lang === "ja" ? "ja-JP" : "en-US");
-    u.rate = lang === "ja" ? 0.95 : 1;
+    u.rate = rateOf(lang);
     u.onend = u.onerror = () => resolve();
     synth.speak(u);
   });
@@ -367,6 +395,14 @@ function drawSettings(box) {
   box.append(row);
   if (st.queue.length) box.append(el("p", "note", `有 ${st.queue.length} 筆作答還沒送出，連上網路會自動送。`));
   box.append(el("p", "note", "鑰匙只存在這台 iPad 的瀏覽器裡。"));
+  if (cfg) {
+    box.append(el("h2", null, "朗讀速度"));
+    for (const [lang, name] of [["en", "英文"], ["ja", "日文"]]) {
+      const row = el("div", "row rate-row");
+      row.append(el("span", "rate-name", name), rateSwitch(lang, () => speak(lang === "ja" ? "これは今の速さです。" : "This is how fast I speak now.", lang)));
+      box.append(row);
+    }
+  }
 }
 
 // ── study buddies: everyone's points, from the admin's computer ──
@@ -952,7 +988,8 @@ function drawGuided(box, pkg, u) {
   const stages = el("ol", "g-stages");
   ["閒聊", "今天", "課文", "問答"].forEach((t) => stages.append(el("li", null, t)));
   const clock = el("span", "g-clock");
-  head.append(stages, clock);
+  // The speed, changeable in the middle of the lesson (from the next line on).
+  head.append(stages, clock, rateSwitch(lang));
   const teacher = el("div", "card g-teacher");
   const tText = el("div", "t");
   teacher.append(el("span", "who", "老師"), tText);
