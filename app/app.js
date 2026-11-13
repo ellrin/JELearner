@@ -90,6 +90,12 @@ async function putNew(rel, text, message) {
 let syncing = false;
 let syncError = null;
 function syncState(text, bad = false) { const s = $("#syncState"); s.textContent = text; s.className = `sync${bad ? " bad" : ""}`; }
+/** Sync now (the status at the top, 看看有沒有新的課), then show the home page again when it is on screen. */
+async function syncNow() {
+  try { await sync(); } catch { /* the status and the home page say why */ }
+  if (stack.length === 1 && stack[0].draw === drawHome) show("今天", drawHome, false);
+}
+$("#syncState").onclick = () => { if (cfg) syncNow(); };
 let syncAgain = false;
 async function sync() {
   // Something new while syncing (two results at once): one more round after this one.
@@ -440,6 +446,9 @@ function drawHome(box) {
   if (!list.length) {
     box.append(el("h2", null, "今天還沒有課"));
     box.append(el("p", "muted", "家人備好課、同步之後就會出現。"));
+    const r = el("div", "row");
+    r.append(button("看看有沒有新的課", "main", syncNow));
+    box.append(r);
     const next = Object.keys(index.days ?? {}).filter((k) => k > d).sort()[0];
     if (next) box.append(el("p", "note", `下一天有課的是 ${next}。`));
     return;
