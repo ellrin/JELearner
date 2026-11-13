@@ -160,8 +160,8 @@ function pickVoice(lang) {
   const rank = (v) => (/premium|enhanced|加強|高品質/i.test(v.name) ? 0 : 1) + (v.localService ? 0 : 2);
   return vs.sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }
-// Speaking speed per language (this iPad only): 慢 / 正常 / 快.
-const RATES = [["slow", "慢", 0.8], ["normal", "正常", 1], ["fast", "快", 1.15]];
+// Speaking speed per language (this iPad only): 很慢 / 慢 / 正常 / 快.
+const RATES = [["slower", "很慢", 0.6], ["slow", "慢", 0.8], ["normal", "正常", 1], ["fast", "快", 1.15]];
 const BASE_RATE = { en: 1, ja: 0.95 };
 function rateOf(lang) {
   const pick = store.get("jl.rate", {})[lang] ?? "normal";
