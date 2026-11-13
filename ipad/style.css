@@ -132,3 +132,6 @@ details.manual summary { color: var(--muted); font-size: 15px; padding: 10px 0; 
 /* The stage bar, the teacher and the learner's turn stay in view under the top bar. */
 .g-dock { position: sticky; top: var(--top-h, 64px); z-index: 4; background: var(--bg); padding: 8px 0 4px; }
 .text.paras p { scroll-margin-top: calc(var(--top-h, 64px) + var(--dock-h, 240px) + 12px); }
+/* The sync status is a button: tap to sync now. */
+button.sync { border: 0; background: none; padding: 8px 6px; min-height: 44px; font: inherit; font-size: 13px; color: var(--muted); }
+button.sync.bad { color: var(--err); }
